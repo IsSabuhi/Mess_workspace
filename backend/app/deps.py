@@ -1,7 +1,7 @@
 import uuid
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,12 +15,15 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=F
 
 
 async def get_current_user_optional(
+    request: Request,
     token: Annotated[str | None, Depends(oauth2_scheme)],
     session: Annotated[AsyncSession, Depends(get_db)],
 ) -> User | None:
-    if not token:
+    cookie_token = request.cookies.get("access_token")
+    effective_token = token or cookie_token
+    if not effective_token:
         return None
-    sub = decode_token(token)
+    sub = decode_token(effective_token)
     if not sub:
         return None
     try:

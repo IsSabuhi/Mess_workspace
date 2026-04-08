@@ -10,7 +10,7 @@ import {
 
 import type { UserMe } from "../api/auth";
 import { ApiError } from "../api/client";
-import { fetchMe, loginJson, logout, saveSession } from "../api/auth";
+import { fetchMe, loginJson, logout, logoutRequest } from "../api/auth";
 
 type AuthState =
   | { status: "loading" }
@@ -32,11 +32,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>({ status: "loading" });
 
   const refresh = useCallback(async () => {
-    const token = localStorage.getItem("access_token");
-    if (!token) {
-      setState({ status: "anonymous" });
-      return;
-    }
     try {
       const user = await fetchMe();
       setState({ status: "authenticated", user });
@@ -56,13 +51,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   const signIn = useCallback(async (email: string, password: string) => {
-    const { access_token } = await loginJson(email, password);
-    saveSession(access_token);
+    await loginJson(email, password);
     const user = await fetchMe();
     setState({ status: "authenticated", user });
   }, []);
 
   const signOut = useCallback(() => {
+    void logoutRequest();
     logout();
     setState({ status: "anonymous" });
   }, []);

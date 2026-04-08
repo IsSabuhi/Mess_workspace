@@ -13,25 +13,19 @@ export class ApiError extends Error {
   }
 }
 
-function getToken(): string | null {
-  return localStorage.getItem("access_token");
-}
-
 export async function apiFetch<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
+  const retried = (options as RequestInit & { _retried?: boolean })._retried === true;
   const headers = new Headers(options.headers);
   if (!headers.has("Content-Type") && options.body && !(options.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
-  const token = getToken();
-  if (token) {
-    headers.set("Authorization", `Bearer ${token}`);
-  }
 
   const res = await fetch(`${API_BASE}${path}`, {
     cache: "no-store",
+    credentials: "include",
     ...options,
     headers,
   });
@@ -51,6 +45,22 @@ export async function apiFetch<T>(
   }
 
   if (!res.ok) {
+    if (
+      res.status === 401 &&
+      !retried &&
+      !path.includes("/api/v1/auth/login") &&
+      !path.includes("/api/v1/auth/refresh") &&
+      !path.includes("/api/v1/auth/register")
+    ) {
+      const rr = await fetch(`${API_BASE}/api/v1/auth/refresh`, {
+        method: "POST",
+        cache: "no-store",
+        credentials: "include",
+      });
+      if (rr.ok) {
+        return apiFetch<T>(path, { ...options, _retried: true } as RequestInit);
+      }
+    }
     let detail = "";
     if (typeof data === "object" && data !== null && "detail" in data) {
       detail = formatApiErrorDetail((data as { detail: unknown }).detail);
@@ -67,9 +77,6 @@ export async function apiFetch<T>(
 }
 
 export function setAccessToken(token: string | null) {
-  if (token) {
-    localStorage.setItem("access_token", token);
-  } else {
-    localStorage.removeItem("access_token");
-  }
+  // legacy no-op: auth moved to HttpOnly cookies
+  void token;
 }

@@ -1,7 +1,7 @@
 from typing import Annotated
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,12 +18,44 @@ from app.models import LoginAudit, Position, Role, User, UserRole
 from app.schemas.auth import LoginAuditOut, LoginJson, ProfileUpdate, RegisterIn, Token
 from app.permissions import ALL_PERMISSION_CODES
 from app.schemas.user import UserMeOut
-from app.security import create_access_token, hash_password, verify_password
-from app.services.authz import get_user_by_email, get_user_permission_codes
+from app.config import get_settings
+from app.security import create_access_token, create_refresh_token, decode_token_payload, hash_password, verify_password
+from app.services.authz import get_user_by_email, get_user_by_id, get_user_permission_codes
 from app.services.request_client import client_ip
 from app.services.users_display import user_to_out
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+settings = get_settings()
+_SS = settings.auth_cookie_samesite.lower() if settings.auth_cookie_samesite else "lax"
+_SAMESITE = _SS if _SS in {"lax", "strict", "none"} else "lax"
+
+
+def _set_auth_cookies(response: Response, user_id: str) -> None:
+    access = create_access_token(user_id)
+    refresh = create_refresh_token(user_id)
+    response.set_cookie(
+        key="access_token",
+        value=access,
+        httponly=True,
+        secure=settings.auth_cookie_secure,
+        samesite=_SAMESITE,
+        max_age=settings.access_token_expire_minutes * 60,
+        path="/",
+    )
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh,
+        httponly=True,
+        secure=settings.auth_cookie_secure,
+        samesite=_SAMESITE,
+        max_age=settings.refresh_token_expire_days * 24 * 60 * 60,
+        path="/api/v1/auth",
+    )
+
+
+def _clear_auth_cookies(response: Response) -> None:
+    response.delete_cookie("access_token", path="/")
+    response.delete_cookie("refresh_token", path="/api/v1/auth")
 
 
 async def _record_login(session: AsyncSession, user_id: uuid.UUID, request: Request) -> None:
@@ -42,6 +74,7 @@ async def login_form(
     form: Annotated[OAuth2PasswordRequestForm, Depends()],
     session: Annotated[AsyncSession, Depends(get_db)],
     request: Request,
+    response: Response,
 ) -> Token:
     user = await get_user_by_email(session, form.username)
     if not user or not verify_password(form.password, user.hashed_password):
@@ -49,6 +82,7 @@ async def login_form(
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=USER_INACTIVE)
     await _record_login(session, user.id, request)
+    _set_auth_cookies(response, str(user.id))
     token = create_access_token(str(user.id))
     return Token(access_token=token)
 
@@ -58,6 +92,7 @@ async def login_json(
     body: LoginJson,
     session: Annotated[AsyncSession, Depends(get_db)],
     request: Request,
+    response: Response,
 ) -> Token:
     user = await get_user_by_email(session, body.email)
     if not user or not verify_password(body.password, user.hashed_password):
@@ -65,8 +100,40 @@ async def login_json(
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=USER_INACTIVE)
     await _record_login(session, user.id, request)
+    _set_auth_cookies(response, str(user.id))
     token = create_access_token(str(user.id))
     return Token(access_token=token)
+
+
+@router.post("/refresh", response_model=Token)
+async def refresh_auth(
+    request: Request,
+    response: Response,
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> Token:
+    refresh = request.cookies.get("refresh_token")
+    if not refresh:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=INVALID_CREDENTIALS)
+    payload = decode_token_payload(refresh)
+    if not payload or payload.get("type") != "refresh":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=INVALID_CREDENTIALS)
+    sub = payload.get("sub")
+    if not isinstance(sub, str):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=INVALID_CREDENTIALS)
+    try:
+        uid = uuid.UUID(sub)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=INVALID_CREDENTIALS)
+    user = await get_user_by_id(session, uid)
+    if not user or not user.is_active:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=INVALID_CREDENTIALS)
+    _set_auth_cookies(response, str(user.id))
+    return Token(access_token=create_access_token(str(user.id)))
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout_auth(response: Response) -> None:
+    _clear_auth_cookies(response)
 
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)

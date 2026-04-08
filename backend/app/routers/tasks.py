@@ -16,9 +16,9 @@ from app.http_errors import (
     UNKNOWN_SYSTEM,
 )
 from app.deps import get_current_user, require_permission
-from app.models import Board, KanbanColumn, System, Task, User, UserSystem
+from app.models import Board, KanbanColumn, System, Task, TaskTag, User, UserSystem
 from app.permissions import TASKS_CREATE, TASKS_READ_ASSIGNED
-from app.schemas.task import ColumnMini, SystemMini, TaskCreate, TaskOut, TaskUpdate, UserMini
+from app.schemas.task import ColumnMini, SystemMini, TagMini, TaskCreate, TaskOut, TaskUpdate, UserMini
 from app.services.authz import user_has_permission, user_sees_all_tasks
 from app.services.task_policy import can_delete_task, can_read_task, can_update_task
 
@@ -34,6 +34,7 @@ _TASK_LOAD = (
     selectinload(Task.creator),
     selectinload(Task.system),
     selectinload(Task.column),
+    selectinload(Task.tags),
 )
 
 
@@ -57,7 +58,19 @@ def _task_to_out(task: Task) -> TaskOut:
         creator=UserMini.model_validate(task.creator) if task.creator else None,
         system=SystemMini.model_validate(task.system) if task.system else None,
         column=ColumnMini.model_validate(task.column) if task.column else None,
+        tags=[TagMini.model_validate(t) for t in task.tags],
     )
+
+
+async def _resolve_tags(session: AsyncSession, tag_ids: list[uuid.UUID]) -> list[TaskTag]:
+    if not tag_ids:
+        return []
+    unique_ids = list(dict.fromkeys(tag_ids))
+    tags = (await session.execute(select(TaskTag).where(TaskTag.id.in_(unique_ids)))).scalars().all()
+    if len(tags) != len(unique_ids):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid tags")
+    tags_by_id = {t.id: t for t in tags}
+    return [tags_by_id[i] for i in unique_ids]
 
 
 async def _apply_task_list_scope(session: AsyncSession, user: User, stmt):
@@ -166,6 +179,7 @@ async def create_task(
         due_at=body.due_at,
         position=body.position,
     )
+    task.tags = await _resolve_tags(session, body.tag_ids)
     session.add(task)
     await session.flush()
     await session.commit()
@@ -220,6 +234,8 @@ async def update_task(
         task.position = body.position
     if body.archived_at is not None:
         task.archived_at = body.archived_at
+    if body.tag_ids is not None:
+        task.tags = await _resolve_tags(session, body.tag_ids)
 
     await session.flush()
     t = (await session.execute(select(Task).where(Task.id == task_id).options(*_TASK_LOAD))).scalar_one()

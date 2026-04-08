@@ -13,7 +13,7 @@ import {
 import { arrayMove, SortableContext, horizontalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { GripVertical, Pencil, Trash2 } from "lucide-react";
+import { GripVertical, Pencil, Tags, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { ApiError } from "../api/client";
@@ -25,6 +25,7 @@ import {
 } from "../api/boards";
 import type { BoardOut, KanbanColumnOut } from "../api/boards";
 import { listSystems } from "../api/systems";
+import { createTaskTag, deleteTaskTag, listTaskTags, updateTaskTag } from "../api/taskTags";
 import { createTask, deleteTask, getTask, listTasks, updateTask } from "../api/tasks";
 import type { TaskCreate, TaskOut, TaskUpdate } from "../api/tasks";
 import { listAssigneeCandidates } from "../api/users";
@@ -38,6 +39,7 @@ import {
   canUpdateTask,
   hasPermission,
 } from "../lib/permissions";
+import { taskIsOverdueForDashboard } from "../lib/taskStatus";
 import { toastApiError, toastError, toastSuccess } from "../lib/toast";
 
 const PRIORITY_LABEL: Record<string, string> = {
@@ -46,6 +48,15 @@ const PRIORITY_LABEL: Record<string, string> = {
   high: "Высокий",
   urgent: "Срочный",
 };
+
+const PRIORITY_BADGE_CLASS: Record<TaskOut["priority"], string> = {
+  low: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300",
+  normal: "bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-200",
+  high: "bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300",
+  urgent: "bg-rose-100 text-rose-800 dark:bg-rose-950/50 dark:text-rose-300",
+};
+
+type TaskTagView = { id: string; name: string; color: string };
 
 /** Префиксы id, чтобы не пересекаться с uuid задач и дроп-зонами колонок */
 const SORT_COL_PREFIX = "sort-col:";
@@ -121,6 +132,7 @@ function DraggableTaskCard({
   moveButtons,
   canDelete,
   onDelete,
+  isOverdue,
 }: {
   task: TaskOut;
   canDrag: boolean;
@@ -128,6 +140,7 @@ function DraggableTaskCard({
   moveButtons?: React.ReactNode;
   canDelete?: boolean;
   onDelete?: () => void;
+  isOverdue?: boolean;
 }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: task.id,
@@ -138,7 +151,13 @@ function DraggableTaskCard({
   };
   return (
     <div ref={setNodeRef} style={style} className={isDragging ? "z-10 opacity-90" : ""}>
-      <div className="flex gap-1 rounded-xl border border-slate-100 bg-white p-2 text-sm shadow-sm transition hover:border-sky-200 hover:shadow-md dark:border-slate-600 dark:bg-slate-800/80 dark:hover:border-sky-700">
+      <div
+        className={`flex gap-1 rounded-xl border p-2 text-sm shadow-sm transition ${
+          isOverdue
+            ? "border-red-200 bg-red-50/70 hover:border-red-300 dark:border-red-900/50 dark:bg-red-950/30 dark:hover:border-red-700"
+            : "border-slate-100 bg-white hover:border-sky-200 hover:shadow-md dark:border-slate-600 dark:bg-slate-800/80 dark:hover:border-sky-700"
+        }`}
+      >
         {canDrag ? (
           <button
             type="button"
@@ -161,11 +180,34 @@ function DraggableTaskCard({
               <p className="mt-1 text-xs text-sky-700 dark:text-sky-300">{task.system.name}</p>
             )}
             <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+              {isOverdue && (
+                <span className="rounded-full bg-red-100 px-1.5 py-0.5 font-medium text-red-700 dark:bg-red-950/50 dark:text-red-300">
+                  Просрочено
+                </span>
+              )}
               {task.assignee && <span>{task.assignee.full_name}</span>}
-              <span className="rounded bg-slate-100 px-1.5 py-0.5 dark:bg-slate-700">
+              <span
+                className={`rounded px-1.5 py-0.5 ${PRIORITY_BADGE_CLASS[task.priority] ?? PRIORITY_BADGE_CLASS.normal}`}
+              >
                 {PRIORITY_LABEL[task.priority] ?? task.priority}
               </span>
             </div>
+            {task.tags.length > 0 && (
+              <div className="mt-2 flex flex-wrap items-center gap-1 text-xs">
+                {task.tags.slice(0, 4).map((tag) => (
+                  <span
+                    key={tag.id}
+                    className="rounded-full px-1.5 py-0.5"
+                    style={{ backgroundColor: `${tag.color}22`, color: tag.color }}
+                  >
+                    #{tag.name}
+                  </span>
+                ))}
+                {task.tags.length > 4 && (
+                  <span className="text-slate-500 dark:text-slate-400">+{task.tags.length - 4}</span>
+                )}
+              </div>
+            )}
           </button>
           {canDelete && onDelete ? (
             <button
@@ -235,8 +277,13 @@ export function TasksPage() {
   const qc = useQueryClient();
 
   const [filterSystem, setFilterSystem] = useState<string>("");
+  const [showOverdueOnly, setShowOverdueOnly] = useState(false);
+  /** Пусто — все задачи; иначе показываются задачи, у которых есть хотя бы один из выбранных тегов */
+  const [filterTagIds, setFilterTagIds] = useState<string[]>([]);
+  const [tagFilterExpanded, setTagFilterExpanded] = useState(false);
 
   const [modalOpen, setModalOpen] = useState(false);
+  const [tagModalOpen, setTagModalOpen] = useState(false);
   const [columnModalOpen, setColumnModalOpen] = useState(false);
   const [newColumnName, setNewColumnName] = useState("");
   const [newColumnSlug, setNewColumnSlug] = useState("");
@@ -248,6 +295,7 @@ export function TasksPage() {
   const [systemId, setSystemId] = useState("");
   const [columnId, setColumnId] = useState("");
   const [assigneeId, setAssigneeId] = useState("");
+  const [tagIds, setTagIds] = useState<string[]>([]);
 
   const [drawerTaskId, setDrawerTaskId] = useState<string | null>(null);
   const [drawerTask, setDrawerTask] = useState<TaskOut | null>(null);
@@ -260,8 +308,12 @@ export function TasksPage() {
   const [editSystemId, setEditSystemId] = useState("");
   const [editColumnId, setEditColumnId] = useState("");
   const [editAssigneeId, setEditAssigneeId] = useState("");
+  const [editTagIds, setEditTagIds] = useState<string[]>([]);
 
   const [formError, setFormError] = useState<string | null>(null);
+  const [tagName, setTagName] = useState("");
+  const [tagColor, setTagColor] = useState("#38bdf8");
+  const [editingTagId, setEditingTagId] = useState<string | null>(null);
   const [activeDragTask, setActiveDragTask] = useState<TaskOut | null>(null);
   const [activeDragColumn, setActiveDragColumn] = useState<KanbanColumnOut | null>(null);
 
@@ -298,6 +350,11 @@ export function TasksPage() {
     queryFn: listAssigneeCandidates,
     enabled: !!user,
   });
+  const tagsQuery = useQuery({
+    queryKey: ["task-tags"],
+    queryFn: listTaskTags,
+    enabled: !!user,
+  });
 
   const board = boardQuery.data ?? null;
   const tasks = tasksQuery.data ?? [];
@@ -329,7 +386,8 @@ export function TasksPage() {
     queryErr(boardQuery.error) ??
     queryErr(tasksQuery.error) ??
     (canViewAllSystems ? queryErr(systemsQuery.error) : null) ??
-    queryErr(assigneeCandidatesQuery.error);
+    queryErr(assigneeCandidatesQuery.error) ??
+    queryErr(tagsQuery.error);
 
   useEffect(() => {
     if (boardSystems.length && !systemId) setSystemId(boardSystems[0].id);
@@ -339,6 +397,11 @@ export function TasksPage() {
     if (!filterSystem) return;
     if (!boardSystems.some((s) => s.id === filterSystem)) setFilterSystem("");
   }, [boardSystems, filterSystem]);
+
+  useEffect(() => {
+    const available = new Set((tagsQuery.data ?? []).map((t) => t.id));
+    setFilterTagIds((prev) => prev.filter((id) => available.has(id)));
+  }, [tagsQuery.data]);
 
   useEffect(() => {
     const cols = board?.columns ?? [];
@@ -496,6 +559,7 @@ export function TasksPage() {
       void qc.invalidateQueries({ queryKey: tasksQueryKey, refetchType: "none" });
       setModalOpen(false);
       setTitle("");
+      setTagIds([]);
       setFormError(null);
       toastSuccess("Задача создана");
     },
@@ -535,11 +599,25 @@ export function TasksPage() {
     for (const c of sortedCols) m.set(c.id, []);
     for (const t of tasks) {
       if (filterSystem && t.system_id !== filterSystem) continue;
+      if (showOverdueOnly && !taskIsOverdueForDashboard(t)) continue;
+      if (filterTagIds.length > 0) {
+        const taskTagIds = new Set(t.tags.map((x) => x.id));
+        const matches = filterTagIds.some((id) => taskTagIds.has(id));
+        if (!matches) continue;
+      }
       const arr = m.get(t.column_id);
       if (arr) arr.push(t);
     }
     return m;
-  }, [tasks, sortedCols, filterSystem]);
+  }, [tasks, sortedCols, filterSystem, showOverdueOnly, filterTagIds]);
+
+  const overdueById = useMemo(() => {
+    const s = new Set<string>();
+    for (const t of tasks) {
+      if (taskIsOverdueForDashboard(t)) s.add(t.id);
+    }
+    return s;
+  }, [tasks]);
 
   async function openDrawer(task: TaskOut) {
     setDrawerTaskId(task.id);
@@ -551,6 +629,7 @@ export function TasksPage() {
     setEditSystemId(task.system_id);
     setEditColumnId(task.column_id);
     setEditAssigneeId(task.assignee_id ?? "");
+    setEditTagIds(task.tags.map((t) => t.id));
     setDrawerLoading(true);
     try {
       const fresh = await getTask(task.id);
@@ -562,6 +641,7 @@ export function TasksPage() {
       setEditSystemId(fresh.system_id);
       setEditColumnId(fresh.column_id);
       setEditAssigneeId(fresh.assignee_id ?? "");
+      setEditTagIds(fresh.tags.map((t) => t.id));
     } catch {
       /* оставляем данные с карточки */
     } finally {
@@ -587,6 +667,7 @@ export function TasksPage() {
         system_id: editSystemId,
         column_id: editColumnId,
         assignee_id: editAssigneeId || null,
+        tag_ids: editTagIds,
       },
     });
   }
@@ -608,6 +689,7 @@ export function TasksPage() {
       title: title.trim(),
       column_id: columnId,
       assignee_id: assigneeId || null,
+      tag_ids: tagIds,
     };
     if (resolvedSid) body.system_id = resolvedSid;
     createMut.mutate(body);
@@ -721,6 +803,87 @@ export function TasksPage() {
     setActiveDragColumn(null);
   }
 
+  function openTagCreateModal() {
+    setEditingTagId(null);
+    setTagName("");
+    setTagColor("#38bdf8");
+    setTagModalOpen(true);
+  }
+
+  function openTagEditModal(tag: { id: string; name: string; color: string }) {
+    setEditingTagId(tag.id);
+    setTagName(tag.name);
+    setTagColor(tag.color);
+    setTagModalOpen(true);
+  }
+
+  function syncTagInTasks(updatedTag: TaskTagView) {
+    qc.setQueriesData<TaskOut[]>({ queryKey: tasksQueryKey }, (old) =>
+      old?.map((task) => ({
+        ...task,
+        tags: task.tags.map((tag) => (tag.id === updatedTag.id ? updatedTag : tag)),
+      })) ?? old,
+    );
+  }
+
+  function removeTagFromTasks(tagId: string) {
+    qc.setQueriesData<TaskOut[]>({ queryKey: tasksQueryKey }, (old) =>
+      old?.map((task) => ({
+        ...task,
+        tags: task.tags.filter((tag) => tag.id !== tagId),
+      })) ?? old,
+    );
+  }
+
+  async function submitTagModal(e: React.FormEvent) {
+    e.preventDefault();
+    const name = tagName.trim();
+    if (!name) return;
+    try {
+      if (editingTagId) {
+        const updated = await updateTaskTag(editingTagId, { name, color: tagColor });
+        qc.setQueryData<{ id: string; name: string; color: string }[]>(["task-tags"], (old) =>
+          old ? old.map((t) => (t.id === updated.id ? updated : t)) : [updated],
+        );
+        syncTagInTasks({ id: updated.id, name: updated.name, color: updated.color });
+        toastSuccess("Тег обновлён");
+      } else {
+        const created = await createTaskTag({ name, color: tagColor });
+        qc.setQueryData<{ id: string; name: string; color: string }[]>(["task-tags"], (old) => {
+          if (!old) return [created];
+          if (old.some((t) => t.id === created.id)) return old;
+          return [...old, created];
+        });
+        toastSuccess("Тег создан");
+      }
+      void qc.invalidateQueries({ queryKey: ["task-tags"], refetchType: "none" });
+      setTagModalOpen(false);
+      setTagName("");
+      setTagColor("#38bdf8");
+      setEditingTagId(null);
+    } catch (e2) {
+      toastApiError(e2, editingTagId ? "Не удалось обновить тег" : "Не удалось создать тег");
+    }
+  }
+
+  async function removeTag(tagId: string, tagNameValue: string) {
+    if (!window.confirm(`Удалить тег «${tagNameValue}»?`)) return;
+    try {
+      await deleteTaskTag(tagId);
+      qc.setQueryData<{ id: string; name: string; color: string }[]>(["task-tags"], (old) =>
+        old ? old.filter((t) => t.id !== tagId) : old,
+      );
+      removeTagFromTasks(tagId);
+      void qc.invalidateQueries({ queryKey: ["task-tags"], refetchType: "none" });
+      void qc.invalidateQueries({ queryKey: tasksQueryKey, refetchType: "none" });
+      setTagIds((prev) => prev.filter((x) => x !== tagId));
+      setEditTagIds((prev) => prev.filter((x) => x !== tagId));
+      toastSuccess("Тег удалён");
+    } catch (e) {
+      toastApiError(e, "Не удалось удалить тег");
+    }
+  }
+
   const drawerCanEdit = user && drawerTask ? canUpdateTask(user, drawerTask) : false;
   const drawerCanDelete = !!(user && drawerTask && canDeleteTask(user));
   const displayError = formError ?? loadError;
@@ -750,6 +913,15 @@ export function TasksPage() {
             Система: {boardSystems[0].name}
           </span>
         )}
+        <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+          <input
+            type="checkbox"
+            checked={showOverdueOnly}
+            onChange={(e) => setShowOverdueOnly(e.target.checked)}
+            className="rounded border-slate-300"
+          />
+          Показывать только просроченные
+        </label>
         {canCreate && (canViewAllSystems || boardSystems.length > 0) && (
           <button
             type="button"
@@ -757,6 +929,16 @@ export function TasksPage() {
             className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-md hover:bg-sky-600"
           >
             + Задача
+          </button>
+        )}
+        {canCreate && (
+          <button
+            type="button"
+            onClick={openTagCreateModal}
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
+          >
+            <Tags className="h-4 w-4" />
+            + Тег
           </button>
         )}
         {canManageCols && board && (
@@ -772,7 +954,66 @@ export function TasksPage() {
           </button>
         )}
       </div>
-
+      {(tagsQuery.data ?? []).length > 0 && (
+        <div className="mb-4 rounded-xl border border-slate-200/80 bg-white/60 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/40">
+          <div className="mb-1 flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Фильтр по тегам</span>
+            <button
+              type="button"
+              onClick={() => setTagFilterExpanded((v) => !v)}
+              className="text-xs font-medium text-slate-600 hover:underline dark:text-slate-300"
+            >
+              {tagFilterExpanded ? "Свернуть" : "Развернуть"}
+            </button>
+            {filterTagIds.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => setFilterTagIds([])}
+                className="text-xs font-medium text-sky-600 hover:underline dark:text-sky-400"
+              >
+                Сбросить
+              </button>
+            ) : null}
+          </div>
+          {tagFilterExpanded && (
+            <>
+              <div className="flex flex-wrap gap-2">
+                {(tagsQuery.data ?? []).map((tag) => {
+                  const active = filterTagIds.includes(tag.id);
+                  return (
+                    <button
+                      key={tag.id}
+                      type="button"
+                      onClick={() =>
+                        setFilterTagIds((prev) =>
+                          prev.includes(tag.id) ? prev.filter((id) => id !== tag.id) : [...prev, tag.id],
+                        )
+                      }
+                      className={`rounded-full border px-2.5 py-1 text-xs transition ${
+                        active
+                          ? "border-transparent ring-2 ring-sky-400/80 ring-offset-1 dark:ring-offset-slate-900"
+                          : "border-slate-200 opacity-85 dark:border-slate-600"
+                      }`}
+                      style={{ backgroundColor: `${tag.color}22`, color: tag.color }}
+                    >
+                      {active ? "✓ " : ""}#{tag.name}
+                    </button>
+                  );
+                })}
+              </div>
+              {filterTagIds.length > 0 ? (
+                <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                  Показаны задачи, у которых есть хотя бы один из выбранных тегов.
+                </p>
+              ) : (
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Выберите один или несколько тегов, чтобы оставить на доске только такие задачи.
+                </p>
+              )}
+            </>
+          )}
+        </div>
+      )}
       {displayError && (
         <p className="mb-4 rounded-xl bg-red-50 px-4 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
           {displayError}
@@ -858,6 +1099,7 @@ export function TasksPage() {
                     <DraggableTaskCard
                       key={task.id}
                       task={task}
+                      isOverdue={overdueById.has(task.id)}
                       canDrag={!!user && canMoveTask(user, task)}
                       onOpen={() => void openDrawer(task)}
                       canDelete={!!user && canDeleteTask(user)}
@@ -1025,6 +1267,60 @@ export function TasksPage() {
                   </select>
                 </div>
               )}
+              {(tagsQuery.data ?? []).length > 0 && (
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-500">Теги</label>
+                  <div className="rounded-xl border border-slate-200 bg-white p-2 dark:border-slate-600 dark:bg-slate-800">
+                    <div className="flex flex-wrap gap-2">
+                    {(tagsQuery.data ?? []).map((tag) => {
+                      const active = editTagIds.includes(tag.id);
+                      return (
+                        <button
+                          key={tag.id}
+                          type="button"
+                          disabled={!drawerCanEdit}
+                          onClick={() =>
+                            setEditTagIds((prev) =>
+                              prev.includes(tag.id)
+                                ? prev.filter((id) => id !== tag.id)
+                                : [...prev, tag.id],
+                            )
+                          }
+                          className={`rounded-full border px-2 py-1 text-xs transition ${
+                            active
+                              ? "border-transparent ring-2 ring-offset-1 dark:ring-offset-slate-900"
+                              : "border-slate-200 opacity-80 dark:border-slate-600"
+                          }`}
+                          style={{ backgroundColor: `${tag.color}22`, color: tag.color }}
+                        >
+                          {active ? "✓ " : ""}#{tag.name}
+                        </button>
+                      );
+                    })}
+                    </div>
+                    {drawerCanEdit && (
+                      <div className="mt-2 flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={openTagCreateModal}
+                          className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700"
+                        >
+                          + Новый тег
+                        </button>
+                        {!!editTagIds.length && (
+                          <button
+                            type="button"
+                            onClick={() => setEditTagIds([])}
+                            className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700"
+                          >
+                            Очистить
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
               <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-400">
                 <p>
                   <span className="font-medium text-slate-700 dark:text-slate-300">Статус колонки: </span>
@@ -1155,10 +1451,46 @@ export function TasksPage() {
                   </select>
                 </div>
               )}
+              {(tagsQuery.data ?? []).length > 0 && (
+                <div>
+                  <label className="mb-1 block text-sm">Теги</label>
+                  <div className="rounded-xl border border-slate-200 bg-white p-2 dark:border-slate-600 dark:bg-slate-800">
+                    <div className="flex flex-wrap gap-2">
+                      {(tagsQuery.data ?? []).map((tag) => {
+                        const active = tagIds.includes(tag.id);
+                        return (
+                          <button
+                            key={tag.id}
+                            type="button"
+                            onClick={() =>
+                              setTagIds((prev) =>
+                                prev.includes(tag.id)
+                                  ? prev.filter((id) => id !== tag.id)
+                                  : [...prev, tag.id],
+                              )
+                            }
+                            className={`rounded-full border px-2 py-1 text-xs transition ${
+                              active
+                                ? "border-transparent ring-2 ring-offset-1 dark:ring-offset-slate-900"
+                                : "border-slate-200 opacity-80 dark:border-slate-600"
+                            }`}
+                            style={{ backgroundColor: `${tag.color}22`, color: tag.color }}
+                          >
+                            {active ? "✓ " : ""}#{tag.name}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setModalOpen(false)}
+                  onClick={() => {
+                    setModalOpen(false);
+                    setTagIds([]);
+                  }}
                   className="rounded-xl bg-slate-200 px-4 py-2 text-sm dark:bg-slate-700"
                 >
                   Отмена
@@ -1172,6 +1504,95 @@ export function TasksPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {tagModalOpen && canCreate && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
+          <div className="glass w-full max-w-md rounded-2xl p-6 shadow-soft-lg">
+            <h2 className="mb-4 text-lg font-semibold text-slate-900 dark:text-white">
+              {editingTagId ? "Редактировать тег" : "Новый тег"}
+            </h2>
+            <form onSubmit={submitTagModal} className="space-y-3">
+              <div>
+                <label className="mb-1 block text-sm">Название</label>
+                <input
+                  required
+                  value={tagName}
+                  onChange={(e) => setTagName(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm">Цвет</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="color"
+                    value={tagColor}
+                    onChange={(e) => setTagColor(e.target.value)}
+                    className="h-10 w-12 rounded border border-slate-200 bg-white p-1 dark:border-slate-600 dark:bg-slate-800"
+                  />
+                  <input
+                    value={tagColor}
+                    onChange={(e) => setTagColor(e.target.value)}
+                    placeholder="#38bdf8"
+                    pattern="^#[0-9a-fA-F]{6}$"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 font-mono text-sm dark:border-slate-600 dark:bg-slate-800"
+                  />
+                </div>
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTagModalOpen(false);
+                    setEditingTagId(null);
+                  }}
+                  className="rounded-xl bg-slate-200 px-4 py-2 text-sm dark:bg-slate-700"
+                >
+                  Отмена
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600"
+                >
+                  {editingTagId ? "Сохранить" : "Создать"}
+                </button>
+              </div>
+            </form>
+            {(tagsQuery.data ?? []).length > 0 && (
+              <div className="mt-4 border-t border-slate-200 pt-3 dark:border-slate-700">
+                <p className="mb-2 text-xs font-medium text-slate-500">Существующие теги</p>
+                <div className="flex max-h-40 flex-wrap gap-2 overflow-auto pr-1">
+                  {(tagsQuery.data ?? []).map((tag) => (
+                    <span
+                      key={tag.id}
+                      className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs"
+                      style={{ backgroundColor: `${tag.color}22`, color: tag.color }}
+                    >
+                      #{tag.name}
+                      <button
+                        type="button"
+                        onClick={() => openTagEditModal(tag)}
+                        className="rounded px-1 hover:bg-black/10"
+                        title="Редактировать тег"
+                      >
+                        ✎
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void removeTag(tag.id, tag.name)}
+                        className="rounded px-1 hover:bg-black/10"
+                        title="Удалить тег"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

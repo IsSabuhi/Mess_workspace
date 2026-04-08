@@ -11,6 +11,7 @@ from app.models.knowledge import (
 from app.models.role import Permission, Role, RolePermission, UserRole
 from app.models.system import System
 from app.models.task import Task, TaskPriority
+from app.models.task_tag import TaskTag, TaskTagLink
 from app.models.user import User
 from app.models.user_system import UserSystem
 
@@ -30,6 +31,8 @@ __all__ = [
     "System",
     "Task",
     "TaskPriority",
+    "TaskTag",
+    "TaskTagLink",
     "User",
     "UserRole",
     "UserSystem",

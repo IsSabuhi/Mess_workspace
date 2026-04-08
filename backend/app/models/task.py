@@ -61,3 +61,7 @@ class Task(Base):
         foreign_keys=[creator_id],
         back_populates="created_tasks",
     )
+    tags: Mapped[list["TaskTag"]] = relationship(
+        secondary="task_tag_links",
+        back_populates="tasks",
+    )

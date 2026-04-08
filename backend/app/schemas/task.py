@@ -16,6 +16,7 @@ class TaskCreate(BaseModel):
     priority: TaskPriority = TaskPriority.normal
     due_at: datetime | None = None
     position: int = 0
+    tag_ids: list[uuid.UUID] = Field(default_factory=list)
 
 
 class TaskUpdate(BaseModel):
@@ -28,6 +29,7 @@ class TaskUpdate(BaseModel):
     due_at: datetime | None = None
     position: int | None = None
     archived_at: datetime | None = None
+    tag_ids: list[uuid.UUID] | None = None
 
 
 class UserMini(ORMModel):
@@ -49,6 +51,12 @@ class ColumnMini(ORMModel):
     is_done_column: bool = False
 
 
+class TagMini(ORMModel):
+    id: uuid.UUID
+    name: str
+    color: str
+
+
 class TaskOut(ORMModel):
     id: uuid.UUID
     title: str
@@ -68,3 +76,4 @@ class TaskOut(ORMModel):
     creator: UserMini | None = None
     system: SystemMini | None = None
     column: ColumnMini | None = None
+    tags: list[TagMini] = Field(default_factory=list)

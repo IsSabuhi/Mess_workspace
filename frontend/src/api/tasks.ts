@@ -21,6 +21,7 @@ export type TaskOut = {
   creator: { id: string; email: string; full_name: string } | null;
   system: { id: string; name: string; slug: string } | null;
   column: { id: string; name: string; slug: string; is_done_column?: boolean } | null;
+  tags: { id: string; name: string; color: string }[];
 };
 
 export type TaskCreate = {
@@ -33,6 +34,7 @@ export type TaskCreate = {
   priority?: TaskPriority;
   due_at?: string | null;
   position?: number;
+  tag_ids?: string[];
 };
 
 export type TaskUpdate = {
@@ -45,6 +47,7 @@ export type TaskUpdate = {
   due_at?: string | null;
   position?: number;
   archived_at?: string | null;
+  tag_ids?: string[];
 };
 
 export async function getTask(taskId: string): Promise<TaskOut> {

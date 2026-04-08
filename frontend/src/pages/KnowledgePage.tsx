@@ -192,7 +192,6 @@ export function KnowledgePage() {
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; title: string } | null>(null);
 
   const isNew = articleId === "new";
-  const articleKey = articleId ?? "list";
 
   const spacesQuery = useQuery({
     queryKey: ["knowledge", "spaces"],

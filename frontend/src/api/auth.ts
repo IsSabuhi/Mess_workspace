@@ -78,6 +78,10 @@ export async function registerUser(
   });
 }
 
+export async function logoutRequest(): Promise<void> {
+  await apiFetch<void>("/api/v1/auth/logout", { method: "POST" });
+}
+
 export function logout() {
   setAccessToken(null);
 }

@@ -44,6 +44,17 @@ function initialsFromName(name: string): string {
   return name.slice(0, 2).toUpperCase() || "?";
 }
 
+function taskInApprovalColumn(t: { column: { slug: string; name: string } | null }): boolean {
+  const slug = (t.column?.slug ?? "").toLowerCase();
+  const name = (t.column?.name ?? "").toLowerCase();
+  return (
+    slug.includes("approval") ||
+    slug.includes("approve") ||
+    slug.includes("agreement") ||
+    name.includes("соглас")
+  );
+}
+
 export function HomePage() {
   const { state } = useAuth();
   const user = state.status === "authenticated" ? state.user : null;
@@ -133,6 +144,18 @@ export function HomePage() {
       })
       .slice(0, 6);
   }, [allTasksQuery.data, user?.id]);
+
+  const managerApprovalTasks = useMemo(() => {
+    return (allTasksQuery.data ?? [])
+      .filter((t) => taskIsActiveForDashboard(t) && taskInApprovalColumn(t))
+      .slice()
+      .sort((a, b) => {
+        const da = a.due_at ? new Date(a.due_at).getTime() : Infinity;
+        const db = b.due_at ? new Date(b.due_at).getTime() : Infinity;
+        return da - db;
+      })
+      .slice(0, 10);
+  }, [allTasksQuery.data]);
 
   const totalActive = (allTasksQuery.data ?? []).filter((t) => taskIsActiveForDashboard(t)).length;
   const totalOverdue = (allTasksQuery.data ?? []).filter((t) => taskIsOverdueForDashboard(t)).length;
@@ -344,6 +367,44 @@ export function HomePage() {
 
         {isManager && (
           <>
+            {managerApprovalTasks.length > 0 && (
+              <div className="rounded-2xl border border-amber-200/80 bg-gradient-to-br from-white to-amber-50/70 p-6 shadow-soft dark:border-amber-900/40 dark:from-slate-900 dark:to-amber-950/20">
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+                    <h3 className="font-semibold text-slate-900 dark:text-white">На согласовании</h3>
+                  </div>
+                  <Link to="/tasks" className="text-sm font-medium text-sky-600 hover:underline dark:text-sky-400">
+                    Открыть канбан
+                  </Link>
+                </div>
+                <ul className="space-y-2">
+                  {managerApprovalTasks.map((t) => (
+                    <li
+                      key={t.id}
+                      className="flex flex-wrap items-start justify-between gap-2 rounded-xl border border-amber-100/80 bg-white/90 px-3 py-2.5 text-sm dark:border-amber-900/30 dark:bg-slate-800/50"
+                    >
+                      <div className="min-w-0">
+                        <p className="font-medium text-slate-900 dark:text-white">{t.title}</p>
+                        <p className="text-xs text-slate-600 dark:text-slate-400">
+                          {t.assignee?.full_name ?? "Не назначен"}
+                          {t.system ? ` · ${t.system.name}` : ""}
+                          {t.column?.name ? ` · ${t.column.name}` : ""}
+                        </p>
+                      </div>
+                      <span
+                        className={`shrink-0 text-xs font-medium ${
+                          taskIsOverdueForDashboard(t) ? "text-red-700 dark:text-red-300" : "text-slate-500"
+                        }`}
+                      >
+                        {formatDue(t.due_at)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             {topTeamOverdue.length > 0 && (
               <div className="rounded-2xl border border-red-200/70 bg-gradient-to-br from-white to-red-50/40 p-6 shadow-soft dark:border-red-900/40 dark:from-slate-900 dark:to-red-950/25">
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
