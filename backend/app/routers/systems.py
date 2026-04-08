@@ -1,0 +1,96 @@
+import uuid
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.database import get_db
+from app.deps import get_current_user, require_permission
+from app.models import System, Task, User
+from app.permissions import SYSTEMS_MANAGE
+from app.schemas.system import SystemCreate, SystemOut, SystemUpdate
+
+router = APIRouter(prefix="/systems", tags=["systems"])
+
+
+@router.get("", response_model=list[SystemOut])
+async def list_systems(
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(get_current_user)],
+    active_only: bool = True,
+) -> list[SystemOut]:
+    stmt = select(System).order_by(System.sort_order, System.name)
+    if active_only:
+        stmt = stmt.where(System.is_active.is_(True))
+    result = await session.execute(stmt)
+    return [SystemOut.model_validate(s) for s in result.scalars().all()]
+
+
+@router.post("", response_model=SystemOut, status_code=status.HTTP_201_CREATED)
+async def create_system(
+    body: SystemCreate,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(require_permission(SYSTEMS_MANAGE))],
+) -> SystemOut:
+    existing = await session.scalar(select(System.id).where(System.slug == body.slug))
+    if existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Slug already exists")
+    s = System(
+        name=body.name,
+        slug=body.slug,
+        description=body.description,
+        sort_order=body.sort_order,
+        is_active=True,
+    )
+    session.add(s)
+    await session.flush()
+    return SystemOut.model_validate(s)
+
+
+@router.patch("/{system_id}", response_model=SystemOut)
+async def update_system(
+    system_id: uuid.UUID,
+    body: SystemUpdate,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(require_permission(SYSTEMS_MANAGE))],
+) -> SystemOut:
+    s = await session.get(System, system_id)
+    if not s:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="System not found")
+    if body.name is not None:
+        s.name = body.name
+    if body.slug is not None:
+        clash = await session.scalar(select(System.id).where(System.slug == body.slug, System.id != system_id))
+        if clash:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Slug already exists")
+        s.slug = body.slug
+    if body.description is not None:
+        s.description = body.description
+    if body.sort_order is not None:
+        s.sort_order = body.sort_order
+    if body.is_active is not None:
+        s.is_active = body.is_active
+    await session.flush()
+    return SystemOut.model_validate(s)
+
+
+@router.delete("/{system_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_system(
+    system_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(require_permission(SYSTEMS_MANAGE))],
+) -> None:
+    s = await session.get(System, system_id)
+    if not s:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="System not found")
+    n_tasks = await session.scalar(
+        select(func.count()).select_from(Task).where(Task.system_id == system_id)
+    )
+    if n_tasks and n_tasks > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Нельзя удалить систему: есть связанные задачи. Перенесите или удалите задачи.",
+        )
+    await session.delete(s)
+    await session.flush()
