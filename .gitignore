@@ -1,0 +1,41 @@
+# === Env / secrets ===
+.env
+.env.*
+!.env.template
+!frontend/.env.example
+!backend/.env.example
+
+# === Python / backend ===
+backend/.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.sqlite3
+
+# Alembic / pytest / tooling cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# === Uploads / runtime data ===
+backend/uploads/
+backend/uploads/kb/
+
+# === Node / frontend ===
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/pnpm-debug.log*
+
+# === IDE / OS ===
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
