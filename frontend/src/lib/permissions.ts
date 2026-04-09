@@ -15,6 +15,8 @@ export const PERM = {
   BOARD_COLUMNS_MANAGE: "board.columns.manage",
   KNOWLEDGE_MANAGE_ALL: "knowledge.manage.all",
   KNOWLEDGE_SPACE_MANAGE: "knowledge.space.manage",
+  EMPLOYEE_DIRECTORY_READ: "employee_directory.read",
+  EMPLOYEE_DIRECTORY_MANAGE: "employee_directory.manage",
 } as const;
 
 export function hasPermission(user: UserMe, code: string): boolean {
@@ -23,6 +25,10 @@ export function hasPermission(user: UserMe, code: string): boolean {
 
 export function canAdminAccess(user: UserMe): boolean {
   return hasPermission(user, PERM.USERS_MANAGE) || hasPermission(user, PERM.ROLES_MANAGE);
+}
+
+export function canEmployeeDirectoryAccess(user: UserMe): boolean {
+  return hasPermission(user, PERM.EMPLOYEE_DIRECTORY_READ) || hasPermission(user, PERM.EMPLOYEE_DIRECTORY_MANAGE);
 }
 
 function taskInUserSystems(user: UserMe, task: TaskOut): boolean {

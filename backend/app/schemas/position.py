@@ -28,6 +28,7 @@ class PositionOut(ORMModel):
     sort_order: int
     is_active: bool
     created_at: datetime
+    user_count: int = 0
 
 
 class PositionBrief(BaseModel):

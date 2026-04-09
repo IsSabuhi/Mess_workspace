@@ -10,7 +10,7 @@ from app.config import get_settings
 from app.database import async_session_maker
 from app.models import Role, User, UserRole
 from app.paths import UPLOAD_KB_DIR, UPLOADS_DIR
-from app.routers import auth, boards, knowledge, positions, roles, systems, task_tags, tasks, users
+from app.routers import auth, boards, employee_directory, knowledge, positions, roles, systems, task_tags, tasks, users
 from app.security import hash_password
 
 settings = get_settings()
@@ -80,6 +80,7 @@ app.include_router(positions.router, prefix="/api/v1")
 app.include_router(boards.router, prefix="/api/v1")
 app.include_router(tasks.router, prefix="/api/v1")
 app.include_router(task_tags.router, prefix="/api/v1")
+app.include_router(employee_directory.router, prefix="/api/v1")
 app.include_router(knowledge.router, prefix="/api/v1")
 
 app.mount(

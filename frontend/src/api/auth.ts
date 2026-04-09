@@ -23,8 +23,13 @@ export type UserOut = {
 };
 
 /** Текущий пользователь с кодами прав с бэкенда */
+export type DashboardPreferences = {
+  home?: Record<string, boolean>;
+};
+
 export type UserMe = UserOut & {
   permissions: string[];
+  dashboard_preferences?: DashboardPreferences | null;
 };
 
 export type TokenResponse = {
@@ -54,6 +59,7 @@ export type ProfilePatch = {
   full_name?: string;
   birth_date?: string | null;
   position_id?: string | null;
+  dashboard_preferences?: DashboardPreferences;
 };
 
 export async function patchProfile(body: ProfilePatch): Promise<UserMe> {

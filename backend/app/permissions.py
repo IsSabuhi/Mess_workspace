@@ -21,6 +21,9 @@ KNOWLEDGE_READ_ALL = "knowledge.read.all"
 KNOWLEDGE_MANAGE_ALL = "knowledge.manage.all"
 KNOWLEDGE_SPACE_MANAGE = "knowledge.space.manage"
 
+EMPLOYEE_DIRECTORY_READ = "employee_directory.read"
+EMPLOYEE_DIRECTORY_MANAGE = "employee_directory.manage"
+
 ALL_PERMISSION_CODES: tuple[str, ...] = (
     TASKS_CREATE,
     TASKS_READ_ALL,
@@ -37,4 +40,6 @@ ALL_PERMISSION_CODES: tuple[str, ...] = (
     KNOWLEDGE_READ_ALL,
     KNOWLEDGE_MANAGE_ALL,
     KNOWLEDGE_SPACE_MANAGE,
+    EMPLOYEE_DIRECTORY_READ,
+    EMPLOYEE_DIRECTORY_MANAGE,
 )

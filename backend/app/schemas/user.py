@@ -61,3 +61,4 @@ class UserMeOut(UserOut):
     """Профиль текущего пользователя + коды прав для UI."""
 
     permissions: list[str] = []
+    dashboard_preferences: dict | None = None

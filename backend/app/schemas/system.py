@@ -1,9 +1,10 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.schemas.common import ORMModel
+from app.schemas.position import PositionBrief
 
 
 class SystemBrief(BaseModel):
@@ -38,3 +39,11 @@ class SystemOut(ORMModel):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+    user_count: int = 0
+
+
+class SystemMemberOut(BaseModel):
+    id: uuid.UUID
+    full_name: str
+    email: EmailStr
+    position: PositionBrief | None = None

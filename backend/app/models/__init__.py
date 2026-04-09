@@ -1,4 +1,5 @@
 from app.models.board import Board, KanbanColumn
+from app.models.employee_profile import EmployeeProfile
 from app.models.login_audit import LoginAudit
 from app.models.position import Position
 from app.models.knowledge import (
@@ -19,6 +20,7 @@ __all__ = [
     "Position",
     "LoginAudit",
     "ArticleStatus",
+    "EmployeeProfile",
     "Board",
     "KanbanColumn",
     "KnowledgeArticle",

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime, timezone
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, String
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, JSON, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -21,6 +21,7 @@ class User(Base):
         UUID(as_uuid=True), ForeignKey("positions.id", ondelete="SET NULL"), nullable=True
     )
     birth_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    dashboard_preferences: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_superuser: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -56,5 +57,11 @@ class User(Base):
     system_memberships: Mapped[list["UserSystem"]] = relationship(
         "UserSystem",
         back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    employee_profile: Mapped["EmployeeProfile | None"] = relationship(
+        "EmployeeProfile",
+        back_populates="user",
+        uselist=False,
         cascade="all, delete-orphan",
     )

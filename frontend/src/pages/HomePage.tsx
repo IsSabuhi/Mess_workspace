@@ -14,13 +14,14 @@ import {
   Settings,
   Shield,
   Sparkles,
-  Users,
 } from "lucide-react";
 
+import { listEmployeeDirectory } from "../api/employeeDirectory";
 import { listTasks } from "../api/tasks";
 import { AppShell } from "../components/AppShell";
 import { useAuth } from "../context/AuthContext";
-import { canAdminAccess, PERM, hasPermission } from "../lib/permissions";
+import { isHomeBlockVisible } from "../lib/homeDashboardBlocks";
+import { canAdminAccess, canEmployeeDirectoryAccess, PERM, hasPermission } from "../lib/permissions";
 import { taskIsActiveForDashboard, taskIsOverdueForDashboard } from "../lib/taskStatus";
 
 function formatDue(iso: string | null): string {
@@ -78,6 +79,20 @@ export function HomePage() {
     queryKey: ["tasks", user?.id ?? ""],
     queryFn: () => listTasks({ include_archived: false }),
     enabled: !!user && isManager,
+  });
+  const dashPrefs = user?.dashboard_preferences;
+  const showBlock = (id: string) => isHomeBlockVisible(dashPrefs, id);
+  const showEmployeeExpiry = !!user && (isManager || canEmployeeDirectoryAccess(user));
+  const showEmployeeExpiryBlock = showEmployeeExpiry && showBlock("employee_expiry");
+  const expiringSoonQuery = useQuery({
+    queryKey: ["employee-directory", "expiring", 30],
+    queryFn: () => listEmployeeDirectory({ expiring_in_days: 30 }),
+    enabled: showEmployeeExpiryBlock,
+  });
+  const expiredQuery = useQuery({
+    queryKey: ["employee-directory", "expired"],
+    queryFn: () => listEmployeeDirectory({ expired_only: true }),
+    enabled: showEmployeeExpiryBlock,
   });
 
   const myTasksSorted = useMemo(() => {
@@ -162,6 +177,12 @@ export function HomePage() {
 
   const myActiveCount = myTasksSorted.length;
   const myOverdueCount = myTasksSorted.filter((t) => taskIsOverdueForDashboard(t)).length;
+  const myDueSoonCount = myTasksSorted.filter((t) => {
+    if (!t.due_at || taskIsOverdueForDashboard(t)) return false;
+    const ms = new Date(t.due_at).getTime() - Date.now();
+    return ms >= 0 && ms <= 1000 * 60 * 60 * 24 * 3;
+  }).length;
+  const myNoDueCount = myTasksSorted.filter((t) => !t.due_at).length;
 
   const showAdmin = user ? canAdminAccess(user) : false;
 
@@ -305,7 +326,24 @@ export function HomePage() {
           </section>
         )}
 
-        {!isManager && user && (
+        {!isManager && user && showBlock("my_tasks_panel") && (
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-4 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
+              <p className="text-xs text-slate-500">Мои задачи</p>
+              <p className="mt-1 text-2xl font-bold tabular-nums text-slate-900 dark:text-white">{myActiveCount}</p>
+            </div>
+            <div className="rounded-2xl border border-amber-200/80 bg-amber-50/70 p-4 shadow-soft dark:border-amber-900/40 dark:bg-amber-950/20">
+              <p className="text-xs text-amber-700 dark:text-amber-300">Дедлайн до 3 дней</p>
+              <p className="mt-1 text-2xl font-bold tabular-nums text-amber-800 dark:text-amber-200">{myDueSoonCount}</p>
+            </div>
+            <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-4 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
+              <p className="text-xs text-slate-500">Без срока</p>
+              <p className="mt-1 text-2xl font-bold tabular-nums text-slate-900 dark:text-white">{myNoDueCount}</p>
+            </div>
+          </div>
+        )}
+
+        {!isManager && user && showBlock("my_tasks_panel") && (
           <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-6 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
             <div className="mb-4 flex items-center gap-2">
               <CalendarClock className="h-5 w-5 text-sky-600 dark:text-sky-400" />
@@ -367,7 +405,7 @@ export function HomePage() {
 
         {isManager && (
           <>
-            {managerApprovalTasks.length > 0 && (
+            {showBlock("manager_approval") && managerApprovalTasks.length > 0 && (
               <div className="rounded-2xl border border-amber-200/80 bg-gradient-to-br from-white to-amber-50/70 p-6 shadow-soft dark:border-amber-900/40 dark:from-slate-900 dark:to-amber-950/20">
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
@@ -405,7 +443,7 @@ export function HomePage() {
               </div>
             )}
 
-            {topTeamOverdue.length > 0 && (
+            {showBlock("manager_team_overdue") && topTeamOverdue.length > 0 && (
               <div className="rounded-2xl border border-red-200/70 bg-gradient-to-br from-white to-red-50/40 p-6 shadow-soft dark:border-red-900/40 dark:from-slate-900 dark:to-red-950/25">
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
@@ -441,7 +479,7 @@ export function HomePage() {
               </div>
             )}
 
-            {statsBySystem.length > 0 && (
+            {showBlock("manager_by_system") && statsBySystem.length > 0 && (
               <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-6 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
                 <div className="mb-4 flex items-center gap-2">
                   <FolderKanban className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />
@@ -466,6 +504,7 @@ export function HomePage() {
               </div>
             )}
 
+            {showBlock("manager_analytics") && (
             <div className="rounded-2xl border border-emerald-200/80 bg-gradient-to-br from-white to-emerald-50/90 p-6 shadow-soft dark:border-emerald-900/50 dark:from-slate-900 dark:to-emerald-950/30">
               <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
                 <div className="flex items-start gap-3">
@@ -532,8 +571,9 @@ export function HomePage() {
                 </Link>
               </p>
             </div>
+            )}
 
-            {managerOwnTasks.length > 0 && (
+            {showBlock("manager_own_tasks") && managerOwnTasks.length > 0 && (
               <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-6 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
                 <h3 className="mb-3 font-semibold text-slate-900 dark:text-white">Ваши задачи как исполнителя</h3>
                 <ul className="grid gap-2 sm:grid-cols-2">
@@ -552,17 +592,51 @@ export function HomePage() {
           </>
         )}
 
-        {!isManager && user && (
+        {showEmployeeExpiryBlock && (
+          <div className="rounded-2xl border border-amber-200/80 bg-gradient-to-br from-white to-amber-50/70 p-6 shadow-soft dark:border-amber-900/40 dark:from-slate-900 dark:to-amber-950/20">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <CalendarClock className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+                <h3 className="font-semibold text-slate-900 dark:text-white">Контроль сроков сотрудников</h3>
+              </div>
+              <Link to="/employee-directory" className="text-sm font-medium text-sky-600 hover:underline dark:text-sky-400">
+                Открыть справочник
+              </Link>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="rounded-xl border border-red-200/70 bg-red-50/70 p-3 dark:border-red-900/40 dark:bg-red-950/20">
+                <p className="text-sm font-semibold text-red-800 dark:text-red-300">Уже просрочено</p>
+                <p className="mt-1 text-2xl font-bold tabular-nums text-red-700 dark:text-red-300">
+                  {expiredQuery.isPending ? "…" : expiredQuery.data?.length ?? 0}
+                </p>
+                <p className="mt-1 text-xs text-red-700/80 dark:text-red-300/80">
+                  По экзаменам/пропускам сотрудников
+                </p>
+              </div>
+              <div className="rounded-xl border border-amber-200/80 bg-amber-50/70 p-3 dark:border-amber-900/40 dark:bg-amber-950/20">
+                <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">Истекает в 30 дней</p>
+                <p className="mt-1 text-2xl font-bold tabular-nums text-amber-700 dark:text-amber-300">
+                  {expiringSoonQuery.isPending ? "…" : expiringSoonQuery.data?.length ?? 0}
+                </p>
+                <p className="mt-1 text-xs text-amber-700/80 dark:text-amber-300/80">
+                  Запланируйте продление заранее
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {!isManager && user && showBlock("employee_focus") && (
           <div className="rounded-2xl border border-dashed border-slate-200/90 bg-slate-50/50 p-5 dark:border-slate-600 dark:bg-slate-900/40">
             <div className="flex items-start gap-3">
               <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-slate-600 shadow-sm dark:bg-slate-800 dark:text-slate-300">
-                <Users className="h-5 w-5" />
+                <Briefcase className="h-5 w-5" />
               </span>
               <div>
-                <h3 className="font-semibold text-slate-900 dark:text-white">О доступе</h3>
+                <h3 className="font-semibold text-slate-900 dark:text-white">Фокус сотрудника</h3>
                 <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                  Вы видите задачи в рамках выданных прав (часто — только назначенные на вас). У руководителя и
-                  администратора на этой странице дополнительно показывается сводка по команде.
+                  Отслеживайте блок «Мои задачи и сроки»: сначала закрывайте просроченные, затем задачи с ближайшим
+                  дедлайном. Командная аналитика доступна только руководителям и администраторам.
                 </p>
               </div>
             </div>

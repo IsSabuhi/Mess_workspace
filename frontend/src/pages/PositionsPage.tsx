@@ -137,6 +137,9 @@ export function PositionsPage() {
               {p.description && (
                 <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">{p.description}</p>
               )}
+              <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                Сотрудников с должностью: <span className="font-semibold">{p.user_count}</span>
+              </p>
               {canManage && (
                 <div className="mt-4 flex flex-wrap gap-2">
                   <button

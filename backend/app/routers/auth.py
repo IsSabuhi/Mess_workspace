@@ -171,7 +171,11 @@ async def me(
         codes = list(ALL_PERMISSION_CODES)
     else:
         codes = sorted(await get_user_permission_codes(session, current))
-    return UserMeOut(**base.model_dump(), permissions=codes)
+    return UserMeOut(
+        **base.model_dump(),
+        permissions=codes,
+        dashboard_preferences=current.dashboard_preferences,
+    )
 
 
 @router.patch("/me", response_model=UserMeOut)
@@ -196,6 +200,18 @@ async def patch_me(
             if not pos.is_active and current.position_id != pid:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=INVALID_POSITION)
             current.position_id = pid
+    if "dashboard_preferences" in data and data["dashboard_preferences"] is not None:
+        dp = data["dashboard_preferences"]
+        cur = dict(current.dashboard_preferences or {})
+        home = dict(cur.get("home") or {})
+        if isinstance(dp, dict) and "home" in dp and dp["home"] is not None:
+            for k, visible in dp["home"].items():
+                if visible:
+                    home.pop(k, None)
+                else:
+                    home[k] = False
+        cur["home"] = home
+        current.dashboard_preferences = cur
     await session.flush()
     await session.refresh(current, ["position"])
     await session.commit()
@@ -204,7 +220,11 @@ async def patch_me(
         codes = list(ALL_PERMISSION_CODES)
     else:
         codes = sorted(await get_user_permission_codes(session, current))
-    return UserMeOut(**base.model_dump(), permissions=codes)
+    return UserMeOut(
+        **base.model_dump(),
+        permissions=codes,
+        dashboard_preferences=current.dashboard_preferences,
+    )
 
 
 @router.get("/me/login-history", response_model=list[LoginAuditOut])

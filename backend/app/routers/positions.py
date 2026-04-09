@@ -2,7 +2,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -14,17 +14,33 @@ from app.schemas.position import PositionCreate, PositionOut, PositionUpdate
 router = APIRouter(prefix="/positions", tags=["positions"])
 
 
+async def _user_counts_by_position(session: AsyncSession) -> dict[uuid.UUID, int]:
+    rows = await session.execute(
+        select(User.position_id, func.count(User.id))
+        .where(User.position_id.is_not(None), User.is_active.is_(True))
+        .group_by(User.position_id)
+    )
+    return {pid: int(cnt) for pid, cnt in rows.all() if pid is not None}
+
+
+def _position_to_out(position: Position, user_count: int = 0) -> PositionOut:
+    data = PositionOut.model_validate(position).model_dump()
+    data["user_count"] = user_count
+    return PositionOut(**data)
+
+
 @router.get("", response_model=list[PositionOut])
 async def list_positions(
     session: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[User, Depends(get_current_user)],
     active_only: bool = True,
 ) -> list[PositionOut]:
+    counts = await _user_counts_by_position(session)
     stmt = select(Position).order_by(Position.sort_order, Position.name)
     if active_only:
         stmt = stmt.where(Position.is_active.is_(True))
     result = await session.execute(stmt)
-    return [PositionOut.model_validate(p) for p in result.scalars().all()]
+    return [_position_to_out(p, counts.get(p.id, 0)) for p in result.scalars().all()]
 
 
 @router.post("", response_model=PositionOut, status_code=status.HTTP_201_CREATED)
@@ -45,7 +61,7 @@ async def create_position(
     )
     session.add(p)
     await session.flush()
-    return PositionOut.model_validate(p)
+    return _position_to_out(p, 0)
 
 
 @router.patch("/{position_id}", response_model=PositionOut)
@@ -67,7 +83,8 @@ async def update_position(
     if body.is_active is not None:
         p.is_active = body.is_active
     await session.flush()
-    return PositionOut.model_validate(p)
+    counts = await _user_counts_by_position(session)
+    return _position_to_out(p, counts.get(p.id, 0))
 
 
 @router.delete("/{position_id}", status_code=status.HTTP_204_NO_CONTENT)

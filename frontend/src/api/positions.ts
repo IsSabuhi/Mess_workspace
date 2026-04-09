@@ -8,6 +8,7 @@ export type PositionOut = {
   sort_order: number;
   is_active: boolean;
   created_at: string;
+  user_count: number;
 };
 
 export type PositionCreate = {

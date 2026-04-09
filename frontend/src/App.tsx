@@ -2,6 +2,7 @@ import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import { useAuth } from "./context/AuthContext";
 import { AdminPage } from "./pages/AdminPage";
+import { EmployeeDirectoryPage } from "./pages/EmployeeDirectoryPage";
 import { HomePage } from "./pages/HomePage";
 import { PositionsPage } from "./pages/PositionsPage";
 import { KnowledgePage } from "./pages/KnowledgePage";
@@ -47,6 +48,14 @@ export default function App() {
         element={
           <ProtectedRoute>
             <TasksPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/employee-directory"
+        element={
+          <ProtectedRoute>
+            <EmployeeDirectoryPage />
           </ProtectedRoute>
         }
       />

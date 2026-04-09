@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { ApiError } from "../api/client";
-import { createSystem, listSystems, updateSystem } from "../api/systems";
+import { createSystem, deleteSystem, listSystemMembers, listSystems, updateSystem } from "../api/systems";
 import type { SystemOut } from "../api/systems";
 import { AppShell } from "../components/AppShell";
 import { useAuth } from "../context/AuthContext";
@@ -18,6 +18,8 @@ export function SystemsPage() {
 
   const [showInactive, setShowInactive] = useState(false);
   const [modal, setModal] = useState(false);
+  const [membersModalSystem, setMembersModalSystem] = useState<SystemOut | null>(null);
+  const [editingSystem, setEditingSystem] = useState<SystemOut | null>(null);
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
   const [description, setDescription] = useState("");
@@ -26,6 +28,11 @@ export function SystemsPage() {
   const systemsQuery = useQuery({
     queryKey: ["systems", showInactive],
     queryFn: () => listSystems(!showInactive),
+  });
+  const membersQuery = useQuery({
+    queryKey: ["systems", "members", membersModalSystem?.id ?? ""],
+    queryFn: () => listSystemMembers(membersModalSystem!.id),
+    enabled: !!membersModalSystem,
   });
 
   const items = systemsQuery.data ?? [];
@@ -54,12 +61,21 @@ export function SystemsPage() {
     },
   });
 
+  const deleteMut = useMutation({
+    mutationFn: deleteSystem,
+    onSuccess: async () => {
+      await invalidateAndRefetch(qc, ["systems"]);
+      toastSuccess("Система удалена");
+    },
+    onError: (e: unknown) => toastApiError(e, "Не удалось удалить систему"),
+  });
+
   const updateMut = useMutation({
     mutationFn: ({ id, body }: { id: string; body: Parameters<typeof updateSystem>[1] }) =>
       updateSystem(id, body),
     onSuccess: async () => {
       await invalidateAndRefetch(qc, ["systems"]);
-      toastSuccess("Статус системы обновлён");
+      toastSuccess("Система обновлена");
     },
     onError: (e: unknown) => {
       toastApiError(e, "Не удалось обновить систему");
@@ -69,17 +85,49 @@ export function SystemsPage() {
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     setFormError(null);
-    createMut.mutate({
+    const payload = {
       name: name.trim(),
       slug: slug.trim().toLowerCase().replace(/[^a-z0-9-]/g, ""),
       description: description.trim() || null,
-      sort_order: items.length,
-    });
+      sort_order: editingSystem?.sort_order ?? items.length,
+    };
+    if (editingSystem) {
+      try {
+        await updateMut.mutateAsync({ id: editingSystem.id, body: payload });
+        setModal(false);
+        setEditingSystem(null);
+        setName("");
+        setSlug("");
+        setDescription("");
+      } catch {
+        // handled by mutation
+      }
+      return;
+    }
+    createMut.mutate(payload);
   }
 
   function toggleActive(s: SystemOut) {
     if (!canManage) return;
     updateMut.mutate({ id: s.id, body: { is_active: !s.is_active } });
+  }
+
+  function openCreateModal() {
+    setEditingSystem(null);
+    setName("");
+    setSlug("");
+    setDescription("");
+    setFormError(null);
+    setModal(true);
+  }
+
+  function openEditModal(s: SystemOut) {
+    setEditingSystem(s);
+    setName(s.name);
+    setSlug(s.slug);
+    setDescription(s.description ?? "");
+    setFormError(null);
+    setModal(true);
   }
 
   return (
@@ -96,7 +144,7 @@ export function SystemsPage() {
         {canManage && (
           <button
             type="button"
-            onClick={() => setModal(true)}
+            onClick={openCreateModal}
             className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-md hover:bg-sky-600"
           >
             + Система
@@ -130,15 +178,46 @@ export function SystemsPage() {
               {s.description && (
                 <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">{s.description}</p>
               )}
+              <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                Сотрудников в системе: <span className="font-semibold">{s.user_count}</span>
+              </p>
+              <button
+                type="button"
+                onClick={() => setMembersModalSystem(s)}
+                className="mt-2 text-xs font-medium text-sky-600 hover:underline dark:text-sky-400"
+              >
+                Показать сотрудников
+              </button>
               {canManage && (
-                <button
-                  type="button"
-                  onClick={() => toggleActive(s)}
-                  disabled={updateMut.isPending}
-                  className="mt-3 text-xs font-medium text-sky-600 hover:underline disabled:opacity-50 dark:text-sky-400"
-                >
-                  {s.is_active ? "Деактивировать" : "Активировать"}
-                </button>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => openEditModal(s)}
+                    className="rounded-lg bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200"
+                  >
+                    Редактировать
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => toggleActive(s)}
+                    disabled={updateMut.isPending}
+                    className="rounded-lg bg-sky-50 px-3 py-1 text-xs font-medium text-sky-700 hover:bg-sky-100 disabled:opacity-50 dark:bg-sky-950/30 dark:text-sky-300"
+                  >
+                    {s.is_active ? "Деактивировать" : "Активировать"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (window.confirm(`Удалить систему «${s.name}»?`)) {
+                        void deleteMut.mutateAsync(s.id).catch(() => {});
+                      }
+                    }}
+                    disabled={deleteMut.isPending}
+                    className="rounded-lg bg-red-50 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50 dark:bg-red-950/30 dark:text-red-300"
+                  >
+                    Удалить
+                  </button>
+                </div>
               )}
             </div>
           ))}
@@ -148,7 +227,9 @@ export function SystemsPage() {
       {modal && canManage && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
           <div className="glass w-full max-w-md rounded-2xl p-6 shadow-soft-lg">
-            <h2 className="mb-4 text-lg font-semibold">Новая система</h2>
+            <h2 className="mb-4 text-lg font-semibold">
+              {editingSystem ? "Редактировать систему" : "Новая система"}
+            </h2>
             <form onSubmit={handleCreate} className="space-y-3">
               <div>
                 <label className="mb-1 block text-sm">Название</label>
@@ -180,20 +261,87 @@ export function SystemsPage() {
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setModal(false)}
+                  onClick={() => {
+                    setModal(false);
+                    setEditingSystem(null);
+                  }}
                   className="rounded-xl bg-slate-200 px-4 py-2 text-sm dark:bg-slate-700"
                 >
                   Отмена
                 </button>
                 <button
                   type="submit"
-                  disabled={createMut.isPending}
+                  disabled={createMut.isPending || updateMut.isPending}
                   className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
                 >
-                  {createMut.isPending ? "Создание…" : "Создать"}
+                  {editingSystem
+                    ? updateMut.isPending
+                      ? "Сохранение…"
+                      : "Сохранить"
+                    : createMut.isPending
+                      ? "Создание…"
+                      : "Создать"}
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {membersModalSystem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
+          <div className="glass w-full max-w-2xl rounded-2xl p-6 shadow-soft-lg">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
+                  Сотрудники системы: {membersModalSystem.name}
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400">{membersModalSystem.slug}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMembersModalSystem(null)}
+                className="rounded-lg px-3 py-1 text-sm text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+              >
+                ✕
+              </button>
+            </div>
+            {membersQuery.isPending && <p className="text-sm text-slate-500">Загрузка…</p>}
+            {membersQuery.isError && (
+              <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
+                {membersQuery.error instanceof ApiError ? membersQuery.error.detail : "Не удалось загрузить сотрудников"}
+              </p>
+            )}
+            {!membersQuery.isPending && !membersQuery.isError && (
+              <>
+                {(membersQuery.data ?? []).length === 0 ? (
+                  <p className="text-sm text-slate-600 dark:text-slate-400">
+                    В этой системе пока нет активных сотрудников.
+                  </p>
+                ) : (
+                  <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-700">
+                    <table className="w-full text-left text-sm">
+                      <thead className="bg-slate-50 dark:bg-slate-800/70">
+                        <tr>
+                          <th className="px-3 py-2 font-semibold text-slate-700 dark:text-slate-200">Сотрудник</th>
+                          <th className="px-3 py-2 font-semibold text-slate-700 dark:text-slate-200">Должность</th>
+                          <th className="px-3 py-2 font-semibold text-slate-700 dark:text-slate-200">Email</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
+                        {(membersQuery.data ?? []).map((m) => (
+                          <tr key={m.id}>
+                            <td className="px-3 py-2 text-slate-900 dark:text-white">{m.full_name}</td>
+                            <td className="px-3 py-2 text-slate-600 dark:text-slate-300">{m.position?.name ?? "—"}</td>
+                            <td className="px-3 py-2 text-slate-500 dark:text-slate-400">{m.email}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </div>
       )}
