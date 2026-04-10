@@ -40,7 +40,9 @@ export function Sidebar({ collapsed, onToggleCollapse }: Props) {
   const showEmployeeDirectory =
     state.status === "authenticated" &&
     (hasPermission(state.user, PERM.EMPLOYEE_DIRECTORY_READ) ||
-      hasPermission(state.user, PERM.EMPLOYEE_DIRECTORY_MANAGE));
+      hasPermission(state.user, PERM.EMPLOYEE_DIRECTORY_MANAGE) ||
+      hasPermission(state.user, PERM.EMPLOYEE_DIRECTORY_COMPLIANCE_MANAGE) ||
+      hasPermission(state.user, PERM.EMPLOYEE_DIRECTORY_PROFILE_MANAGE));
 
   return (
     <aside
@@ -138,7 +140,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: Props) {
         {showEmployeeDirectory && (
           <NavLink
             to="/employee-directory"
-            title={collapsed ? "Справочник сотрудников" : undefined}
+            title={collapsed ? "Сотрудники" : undefined}
             className={({ isActive }) =>
               [
                 "group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition",
@@ -150,7 +152,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: Props) {
             }
           >
             <IdCard className="h-5 w-5 shrink-0 opacity-90" aria-hidden />
-            {!collapsed && <span>Справочник сотрудников</span>}
+            {!collapsed && <span>Сотрудники</span>}
           </NavLink>
         )}
 

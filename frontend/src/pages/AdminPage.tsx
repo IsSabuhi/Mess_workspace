@@ -17,7 +17,7 @@ import { listPositions } from "../api/positions";
 import type { SystemOut } from "../api/systems";
 import { listSystems } from "../api/systems";
 import type { UserCreate, UserUpdate } from "../api/users";
-import { createUser, listUsers, updateUser } from "../api/users";
+import { createUser, deleteUser, listUsers, updateUser } from "../api/users";
 import { AppShell } from "../components/AppShell";
 import { useAuth } from "../context/AuthContext";
 import { invalidateAndRefetch } from "../lib/queryClient";
@@ -48,6 +48,7 @@ const PERM_GROUP_LABELS: Record<string, string> = {
   users: "Управление пользователями",
   roles: "Роли и права доступа",
   knowledge: "База знаний",
+  employee_directory: "Сотрудники",
   other: "Прочее",
 };
 
@@ -425,9 +426,12 @@ export function AdminPage() {
 }
 
 function UsersSection() {
+  const { state: authState } = useAuth();
+  const currentUserId = authState.status === "authenticated" ? authState.user.id : "";
   const qc = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
+  const [userSearch, setUserSearch] = useState("");
 
   const usersQuery = useQuery({ queryKey: ["admin", "users"], queryFn: listUsers });
   const rolesQuery = useQuery({ queryKey: ["admin", "roles"], queryFn: listRoles });
@@ -447,6 +451,17 @@ function UsersSection() {
     (usersQuery.isError || rolesQuery.isError || systemsQuery.isError ? "Ошибка загрузки" : null);
 
   const editUser = useMemo(() => users?.find((x) => x.id === editId) ?? null, [users, editId]);
+
+  const filteredUsers = useMemo(() => {
+    if (!users) return [];
+    const q = userSearch.trim().toLowerCase();
+    if (!q) return users;
+    return users.filter((u) => {
+      const name = (u.full_name ?? "").toLowerCase();
+      const email = (u.email ?? "").toLowerCase();
+      return name.includes(q) || email.includes(q);
+    });
+  }, [users, userSearch]);
 
   const mergeUserIntoListCache = (u: UserOut) => {
     qc.setQueryData<UserOut[]>(["admin", "users"], (prev) => {
@@ -484,7 +499,16 @@ function UsersSection() {
       {loading && <p className="text-slate-500">Загрузка…</p>}
 
       {!loading && users && (
-        <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white/80 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
+        <div className="space-y-2">
+          <input
+            type="search"
+            value={userSearch}
+            onChange={(e) => setUserSearch(e.target.value)}
+            placeholder="Поиск по ФИО или email…"
+            className="w-full max-w-md rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+            autoComplete="off"
+          />
+          <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white/80 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
           <table className="w-full text-left text-sm">
             <thead className="border-b border-slate-200 bg-slate-50/80 dark:border-slate-700 dark:bg-slate-800/50">
               <tr>
@@ -497,7 +521,14 @@ function UsersSection() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-              {users.map((u) => (
+              {filteredUsers.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="px-4 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
+                    Ничего не найдено по запросу.
+                  </td>
+                </tr>
+              )}
+              {filteredUsers.map((u) => (
                 <tr key={u.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40">
                   <td className="px-4 py-3">
                     <div className="font-medium text-slate-900 dark:text-white">{u.full_name}</div>
@@ -543,6 +574,7 @@ function UsersSection() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
@@ -569,12 +601,21 @@ function UsersSection() {
           positions={positions}
           systems={systems}
           initial={editUser}
+          currentUserId={currentUserId}
           onClose={() => setEditId(null)}
           onUpdate={async (data) => {
             const updated = await updateUser(editUser.id, data);
             setEditId(null);
             mergeUserIntoListCache(updated);
             await invalidateAndRefetch(qc, ["admin", "users"]);
+          }}
+          onDelete={async () => {
+            await deleteUser(editUser.id);
+            setEditId(null);
+            qc.setQueryData<UserOut[]>(["admin", "users"], (prev) => prev?.filter((x) => x.id !== editUser.id) ?? []);
+            await qc.invalidateQueries({ queryKey: ["employee-directory"] });
+            await qc.invalidateQueries({ queryKey: ["schedule"] });
+            await qc.invalidateQueries({ queryKey: ["users", "assignee-candidates"] });
           }}
         />
       )}
@@ -588,18 +629,23 @@ function UserFormModal({
   positions,
   systems,
   initial,
+  currentUserId,
   onClose,
   onCreate,
   onUpdate,
+  onDelete,
 }: {
   title: string;
   roles: RoleOut[];
   positions: PositionOut[];
   systems: SystemOut[];
   initial?: UserOut;
+  /** Для скрытия удаления «себя» */
+  currentUserId?: string;
   onClose: () => void;
   onCreate?: (data: UserCreate) => Promise<void>;
   onUpdate?: (data: UserUpdate) => Promise<void>;
+  onDelete?: () => Promise<void>;
 }) {
   const [email, setEmail] = useState(initial?.email ?? "");
   const [fullName, setFullName] = useState(initial?.full_name ?? "");
@@ -618,6 +664,7 @@ function UserFormModal({
   );
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   const toggleRole = (id: string) => {
     setRoleIds((prev) => {
@@ -836,21 +883,55 @@ function UserFormModal({
             </div>
           </div>
           {err && <p className="text-sm text-red-600 dark:text-red-400">{err}</p>}
-          <div className="flex justify-end gap-2 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-xl bg-slate-200 px-4 py-2 text-sm font-medium text-slate-800 dark:bg-slate-700 dark:text-white"
-            >
-              Отмена
-            </button>
-            <button
-              type="submit"
-              disabled={saving}
-              className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600 disabled:opacity-60"
-            >
-              {saving ? "Сохранение…" : "Сохранить"}
-            </button>
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
+            <div>
+              {initial && onDelete && initial.id !== currentUserId && (
+                <button
+                  type="button"
+                  disabled={saving || deleteBusy}
+                  onClick={async () => {
+                    const ok = window.confirm(
+                      "Удалить пользователя безвозвратно?\n\n" +
+                        "Задачи останутся: с исполнителя и автора ссылка снимется. " +
+                        "График, профиль сотрудника, уведомления и членство в базе знаний будут удалены.",
+                    );
+                    if (!ok) return;
+                    setErr(null);
+                    setDeleteBusy(true);
+                    try {
+                      await onDelete();
+                      toastSuccess("Пользователь удалён");
+                      onClose();
+                    } catch (e2) {
+                      if (e2 instanceof ApiError) setErr(e2.detail);
+                      else setErr("Не удалось удалить");
+                      toastApiError(e2, "Не удалось удалить пользователя");
+                    } finally {
+                      setDeleteBusy(false);
+                    }
+                  }}
+                  className="rounded-xl border border-red-300 bg-red-50 px-4 py-2 text-sm font-medium text-red-800 hover:bg-red-100 disabled:opacity-60 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200 dark:hover:bg-red-950/70"
+                >
+                  {deleteBusy ? "Удаление…" : "Удалить пользователя"}
+                </button>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-xl bg-slate-200 px-4 py-2 text-sm font-medium text-slate-800 dark:bg-slate-700 dark:text-white"
+              >
+                Отмена
+              </button>
+              <button
+                type="submit"
+                disabled={saving}
+                className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600 disabled:opacity-60"
+              >
+                {saving ? "Сохранение…" : "Сохранить"}
+              </button>
+            </div>
           </div>
         </form>
       </div>

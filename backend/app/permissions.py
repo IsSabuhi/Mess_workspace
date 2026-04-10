@@ -23,6 +23,9 @@ KNOWLEDGE_SPACE_MANAGE = "knowledge.space.manage"
 
 EMPLOYEE_DIRECTORY_READ = "employee_directory.read"
 EMPLOYEE_DIRECTORY_MANAGE = "employee_directory.manage"
+# Узкие права: вкладка «Экзамены и пропуски» / вкладка «Кадровый справочник».
+EMPLOYEE_DIRECTORY_COMPLIANCE_MANAGE = "employee_directory.compliance.manage"
+EMPLOYEE_DIRECTORY_PROFILE_MANAGE = "employee_directory.profile.manage"
 
 SCHEDULE_READ = "schedule.read"
 SCHEDULE_MANAGE = "schedule.manage"
@@ -45,6 +48,8 @@ ALL_PERMISSION_CODES: tuple[str, ...] = (
     KNOWLEDGE_SPACE_MANAGE,
     EMPLOYEE_DIRECTORY_READ,
     EMPLOYEE_DIRECTORY_MANAGE,
+    EMPLOYEE_DIRECTORY_COMPLIANCE_MANAGE,
+    EMPLOYEE_DIRECTORY_PROFILE_MANAGE,
     SCHEDULE_READ,
     SCHEDULE_MANAGE,
 )

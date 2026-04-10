@@ -24,6 +24,8 @@ EMAIL_ALREADY_REGISTERED = "Этот email уже зарегистрирован
 UNKNOWN_ROLE = "Указана неизвестная роль"
 UNKNOWN_SYSTEM = "Указана неизвестная система"
 USER_NOT_FOUND = "Пользователь не найден"
+DELETE_USER_SELF = "Нельзя удалить свою учётную запись"
+DELETE_LAST_SUPERUSER = "Нельзя удалить последнего суперпользователя в системе"
 
 # Задачи
 TASK_SYSTEM_REQUIRED = "Укажите производственную систему"

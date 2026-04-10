@@ -23,6 +23,7 @@ export function SystemsPage() {
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
   const [description, setDescription] = useState("");
+  const [sortOrder, setSortOrder] = useState(0);
   const [formError, setFormError] = useState<string | null>(null);
 
   const systemsQuery = useQuery({
@@ -52,6 +53,7 @@ export function SystemsPage() {
       setName("");
       setSlug("");
       setDescription("");
+      setSortOrder(0);
       setFormError(null);
       toastSuccess("Система создана");
     },
@@ -89,7 +91,7 @@ export function SystemsPage() {
       name: name.trim(),
       slug: slug.trim().toLowerCase().replace(/[^a-z0-9-]/g, ""),
       description: description.trim() || null,
-      sort_order: editingSystem?.sort_order ?? items.length,
+      sort_order: sortOrder,
     };
     if (editingSystem) {
       try {
@@ -99,6 +101,7 @@ export function SystemsPage() {
         setName("");
         setSlug("");
         setDescription("");
+        setSortOrder(0);
       } catch {
         // handled by mutation
       }
@@ -117,6 +120,8 @@ export function SystemsPage() {
     setName("");
     setSlug("");
     setDescription("");
+    const maxSo = items.reduce((acc, s) => Math.max(acc, s.sort_order), 0);
+    setSortOrder(maxSo + 10);
     setFormError(null);
     setModal(true);
   }
@@ -126,12 +131,16 @@ export function SystemsPage() {
     setName(s.name);
     setSlug(s.slug);
     setDescription(s.description ?? "");
+    setSortOrder(s.sort_order);
     setFormError(null);
     setModal(true);
   }
 
   return (
-    <AppShell title="Системы" subtitle="Производственные системы отдела">
+    <AppShell
+      title="Системы"
+      subtitle="Порядок поля «В расписании» задаёт блоки строк на странице «Расписание» (меньше — выше). У сотрудника несколько систем — в группу попадает по системе с наименьшим порядком."
+    >
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
           <input
@@ -179,7 +188,9 @@ export function SystemsPage() {
                 <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">{s.description}</p>
               )}
               <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                Сотрудников в системе: <span className="font-semibold">{s.user_count}</span>
+                Сотрудников: <span className="font-semibold">{s.user_count}</span>
+                <span className="mx-1 text-slate-400">·</span>
+                В расписании: <span className="font-semibold">{s.sort_order}</span>
               </p>
               <button
                 type="button"
@@ -258,12 +269,25 @@ export function SystemsPage() {
                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800"
                 />
               </div>
+              <div>
+                <label className="mb-1 block text-sm">Порядок в расписании</label>
+                <input
+                  type="number"
+                  value={sortOrder}
+                  onChange={(e) => setSortOrder(Number(e.target.value) || 0)}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800"
+                />
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  Чем меньше число, тем выше блок этой системы на странице «Расписание» (как колонка систем в Excel).
+                </p>
+              </div>
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
                   onClick={() => {
                     setModal(false);
                     setEditingSystem(null);
+                    setSortOrder(0);
                   }}
                   className="rounded-xl bg-slate-200 px-4 py-2 text-sm dark:bg-slate-700"
                 >

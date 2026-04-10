@@ -1,13 +1,15 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import delete, select
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.deps import get_current_user, require_permission
 from app.http_errors import (
+    DELETE_LAST_SUPERUSER,
+    DELETE_USER_SELF,
     EMAIL_ALREADY_REGISTERED,
     INVALID_POSITION,
     UNKNOWN_ROLE,
@@ -18,6 +20,7 @@ from app.http_errors import (
 from app.models import Position, Role, System, User, UserRole
 from app.models.user_system import UserSystem
 from app.permissions import USERS_MANAGE
+from app.schemas.employee_import import EmployeeImportOut
 from app.schemas.user import UserCreate, UserOut, UserUpdate
 from app.security import hash_password
 from app.services.authz import (
@@ -26,6 +29,8 @@ from app.services.authz import (
     user_has_permission,
     user_sees_all_tasks,
 )
+from app.services.employee_excel_import import parse_employee_excel_xlsx
+from app.services.employee_import_service import run_employee_import
 from app.services.users_display import user_to_out
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -124,6 +129,68 @@ async def create_user(
     assert u
     await session.commit()
     return user_to_out(u)
+
+
+@router.post(
+    "/import-excel",
+    response_model=EmployeeImportOut,
+    summary="Импорт сотрудников из Excel",
+    description=(
+        "Файл .xlsx, первый лист: строка заголовков с колонками «УчетнаяЗапись», «ФИО», «Должность». "
+        "Для каждой строки создаётся пользователь: email `{логин}@nornik.ru`, пароль совпадает с учётной записью. "
+        "Должность сопоставляется по названию со справочником (без учёта регистра). Роль «Сотрудник», если есть в БД."
+    ),
+)
+async def import_users_from_excel(
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(require_permission(USERS_MANAGE))],
+    file: UploadFile = File(..., description="Excel .xlsx"),
+) -> EmployeeImportOut:
+    fname = (file.filename or "").lower()
+    if not fname.endswith(".xlsx"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ожидается файл с расширением .xlsx")
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Файл больше 10 МБ")
+    rows, parse_err = parse_employee_excel_xlsx(content)
+    if parse_err:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=parse_err)
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Нет ни одной заполненной строки после заголовка",
+        )
+    return await run_employee_import(session, rows)
+
+
+@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user(
+    user_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    current: Annotated[User, Depends(require_permission(USERS_MANAGE))],
+) -> None:
+    """
+    Полное удаление учётной записи. Задачи остаются: исполнитель и автор сбрасываются в NULL (правила БД).
+    Удаляются профиль сотрудника, роли, системы, ячейки графика, уведомления, членство в БЗ и т.д.
+    """
+    if current.id == user_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=DELETE_USER_SELF)
+
+    u = await session.get(User, user_id)
+    if not u:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=USER_NOT_FOUND)
+
+    if u.is_superuser:
+        others = await session.scalar(
+            select(func.count())
+            .select_from(User)
+            .where(User.is_superuser.is_(True), User.id != user_id)
+        )
+        if not others:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=DELETE_LAST_SUPERUSER)
+
+    await session.delete(u)
+    await session.commit()
 
 
 @router.get("/{user_id}", response_model=UserOut)

@@ -1,15 +1,22 @@
-"""Автозаполнение ячеек расписания с учётом режима и отпусков (о / у)."""
+"""Автозаполнение графика по данным справочника: 5/2 (8 / 7.2), праздники РФ — «о», сб/вс — пусто; сменщик — пока только отпуск «о»."""
 
 from __future__ import annotations
 
 import calendar
 import uuid
-from datetime import date
+from datetime import date, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
 from app.models import ScheduleEntry, User
-from app.models.schedule_mode import ScheduleMode
+from app.models.employee_work_schedule import (
+    EMPLOYEE_GENDER_FEMALE,
+    WORK_SCHEDULE_FIVE_TWO,
+    WORK_SCHEDULE_SHIFT,
+    normalize_profile_schedule,
+)
 from app.services.ru_calendar import is_weekend, ru_holiday_dates
 
 VACATION_CODES = frozenset({"о", "у"})
@@ -29,14 +36,66 @@ def _is_vacation(code: str | None) -> bool:
     return c.lower() in VACATION_CODES
 
 
-def _is_shift_token_11_3_8(code: str | None) -> bool:
-    c = _norm_code(code)
-    if not c:
-        return False
-    return c in ("11", "3", "8")
+def _parse_iso_date(v) -> date | None:
+    if v is None:
+        return None
+    if isinstance(v, date):
+        return v
+    try:
+        return date.fromisoformat(str(v)[:10])
+    except (TypeError, ValueError):
+        return None
 
 
-def _autofill_row_five_two(
+def vacation_days_in_month(year: int, month: int, periods: list | None) -> set[int]:
+    if not periods:
+        return set()
+    dim = calendar.monthrange(year, month)[1]
+    month_start = date(year, month, 1)
+    month_end = date(year, month, dim)
+    out: set[int] = set()
+    for p in periods:
+        if not isinstance(p, dict):
+            continue
+        s = _parse_iso_date(p.get("start"))
+        e = _parse_iso_date(p.get("end"))
+        if s is None or e is None:
+            continue
+        cur = max(s, month_start)
+        end = min(e, month_end)
+        while cur <= end:
+            if cur.year == year and cur.month == month:
+                out.add(cur.day)
+            cur += timedelta(days=1)
+    return out
+
+
+def _apply_profile_vacation_to_existing(
+    year: int,
+    month: int,
+    dim: int,
+    existing: dict[int, str | None],
+    vacation_days: set[int],
+    *,
+    only_empty: bool,
+) -> set[int]:
+    marked: set[int] = set()
+    for d in vacation_days:
+        if d < 1 or d > dim:
+            continue
+        cur = existing.get(d)
+        if only_empty and _norm_code(cur) is not None:
+            continue
+        existing[d] = "о"
+        marked.add(d)
+    return marked
+
+
+def _workday_code_for_gender(gender: str) -> str:
+    return "7.2" if gender == EMPLOYEE_GENDER_FEMALE else "8"
+
+
+def _autofill_five_two(
     year: int,
     month: int,
     dim: int,
@@ -44,81 +103,24 @@ def _autofill_row_five_two(
     existing: dict[int, str | None],
     *,
     only_empty: bool,
-) -> dict[int, str]:
-    out: dict[int, str] = {}
+    workday_code: str,
+) -> dict[int, str | None]:
+    """Пн–пт без праздника: workday_code (8 или 7.2). Праздники РФ (будни) — «о». Сб/вс — пусто (не «о»)."""
+    out: dict[int, str | None] = {}
     for d in range(1, dim + 1):
         cur = existing.get(d)
         if _is_vacation(cur):
             continue
         if only_empty and _norm_code(cur) is not None:
             continue
-        if is_weekend(year, month, d) or d in holiday_days:
+        if is_weekend(year, month, d):
+            if not only_empty:
+                out[d] = None
+            continue
+        if d in holiday_days:
             out[d] = "о"
         else:
-            out[d] = "8"
-    return out
-
-
-def _autofill_row_everyday_72(
-    dim: int,
-    existing: dict[int, str | None],
-    *,
-    only_empty: bool,
-) -> dict[int, str]:
-    out: dict[int, str] = {}
-    for d in range(1, dim + 1):
-        cur = existing.get(d)
-        if _is_vacation(cur):
-            continue
-        if only_empty and _norm_code(cur) is not None:
-            continue
-        out[d] = "7.2"
-    return out
-
-
-def _autofill_shift_11_3_8(
-    dim: int,
-    existing: dict[int, str | None],
-    *,
-    only_empty: bool,
-) -> dict[int, str]:
-    seq = ("11", "3", "8")
-    out: dict[int, str] = {}
-    idx = 0
-    for d in range(1, dim + 1):
-        cur = existing.get(d)
-        if _is_vacation(cur):
-            continue
-        if only_empty and _norm_code(cur) is not None:
-            if _is_shift_token_11_3_8(cur):
-                idx += 1
-            continue
-        code = seq[idx % 3]
-        out[d] = code
-        idx += 1
-    return out
-
-
-def _autofill_shift_11d_11v(
-    dim: int,
-    existing: dict[int, str | None],
-    *,
-    only_empty: bool,
-) -> dict[int, str]:
-    out: dict[int, str] = {}
-    idx = 0
-    for d in range(1, dim + 1):
-        cur = existing.get(d)
-        if _is_vacation(cur):
-            continue
-        if only_empty and _norm_code(cur) is not None:
-            c = _norm_code(cur)
-            if c in ("11д", "11в"):
-                idx += 1
-            continue
-        code = "11д" if idx % 2 == 0 else "11в"
-        out[d] = code
-        idx += 1
+            out[d] = workday_code
     return out
 
 
@@ -130,11 +132,16 @@ async def run_schedule_autofill(
     only_empty: bool,
     editor_id: uuid.UUID,
 ) -> int:
-    """Заполняет ячейки по режиму пользователя. Возвращает число записанных ячеек."""
     dim = calendar.monthrange(year, month)[1]
     holiday_days = ru_holiday_dates(year, month)
 
-    users = (await session.execute(select(User).where(User.is_active.is_(True)))).scalars().unique().all()
+    users = (
+        await session.execute(
+            select(User)
+            .where(User.is_active.is_(True))
+            .options(selectinload(User.employee_profile))
+        )
+    ).scalars().unique().all()
 
     entries = (
         await session.execute(
@@ -150,27 +157,27 @@ async def run_schedule_autofill(
 
     written = 0
     for u in users:
-        try:
-            mode = ScheduleMode(u.schedule_mode)
-        except ValueError:
-            mode = ScheduleMode.manual
+        profile = u.employee_profile
+        periods = profile.vacation_periods if profile and profile.vacation_periods else None
+        vac_days = vacation_days_in_month(year, month, periods)
+        kind, emp_gender = normalize_profile_schedule(profile)
 
-        if mode == ScheduleMode.manual:
-            continue
-
-        existing = by_user.get(u.id, {})
+        existing = dict(by_user.get(u.id, {}))
         full_existing: dict[int, str | None] = {d: existing.get(d) for d in range(1, dim + 1)}
+        vac_marked = _apply_profile_vacation_to_existing(
+            year, month, dim, full_existing, vac_days, only_empty=only_empty
+        )
 
-        if mode == ScheduleMode.five_two:
-            new_cells = _autofill_row_five_two(year, month, dim, holiday_days, full_existing, only_empty=only_empty)
-        elif mode == ScheduleMode.everyday_72:
-            new_cells = _autofill_row_everyday_72(dim, full_existing, only_empty=only_empty)
-        elif mode == ScheduleMode.shift_11_3_8:
-            new_cells = _autofill_shift_11_3_8(dim, full_existing, only_empty=only_empty)
-        elif mode == ScheduleMode.shift_11d_11v:
-            new_cells = _autofill_shift_11d_11v(dim, full_existing, only_empty=only_empty)
+        if kind == WORK_SCHEDULE_SHIFT:
+            new_cells: dict[int, str | None] = {}
         else:
-            continue
+            workday_code = _workday_code_for_gender(emp_gender)
+            new_cells = _autofill_five_two(
+                year, month, dim, holiday_days, full_existing, only_empty=only_empty, workday_code=workday_code
+            )
+
+        for d in vac_marked:
+            new_cells[d] = "о"
 
         for day, code in new_cells.items():
             stmt = select(ScheduleEntry).where(
@@ -180,6 +187,11 @@ async def run_schedule_autofill(
                 ScheduleEntry.day == day,
             )
             row = (await session.execute(stmt)).scalar_one_or_none()
+            if code is None:
+                if row:
+                    await session.delete(row)
+                    written += 1
+                continue
             if row:
                 row.code = code
                 row.updated_by_id = editor_id

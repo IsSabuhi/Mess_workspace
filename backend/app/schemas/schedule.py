@@ -15,6 +15,8 @@ class ScheduleUserRow(BaseModel):
     email: str
     schedule_mode: str
     systems_label: str
+    work_schedule_kind: str = Field(description="five_two | shift — из справочника сотрудника")
+    gender: str = Field(description="male | female | unspecified — для 5/2 из пола считаются 8 ч или 7.2 ч")
     row_kind: str = Field(
         description="shift | five_two | fixed | manual — для подсветки строки",
     )
@@ -22,6 +24,17 @@ class ScheduleUserRow(BaseModel):
         default_factory=dict,
         description="Ключ — номер дня (1..31), значение — код или null",
     )
+    hours_total: float = Field(
+        description="Сумма часов за месяц: только числовые ячейки (8, 7.2, 11, 3…); буквы и коды смен не суммируются",
+    )
+
+
+class ScheduleGroupOut(BaseModel):
+    """Блок строк расписания: сотрудники одной «ведущей» системы (минимальный sort_order среди систем сотрудника)."""
+
+    system_id: uuid.UUID | None = None
+    label: str
+    users: list[ScheduleUserRow]
 
 
 class ScheduleMonthOut(BaseModel):
@@ -29,7 +42,7 @@ class ScheduleMonthOut(BaseModel):
     month: int
     days_in_month: int
     days: list[ScheduleDayInfo]
-    users: list[ScheduleUserRow]
+    groups: list[ScheduleGroupOut]
 
 
 class ScheduleCellPatch(BaseModel):

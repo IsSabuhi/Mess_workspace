@@ -12,8 +12,18 @@ export type ScheduleUserRow = {
   email: string;
   schedule_mode: string;
   systems_label: string;
+  work_schedule_kind: "five_two" | "shift";
+  gender: "male" | "female" | "unspecified";
   row_kind: string;
   cells: Record<string, string | null>;
+  /** Сумма числовых ячеек за месяц (8, 7.2, 11…) */
+  hours_total: number;
+};
+
+export type ScheduleGroupOut = {
+  system_id: string | null;
+  label: string;
+  users: ScheduleUserRow[];
 };
 
 export type ScheduleMonthOut = {
@@ -21,7 +31,7 @@ export type ScheduleMonthOut = {
   month: number;
   days_in_month: number;
   days: ScheduleDayInfo[];
-  users: ScheduleUserRow[];
+  groups: ScheduleGroupOut[];
 };
 
 export async function getScheduleMonth(year: number, month: number): Promise<ScheduleMonthOut> {

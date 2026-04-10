@@ -17,6 +17,8 @@ export const PERM = {
   KNOWLEDGE_SPACE_MANAGE: "knowledge.space.manage",
   EMPLOYEE_DIRECTORY_READ: "employee_directory.read",
   EMPLOYEE_DIRECTORY_MANAGE: "employee_directory.manage",
+  EMPLOYEE_DIRECTORY_COMPLIANCE_MANAGE: "employee_directory.compliance.manage",
+  EMPLOYEE_DIRECTORY_PROFILE_MANAGE: "employee_directory.profile.manage",
   SCHEDULE_READ: "schedule.read",
   SCHEDULE_MANAGE: "schedule.manage",
 } as const;
@@ -30,7 +32,28 @@ export function canAdminAccess(user: UserMe): boolean {
 }
 
 export function canEmployeeDirectoryAccess(user: UserMe): boolean {
-  return hasPermission(user, PERM.EMPLOYEE_DIRECTORY_READ) || hasPermission(user, PERM.EMPLOYEE_DIRECTORY_MANAGE);
+  return (
+    hasPermission(user, PERM.EMPLOYEE_DIRECTORY_READ) ||
+    hasPermission(user, PERM.EMPLOYEE_DIRECTORY_MANAGE) ||
+    hasPermission(user, PERM.EMPLOYEE_DIRECTORY_COMPLIANCE_MANAGE) ||
+    hasPermission(user, PERM.EMPLOYEE_DIRECTORY_PROFILE_MANAGE)
+  );
+}
+
+export function canEmployeeDirectoryComplianceEdit(user: UserMe): boolean {
+  return (
+    user.is_superuser ||
+    hasPermission(user, PERM.EMPLOYEE_DIRECTORY_MANAGE) ||
+    hasPermission(user, PERM.EMPLOYEE_DIRECTORY_COMPLIANCE_MANAGE)
+  );
+}
+
+export function canEmployeeDirectoryProfileEdit(user: UserMe): boolean {
+  return (
+    user.is_superuser ||
+    hasPermission(user, PERM.EMPLOYEE_DIRECTORY_MANAGE) ||
+    hasPermission(user, PERM.EMPLOYEE_DIRECTORY_PROFILE_MANAGE)
+  );
 }
 
 function taskInUserSystems(user: UserMe, task: TaskOut): boolean {
