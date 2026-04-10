@@ -11,6 +11,8 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { SystemsPage } from "./pages/SystemsPage";
 import { TasksPage } from "./pages/TasksPage";
 import { UsersRedirectPage } from "./pages/UsersRedirectPage";
+import { NotificationsPage } from "./pages/NotificationsPage";
+import { SchedulePage } from "./pages/SchedulePage";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { state } = useAuth();
@@ -112,6 +114,22 @@ export default function App() {
         element={
           <ProtectedRoute>
             <UsersRedirectPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/notifications"
+        element={
+          <ProtectedRoute>
+            <NotificationsPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/schedule"
+        element={
+          <ProtectedRoute>
+            <SchedulePage />
           </ProtectedRoute>
         }
       />

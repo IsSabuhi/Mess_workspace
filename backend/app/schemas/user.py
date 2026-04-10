@@ -32,6 +32,7 @@ class UserUpdate(BaseModel):
     position_id: uuid.UUID | None = None
     birth_date: date | None = None
     system_ids: list[uuid.UUID] | None = None
+    schedule_mode: str | None = Field(None, max_length=32)
 
 
 class RoleBrief(BaseModel):
@@ -49,6 +50,7 @@ class UserOut(ORMModel):
     job_title: str | None = None
     position: PositionBrief | None = None
     birth_date: date | None = None
+    schedule_mode: str = "manual"
     is_active: bool
     is_superuser: bool
     created_at: datetime

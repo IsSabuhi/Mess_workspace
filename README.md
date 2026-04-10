@@ -127,3 +127,58 @@ npm run build
 
 Статика окажется в `frontend/dist`. Настройте раздачу через nginx/CDN и проксирование `/api` на бэкенд, либо задайте `VITE_API_BASE` перед сборкой.
 
+## Автопубликация релиз-уведомлений (CI/CD)
+
+После деплоя можно автоматически публиковать «Что нового» в центр уведомлений.
+
+### 1) Подготовьте токен
+
+- Создайте сервисный токен пользователя с правом `users.manage` (или superuser).
+- Сохраните в секрете CI как `RELEASE_NOTES_TOKEN`.
+
+### 2) Используйте скрипт
+
+В репозитории есть скрипт `backend/scripts/publish-release-note.sh`.
+
+Обязательные переменные:
+
+- `API_BASE_URL` — базовый URL приложения (например `https://app.example.com`)
+- `RELEASE_NOTES_TOKEN` — bearer-токен
+
+Опциональные переменные:
+
+- `RELEASE_VERSION` — версия релиза (по умолчанию tag/sha/date)
+- `RELEASE_TITLE` — заголовок
+- `RELEASE_BODY` — текст уведомления
+- `RELEASE_NOTES_ENABLED` — `1`/`0` (можно отключить шаг без удаления job)
+
+### 3) Пример GitHub Actions шага
+
+```yaml
+- name: Publish release note
+  if: github.ref_type == 'tag'
+  env:
+    API_BASE_URL: ${{ secrets.API_BASE_URL }}
+    RELEASE_NOTES_TOKEN: ${{ secrets.RELEASE_NOTES_TOKEN }}
+    RELEASE_VERSION: ${{ github.ref_name }}
+    RELEASE_TITLE: "Релиз ${{ github.ref_name }}"
+    RELEASE_BODY: "Обновление опубликовано автоматически из CI/CD."
+  run: ./backend/scripts/publish-release-note.sh
+```
+
+### 4) Пример GitLab CI job
+
+```yaml
+publish_release_note:
+  stage: deploy
+  rules:
+    - if: $CI_COMMIT_TAG
+  script:
+    - export API_BASE_URL="$API_BASE_URL"
+    - export RELEASE_NOTES_TOKEN="$RELEASE_NOTES_TOKEN"
+    - export RELEASE_VERSION="$CI_COMMIT_TAG"
+    - export RELEASE_TITLE="Релиз $CI_COMMIT_TAG"
+    - export RELEASE_BODY="Обновление опубликовано автоматически из CI/CD."
+    - ./backend/scripts/publish-release-note.sh
+```
+

@@ -24,6 +24,9 @@ KNOWLEDGE_SPACE_MANAGE = "knowledge.space.manage"
 EMPLOYEE_DIRECTORY_READ = "employee_directory.read"
 EMPLOYEE_DIRECTORY_MANAGE = "employee_directory.manage"
 
+SCHEDULE_READ = "schedule.read"
+SCHEDULE_MANAGE = "schedule.manage"
+
 ALL_PERMISSION_CODES: tuple[str, ...] = (
     TASKS_CREATE,
     TASKS_READ_ALL,
@@ -42,4 +45,6 @@ ALL_PERMISSION_CODES: tuple[str, ...] = (
     KNOWLEDGE_SPACE_MANAGE,
     EMPLOYEE_DIRECTORY_READ,
     EMPLOYEE_DIRECTORY_MANAGE,
+    SCHEDULE_READ,
+    SCHEDULE_MANAGE,
 )

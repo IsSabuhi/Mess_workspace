@@ -4,12 +4,14 @@ import {
   ChevronLeft,
   ChevronRight,
   Cpu,
+  Bell,
   IdCard,
   LayoutDashboard,
   PanelLeft,
   Settings,
   Shield,
   Kanban,
+  CalendarDays,
 } from "lucide-react";
 import { NavLink } from "react-router-dom";
 
@@ -22,6 +24,7 @@ const nav = [
   { to: "/systems", label: "Системы", icon: Cpu },
   { to: "/positions", label: "Должности", icon: Briefcase },
   { to: "/knowledge", label: "База знаний", icon: BookOpen },
+  { to: "/notifications", label: "Уведомления", icon: Bell },
 ];
 
 type Props = {
@@ -32,6 +35,8 @@ type Props = {
 export function Sidebar({ collapsed, onToggleCollapse }: Props) {
   const { state } = useAuth();
   const showAdmin = state.status === "authenticated" && canAdminAccess(state.user);
+  const showSchedule =
+    state.status === "authenticated" && hasPermission(state.user, PERM.SCHEDULE_READ);
   const showEmployeeDirectory =
     state.status === "authenticated" &&
     (hasPermission(state.user, PERM.EMPLOYEE_DIRECTORY_READ) ||
@@ -112,6 +117,24 @@ export function Sidebar({ collapsed, onToggleCollapse }: Props) {
             {!collapsed && <span>{label}</span>}
           </NavLink>
         ))}
+        {showSchedule && (
+          <NavLink
+            to="/schedule"
+            title={collapsed ? "Расписание" : undefined}
+            className={({ isActive }) =>
+              [
+                "group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition",
+                collapsed ? "justify-center" : "",
+                isActive
+                  ? "bg-sky-500/15 text-sky-700 shadow-sm dark:bg-sky-400/10 dark:text-sky-300"
+                  : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800",
+              ].join(" ")
+            }
+          >
+            <CalendarDays className="h-5 w-5 shrink-0 opacity-90" aria-hidden />
+            {!collapsed && <span>Расписание</span>}
+          </NavLink>
+        )}
         {showEmployeeDirectory && (
           <NavLink
             to="/employee-directory"

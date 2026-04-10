@@ -18,6 +18,7 @@ def user_to_out(user: User) -> UserOut:
         job_title=user.job_title,
         position=pos,
         birth_date=user.birth_date,
+        schedule_mode=user.schedule_mode,
         is_active=user.is_active,
         is_superuser=user.is_superuser,
         created_at=user.created_at,

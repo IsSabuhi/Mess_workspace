@@ -169,6 +169,14 @@ async def update_user(
     patch = body.model_dump(exclude_unset=True)
     if "birth_date" in patch:
         u.birth_date = patch["birth_date"]
+    if "schedule_mode" in patch:
+        from app.models.schedule_mode import SCHEDULE_MODE_VALUES
+
+        sm = patch["schedule_mode"]
+        if sm is not None and sm not in SCHEDULE_MODE_VALUES:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid schedule_mode")
+        if sm is not None:
+            u.schedule_mode = sm
     if "position_id" in patch:
         pid = patch["position_id"]
         if pid is not None:

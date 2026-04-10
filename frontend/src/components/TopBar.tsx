@@ -1,5 +1,8 @@
-import { LogOut, Moon, Sun } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Bell, LogOut, Moon, Sun } from "lucide-react";
+import { Link } from "react-router-dom";
 
+import { getUnreadNotificationCount } from "../api/notifications";
 import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
 
@@ -11,6 +14,12 @@ type Props = {
 export function TopBar({ title, subtitle }: Props) {
   const { state, signOut } = useAuth();
   const { resolved, toggle } = useTheme();
+  const unreadQuery = useQuery({
+    queryKey: ["notifications", "unread-count"],
+    queryFn: getUnreadNotificationCount,
+    enabled: state.status === "authenticated",
+    refetchInterval: 60_000,
+  });
 
   const userLabel =
     state.status === "authenticated"
@@ -34,6 +43,18 @@ export function TopBar({ title, subtitle }: Props) {
         </button>
         {state.status === "authenticated" && (
           <>
+            <Link
+              to="/notifications"
+              className="relative inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200/80 bg-white/80 text-slate-600 shadow-sm transition hover:border-sky-300 hover:text-sky-700 dark:border-slate-600 dark:bg-slate-800/80 dark:text-slate-200 dark:hover:border-sky-500/50 dark:hover:text-sky-200"
+              title="Уведомления"
+            >
+              <Bell className="h-5 w-5" />
+              {(unreadQuery.data ?? 0) > 0 && (
+                <span className="absolute -right-1 -top-1 min-w-5 rounded-full bg-red-500 px-1.5 text-center text-[10px] font-semibold leading-5 text-white">
+                  {unreadQuery.data! > 99 ? "99+" : unreadQuery.data}
+                </span>
+              )}
+            </Link>
             <div className="hidden text-right sm:block">
               <p className="text-sm font-medium text-slate-800 dark:text-slate-100">{userLabel}</p>
               <p className="text-xs text-slate-500 dark:text-slate-400">{state.user.email}</p>

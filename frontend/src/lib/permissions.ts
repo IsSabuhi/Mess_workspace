@@ -17,6 +17,8 @@ export const PERM = {
   KNOWLEDGE_SPACE_MANAGE: "knowledge.space.manage",
   EMPLOYEE_DIRECTORY_READ: "employee_directory.read",
   EMPLOYEE_DIRECTORY_MANAGE: "employee_directory.manage",
+  SCHEDULE_READ: "schedule.read",
+  SCHEDULE_MANAGE: "schedule.manage",
 } as const;
 
 export function hasPermission(user: UserMe, code: string): boolean {

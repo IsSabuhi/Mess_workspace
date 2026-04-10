@@ -14,6 +14,7 @@ export type UserOut = {
   job_title: string | null;
   position: { id: string; name: string; slug: string } | null;
   birth_date: string | null;
+  schedule_mode: string;
   is_active: boolean;
   is_superuser: boolean;
   created_at: string;

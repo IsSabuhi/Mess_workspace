@@ -22,6 +22,7 @@ class User(Base):
     )
     birth_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     dashboard_preferences: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    schedule_mode: Mapped[str] = mapped_column(String(32), default="manual", nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_superuser: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -63,5 +64,10 @@ class User(Base):
         "EmployeeProfile",
         back_populates="user",
         uselist=False,
+        cascade="all, delete-orphan",
+    )
+    notifications: Mapped[list["Notification"]] = relationship(
+        "Notification",
+        back_populates="user",
         cascade="all, delete-orphan",
     )
