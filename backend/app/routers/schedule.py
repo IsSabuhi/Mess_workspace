@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.deps import require_permission
+from app.deps import require_any_permission, require_permission
 from app.models import ScheduleEntry, System, User
 from app.models.employee_work_schedule import normalize_profile_schedule
 from app.models.schedule_mode import SCHEDULE_MODE_VALUES, ScheduleMode
@@ -120,7 +120,7 @@ def _build_schedule_user_row(
 @router.get("/month", response_model=ScheduleMonthOut)
 async def get_schedule_month(
     session: Annotated[AsyncSession, Depends(get_db)],
-    _user: Annotated[User, Depends(require_permission(SCHEDULE_READ))],
+    _user: Annotated[User, Depends(require_any_permission(SCHEDULE_READ, SCHEDULE_MANAGE))],
     year: int = Query(..., ge=2000, le=2100),
     month: int = Query(..., ge=1, le=12),
 ) -> ScheduleMonthOut:

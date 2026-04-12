@@ -13,6 +13,8 @@ type Props = {
   className?: string;
   /** Не открывать и не менять (например, пока не включена опция «заменить системы»). */
   disabled?: boolean;
+  /** Узкая кнопка (панель фильтров). */
+  compact?: boolean;
 };
 
 /**
@@ -27,6 +29,7 @@ export function MultiSelectDropdown({
   emptyLabel = "Все",
   className = "",
   disabled = false,
+  compact = false,
 }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -53,7 +56,9 @@ export function MultiSelectDropdown({
         type="button"
         disabled={disabled}
         onClick={() => !disabled && setOpen((v) => !v)}
-        className="flex h-10 w-full min-w-0 items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-left text-sm text-slate-800 shadow-sm hover:border-sky-300 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:hover:border-sky-600"
+        className={`flex w-full min-w-0 items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-2.5 text-left text-slate-800 shadow-sm hover:border-sky-300 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:hover:border-sky-600 ${
+          compact ? "h-9 py-1.5 text-xs" : "h-10 py-2 text-sm"
+        }`}
         aria-expanded={open}
         aria-haspopup="listbox"
       >

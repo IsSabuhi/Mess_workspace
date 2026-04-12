@@ -27,6 +27,15 @@ export function hasPermission(user: UserMe, code: string): boolean {
   return user.is_superuser || user.permissions.includes(code);
 }
 
+/** Просмотр таблицы расписания: отдельное право или право на редактирование. */
+export function canViewSchedule(user: UserMe): boolean {
+  return (
+    user.is_superuser ||
+    hasPermission(user, PERM.SCHEDULE_READ) ||
+    hasPermission(user, PERM.SCHEDULE_MANAGE)
+  );
+}
+
 export function canAdminAccess(user: UserMe): boolean {
   return hasPermission(user, PERM.USERS_MANAGE) || hasPermission(user, PERM.ROLES_MANAGE);
 }

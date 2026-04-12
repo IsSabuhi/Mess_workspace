@@ -57,3 +57,20 @@ def require_permission(code: str):
         return user
 
     return _dep
+
+
+def require_any_permission(*codes: str):
+    """Достаточно одного из перечисленных прав (суперпользователь — всегда)."""
+
+    async def _dep(
+        session: Annotated[AsyncSession, Depends(get_db)],
+        user: Annotated[User, Depends(get_current_user)],
+    ) -> User:
+        if user.is_superuser:
+            return user
+        for code in codes:
+            if await user_has_permission(session, user, code):
+                return user
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=PERMISSION_DENIED)
+
+    return _dep

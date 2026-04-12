@@ -20,7 +20,7 @@ import { getScheduleMonth, patchScheduleCell, postScheduleAutofill, type Schedul
 import { AppShell } from "../components/AppShell";
 import { useAuth } from "../context/AuthContext";
 import { shiftWorkerRowClass } from "../lib/shiftWorkerRowStyle";
-import { PERM, hasPermission } from "../lib/permissions";
+import { PERM, canViewSchedule, hasPermission } from "../lib/permissions";
 import { toastApiError, toastSuccess } from "../lib/toast";
 
 const MONTH_NAMES = [
@@ -88,7 +88,7 @@ function dayHeaderClass(d: ScheduleDayInfo | undefined): string {
 export function SchedulePage() {
   const { state } = useAuth();
   const user = state.status === "authenticated" ? state.user : null;
-  const canRead = !!(user && hasPermission(user, PERM.SCHEDULE_READ));
+  const canView = !!(user && canViewSchedule(user));
   const canManage = !!(user && hasPermission(user, PERM.SCHEDULE_MANAGE));
 
   const now = new Date();
@@ -102,7 +102,7 @@ export function SchedulePage() {
   const scheduleQuery = useQuery({
     queryKey: ["schedule", "month", year, month],
     queryFn: () => getScheduleMonth(year, month),
-    enabled: canRead,
+    enabled: canView,
   });
 
   const dayByNum = useMemo(() => {
@@ -158,16 +158,6 @@ export function SchedulePage() {
     setMonth(d.getMonth() + 1);
   }
 
-  if (!canRead) {
-    return (
-      <AppShell title="Расписание" subtitle="График смен">
-        <p className="rounded-2xl border border-amber-200/80 bg-amber-50/80 px-4 py-3 text-sm text-amber-900 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-200">
-          У вас нет права на просмотр расписания. Обратитесь к администратору (право «schedule.read»).
-        </p>
-      </AppShell>
-    );
-  }
-
   return (
     <AppShell
       title="Расписание"
@@ -219,7 +209,9 @@ export function SchedulePage() {
             </>
           )}
           {!canManage && (
-            <p className="text-sm text-slate-500 dark:text-slate-400">Только просмотр. Редактирование: «schedule.manage».</p>
+            <p className="text-sm text-slate-500 dark:text-slate-400">
+              Только просмотр. Редактирование — право «schedule.manage».
+            </p>
           )}
         </div>
       </div>

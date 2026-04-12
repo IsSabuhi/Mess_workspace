@@ -190,7 +190,7 @@ export function SystemsPage() {
               <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
                 Сотрудников: <span className="font-semibold">{s.user_count}</span>
                 <span className="mx-1 text-slate-400">·</span>
-                В расписании: <span className="font-semibold">{s.sort_order}</span>
+                №: <span className="font-semibold">{s.sort_order}</span>
               </p>
               <button
                 type="button"

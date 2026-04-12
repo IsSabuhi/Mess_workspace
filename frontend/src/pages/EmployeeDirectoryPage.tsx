@@ -71,6 +71,12 @@ function compareDirectoryRowsBySystems(a: EmployeeDirectoryRowOut, b: EmployeeDi
 
 type TabId = "compliance" | "profile";
 
+/** Трёхпозиционный фильтр да/нет для API (все = параметр не передаётся). */
+type YesNoFilter = "all" | "yes" | "no";
+
+const filterBarSelect =
+  "h-9 w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-800 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100";
+
 export function EmployeeDirectoryPage() {
   const { state } = useAuth();
   const user = state.status === "authenticated" ? state.user : null;
@@ -99,6 +105,8 @@ export function EmployeeDirectoryPage() {
   const [expiringDays, setExpiringDays] = useState<string>("");
   const [filterGender, setFilterGender] = useState<"" | EmployeeGender>("");
   const [filterSchedule, setFilterSchedule] = useState<"" | WorkScheduleKind>("");
+  const [filterExamElectrical, setFilterExamElectrical] = useState<YesNoFilter>("all");
+  const [filterPassHas, setFilterPassHas] = useState<YesNoFilter>("all");
   const [filtersPanelOpen, setFiltersPanelOpen] = useState(false);
 
   const [bulkExpanded, setBulkExpanded] = useState(false);
@@ -142,8 +150,21 @@ export function EmployeeDirectoryPage() {
       expiring_in_days: !expiredOnly && expiringDays.trim() ? Number(expiringDays) : undefined,
       gender: filterGender || undefined,
       work_schedule_kind: filterSchedule || undefined,
+      exam_electrical_passed:
+        filterExamElectrical === "all" ? undefined : filterExamElectrical === "yes",
+      pass_has: filterPassHas === "all" ? undefined : filterPassHas === "yes",
     }),
-    [search, filterSystemIds, filterPositionIds, expiredOnly, expiringDays, filterGender, filterSchedule],
+    [
+      search,
+      filterSystemIds,
+      filterPositionIds,
+      expiredOnly,
+      expiringDays,
+      filterGender,
+      filterSchedule,
+      filterExamElectrical,
+      filterPassHas,
+    ],
   );
 
   const activeFilterCount = useMemo(() => {
@@ -152,8 +173,32 @@ export function EmployeeDirectoryPage() {
     if (expiringDays.trim()) n++;
     if (filterGender) n++;
     if (filterSchedule) n++;
+    if (filterExamElectrical !== "all") n++;
+    if (filterPassHas !== "all") n++;
     return n;
-  }, [filterSystemIds, filterPositionIds, expiredOnly, expiringDays, filterGender, filterSchedule]);
+  }, [
+    filterSystemIds,
+    filterPositionIds,
+    expiredOnly,
+    expiringDays,
+    filterGender,
+    filterSchedule,
+    filterExamElectrical,
+    filterPassHas,
+  ]);
+
+  useEffect(() => {
+    if (!showProfileTab) return;
+    if (activeTab === "compliance") {
+      setFilterGender("");
+      setFilterSchedule("");
+    } else {
+      setFilterExamElectrical("all");
+      setFilterPassHas("all");
+      setExpiredOnly(false);
+      setExpiringDays("");
+    }
+  }, [activeTab, showProfileTab]);
 
   const rowsQuery = useQuery({
     queryKey: ["employee-directory", filters],
@@ -341,7 +386,7 @@ export function EmployeeDirectoryPage() {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Поиск: ФИО или email"
-                className="min-w-[200px] max-w-md flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+                className="min-w-[10rem] max-w-sm flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
               />
               <button
                 type="button"
@@ -360,14 +405,21 @@ export function EmployeeDirectoryPage() {
             </div>
             {filtersPanelOpen && (
               <div className="mt-3 border-t border-slate-200/80 pt-3 dark:border-slate-700/80">
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="min-w-0 space-y-2">
-                    <p className="text-[11px] leading-snug text-slate-500 dark:text-slate-400">
-                      <span className="font-medium text-slate-600 dark:text-slate-400">Системы.</span> Без выбора — все
-                      сотрудники. Несколько отмеченных — у кого есть{" "}
-                      <span className="font-medium text-slate-700 dark:text-slate-300">хотя бы одна</span> из них.
-                    </p>
+                <p className="mb-2 max-w-xl text-[10px] leading-snug text-slate-500 dark:text-slate-400">
+                  Системы и должности: без выбора — все; несколько отмеченных — подходит сотрудник с{" "}
+                  <span className="font-medium text-slate-600 dark:text-slate-300">любой</span> из них.
+                  {showProfileTab && (
+                    <>
+                      {" "}
+                      Пол и график — на вкладке «Кадровый справочник»; экзамен, пропуск и сроки — на «Экзамены и
+                      пропуска».
+                    </>
+                  )}
+                </p>
+                <div className="flex flex-wrap items-end gap-2">
+                  <div className="w-[10.75rem] max-w-full shrink-0">
                     <MultiSelectDropdown
+                      compact
                       className="w-full"
                       label="Системы"
                       items={(systemsQuery.data ?? []).map((s) => ({ id: s.id, name: s.name }))}
@@ -376,14 +428,9 @@ export function EmployeeDirectoryPage() {
                       onClear={() => setFilterSystemIds([])}
                     />
                   </div>
-                  <div className="min-w-0 space-y-2">
-                    <p className="text-[11px] leading-snug text-slate-500 dark:text-slate-400">
-                      <span className="font-medium text-slate-600 dark:text-slate-400">Должности.</span> Несколько
-                      значений — сотрудники с{" "}
-                      <span className="font-medium text-slate-700 dark:text-slate-300">любой</span> из отмеченных
-                      должностей.
-                    </p>
+                  <div className="w-[10.75rem] max-w-full shrink-0">
                     <MultiSelectDropdown
+                      compact
                       className="w-full"
                       label="Должности"
                       items={(positionsQuery.data ?? []).map((p) => ({ id: p.id, name: p.name }))}
@@ -393,65 +440,109 @@ export function EmployeeDirectoryPage() {
                     />
                   </div>
                 </div>
-                <div className="mt-4 grid gap-4 border-t border-slate-100 pt-4 dark:border-slate-700/50 sm:grid-cols-2">
-                  <label className="flex min-w-0 flex-col gap-1.5">
-                    <span className="text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-400">
-                      Пол
-                    </span>
-                    <select
-                      value={filterGender}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        setFilterGender(v === "" ? "" : (v as EmployeeGender));
-                      }}
-                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+
+                {activeTab === "compliance" && (
+                  <div className="mt-2.5 flex flex-wrap items-end gap-2 border-t border-dashed border-slate-200/90 pt-2.5 dark:border-slate-600/80">
+                    <label
+                      className="flex w-[7.5rem] max-w-full shrink-0 flex-col gap-0.5"
+                      title="Экзамен по электробезопасности: сдан или нет"
                     >
-                      <option value="">Все</option>
-                      <option value="male">Мужской</option>
-                      <option value="female">Женский</option>
-                      <option value="unspecified">Не указан</option>
-                    </select>
-                  </label>
-                  <label className="flex min-w-0 flex-col gap-1.5">
-                    <span className="text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-400">
-                      График
-                    </span>
-                    <select
-                      value={filterSchedule}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        setFilterSchedule(v === "" ? "" : (v as WorkScheduleKind));
-                      }}
-                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+                      <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                        Экзамен ЭБ
+                      </span>
+                      <select
+                        value={filterExamElectrical}
+                        onChange={(e) => setFilterExamElectrical(e.target.value as YesNoFilter)}
+                        className={filterBarSelect}
+                      >
+                        <option value="all">Все</option>
+                        <option value="yes">Сдан</option>
+                        <option value="no">Не сдан</option>
+                      </select>
+                    </label>
+                    <label
+                      className="flex w-[7.5rem] max-w-full shrink-0 flex-col gap-0.5"
+                      title="Оформлен ли пропуск"
                     >
-                      <option value="">Все</option>
-                      <option value="five_two">5/2</option>
-                      <option value="shift">Сменщик</option>
-                    </select>
-                  </label>
-                </div>
-                <div className="mt-4 flex flex-col gap-2 border-t border-slate-100 pt-4 dark:border-slate-700/50 sm:flex-row sm:flex-wrap sm:items-center">
-                  <label className="flex w-fit cursor-pointer items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800">
-                    <input type="checkbox" checked={expiredOnly} onChange={(e) => setExpiredOnly(e.target.checked)} />
-                    Только просроченные
-                  </label>
-                  <div className="flex flex-wrap items-center gap-2 sm:ml-1">
-                    <span className="text-xs font-medium text-slate-600 dark:text-slate-400">Истекает через, дней</span>
-                    <input
-                      type="number"
-                      min={0}
-                      disabled={expiredOnly}
-                      value={expiringDays}
-                      onChange={(e) => setExpiringDays(e.target.value)}
-                      placeholder="—"
-                      title="Пусто — все. Число — экзамен или пропуск истекает в ближайшие N дней."
-                      className="w-24 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm tabular-nums disabled:opacity-60 dark:border-slate-600 dark:bg-slate-800"
-                    />
-                    <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                      пусто = без ограничения по сроку
-                    </span>
+                      <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                        Пропуск
+                      </span>
+                      <select
+                        value={filterPassHas}
+                        onChange={(e) => setFilterPassHas(e.target.value as YesNoFilter)}
+                        className={filterBarSelect}
+                      >
+                        <option value="all">Все</option>
+                        <option value="yes">Есть</option>
+                        <option value="no">Нет</option>
+                      </select>
+                    </label>
+                    <label className="flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 text-xs text-slate-800 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100">
+                      <input
+                        type="checkbox"
+                        checked={expiredOnly}
+                        onChange={(e) => setExpiredOnly(e.target.checked)}
+                        className="rounded border-slate-300 dark:border-slate-600"
+                      />
+                      Просрочено
+                    </label>
+                    <div
+                      className="flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2 dark:border-slate-600 dark:bg-slate-800"
+                      title="Пусто — без фильтра по сроку. Число — экзамен или пропуск истекает в ближайшие N дней."
+                    >
+                      <span className="whitespace-nowrap text-[10px] text-slate-500 dark:text-slate-400">≤ дней</span>
+                      <input
+                        type="number"
+                        min={0}
+                        disabled={expiredOnly}
+                        value={expiringDays}
+                        onChange={(e) => setExpiringDays(e.target.value)}
+                        placeholder="—"
+                        className="w-12 border-0 bg-transparent p-0 text-center text-xs tabular-nums text-slate-800 outline-none placeholder:text-slate-400 disabled:opacity-50 dark:text-slate-100"
+                      />
+                    </div>
                   </div>
-                </div>
+                )}
+
+                {activeTab === "profile" && showProfileTab && (
+                  <div className="mt-2.5 flex flex-wrap items-end gap-2 border-t border-dashed border-slate-200/90 pt-2.5 dark:border-slate-600/80">
+                    <label className="flex w-[7.5rem] max-w-full shrink-0 flex-col gap-0.5">
+                      <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                        Пол
+                      </span>
+                      <select
+                        value={filterGender}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setFilterGender(v === "" ? "" : (v as EmployeeGender));
+                        }}
+                        className={filterBarSelect}
+                      >
+                        <option value="">Все</option>
+                        <option value="male">Мужской</option>
+                        <option value="female">Женский</option>
+                        <option value="unspecified">Не указан</option>
+                      </select>
+                    </label>
+                    <label className="flex w-[8.5rem] max-w-full shrink-0 flex-col gap-0.5">
+                      <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                        График
+                      </span>
+                      <select
+                        value={filterSchedule}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setFilterSchedule(v === "" ? "" : (v as WorkScheduleKind));
+                        }}
+                        className={filterBarSelect}
+                      >
+                        <option value="">Все</option>
+                        <option value="five_two">5/2</option>
+                        <option value="shift">Сменщик</option>
+                      </select>
+                    </label>
+                  </div>
+                )}
               </div>
             )}
           </div>

@@ -16,7 +16,7 @@ import {
 import { NavLink } from "react-router-dom";
 
 import { useAuth } from "../context/AuthContext";
-import { canAdminAccess, PERM, hasPermission } from "../lib/permissions";
+import { canAdminAccess, canViewSchedule, PERM, hasPermission } from "../lib/permissions";
 
 const nav = [
   { to: "/", label: "Обзор", icon: LayoutDashboard, end: true },
@@ -35,8 +35,7 @@ type Props = {
 export function Sidebar({ collapsed, onToggleCollapse }: Props) {
   const { state } = useAuth();
   const showAdmin = state.status === "authenticated" && canAdminAccess(state.user);
-  const showSchedule =
-    state.status === "authenticated" && hasPermission(state.user, PERM.SCHEDULE_READ);
+  const showSchedule = state.status === "authenticated" && canViewSchedule(state.user);
   const showEmployeeDirectory =
     state.status === "authenticated" &&
     (hasPermission(state.user, PERM.EMPLOYEE_DIRECTORY_READ) ||

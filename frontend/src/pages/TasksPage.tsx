@@ -29,6 +29,7 @@ import { createTaskTag, deleteTaskTag, listTaskTags, updateTaskTag } from "../ap
 import { createTask, deleteTask, getTask, listTasks, updateTask } from "../api/tasks";
 import type { TaskCreate, TaskOut, TaskUpdate } from "../api/tasks";
 import { listAssigneeCandidates } from "../api/users";
+import { AssigneePicker } from "../components/AssigneePicker";
 import { AppShell } from "../components/AppShell";
 import { useAuth } from "../context/AuthContext";
 import {
@@ -1252,19 +1253,13 @@ export function TasksPage() {
               {assigneeChoices.length > 0 && (
                 <div>
                   <label className="mb-1 block text-xs font-medium text-slate-500">Исполнитель</label>
-                  <select
+                  <AssigneePicker
                     value={editAssigneeId}
-                    onChange={(e) => setEditAssigneeId(e.target.value)}
+                    onChange={setEditAssigneeId}
+                    candidates={assigneeChoices}
                     disabled={!drawerCanEdit}
-                    className="w-full rounded-xl border border-slate-200 bg-white px-2 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
-                  >
-                    <option value="">Не назначен</option>
-                    {assigneeChoices.map((u) => (
-                      <option key={u.id} value={u.id}>
-                        {u.full_name}
-                      </option>
-                    ))}
-                  </select>
+                    selectedDisplayName={drawerTask.assignee?.full_name ?? null}
+                  />
                 </div>
               )}
               {(tagsQuery.data ?? []).length > 0 && (
@@ -1437,18 +1432,7 @@ export function TasksPage() {
               {assigneeChoices.length > 0 && (
                 <div>
                   <label className="mb-1 block text-sm">Исполнитель</label>
-                  <select
-                    value={assigneeId}
-                    onChange={(e) => setAssigneeId(e.target.value)}
-                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800"
-                  >
-                    <option value="">Не назначен</option>
-                    {assigneeChoices.map((u) => (
-                      <option key={u.id} value={u.id}>
-                        {u.full_name}
-                      </option>
-                    ))}
-                  </select>
+                  <AssigneePicker value={assigneeId} onChange={setAssigneeId} candidates={assigneeChoices} />
                 </div>
               )}
               {(tagsQuery.data ?? []).length > 0 && (

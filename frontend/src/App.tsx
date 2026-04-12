@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import { useAuth } from "./context/AuthContext";
+import { canViewSchedule } from "./lib/permissions";
 import { AdminPage } from "./pages/AdminPage";
 import { EmployeeDirectoryPage } from "./pages/EmployeeDirectoryPage";
 import { HomePage } from "./pages/HomePage";
@@ -30,6 +31,17 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   }
 
+  return children;
+}
+
+function RequireScheduleAccess({ children }: { children: React.ReactNode }) {
+  const { state } = useAuth();
+  if (state.status !== "authenticated") {
+    return null;
+  }
+  if (!canViewSchedule(state.user)) {
+    return <Navigate to="/" replace />;
+  }
   return children;
 }
 
@@ -129,7 +141,9 @@ export default function App() {
         path="/schedule"
         element={
           <ProtectedRoute>
-            <SchedulePage />
+            <RequireScheduleAccess>
+              <SchedulePage />
+            </RequireScheduleAccess>
           </ProtectedRoute>
         }
       />
