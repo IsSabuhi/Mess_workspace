@@ -12,7 +12,7 @@ class TaskCreate(BaseModel):
     description: str | None = None
     column_id: uuid.UUID
     system_id: uuid.UUID | None = None
-    assignee_id: uuid.UUID | None = None
+    assignee_ids: list[uuid.UUID] = Field(default_factory=list)
     priority: TaskPriority = TaskPriority.normal
     due_at: datetime | None = None
     position: int = 0
@@ -24,7 +24,7 @@ class TaskUpdate(BaseModel):
     description: str | None = None
     column_id: uuid.UUID | None = None
     system_id: uuid.UUID | None = None
-    assignee_id: uuid.UUID | None = None
+    assignee_ids: list[uuid.UUID] | None = None
     priority: TaskPriority | None = None
     due_at: datetime | None = None
     position: int | None = None
@@ -64,7 +64,6 @@ class TaskOut(ORMModel):
     board_id: uuid.UUID
     column_id: uuid.UUID
     system_id: uuid.UUID
-    assignee_id: uuid.UUID | None
     creator_id: uuid.UUID | None
     priority: TaskPriority
     due_at: datetime | None
@@ -72,7 +71,7 @@ class TaskOut(ORMModel):
     created_at: datetime
     updated_at: datetime
     archived_at: datetime | None
-    assignee: UserMini | None = None
+    assignees: list[UserMini] = Field(default_factory=list)
     creator: UserMini | None = None
     system: SystemMini | None = None
     column: ColumnMini | None = None

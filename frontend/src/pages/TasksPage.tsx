@@ -29,7 +29,7 @@ import { createTaskTag, deleteTaskTag, listTaskTags, updateTaskTag } from "../ap
 import { createTask, deleteTask, getTask, listTasks, updateTask } from "../api/tasks";
 import type { TaskCreate, TaskOut, TaskUpdate } from "../api/tasks";
 import { listAssigneeCandidates } from "../api/users";
-import { AssigneePicker } from "../components/AssigneePicker";
+import { MultiAssigneePicker } from "../components/MultiAssigneePicker";
 import { AppShell } from "../components/AppShell";
 import { useAuth } from "../context/AuthContext";
 import {
@@ -40,6 +40,7 @@ import {
   canUpdateTask,
   hasPermission,
 } from "../lib/permissions";
+import { formatAssigneesLabel } from "../lib/taskAssignees";
 import { taskIsOverdueForDashboard } from "../lib/taskStatus";
 import { toastApiError, toastError, toastSuccess } from "../lib/toast";
 
@@ -150,6 +151,7 @@ function DraggableTaskCard({
   const style: React.CSSProperties = {
     transform: transform ? `translate3d(${transform.x}px,${transform.y}px,0)` : undefined,
   };
+  const assigneesLine = formatAssigneesLabel(task);
   return (
     <div ref={setNodeRef} style={style} className={isDragging ? "z-10 opacity-90" : ""}>
       <div
@@ -186,7 +188,11 @@ function DraggableTaskCard({
                   Просрочено
                 </span>
               )}
-              {task.assignee && <span>{task.assignee.full_name}</span>}
+              {assigneesLine && (
+                <span className="truncate" title={(task.assignees ?? []).map((a) => a.full_name).join(", ")}>
+                  {assigneesLine}
+                </span>
+              )}
               <span
                 className={`rounded px-1.5 py-0.5 ${PRIORITY_BADGE_CLASS[task.priority] ?? PRIORITY_BADGE_CLASS.normal}`}
               >
@@ -295,7 +301,7 @@ export function TasksPage() {
   const [title, setTitle] = useState("");
   const [systemId, setSystemId] = useState("");
   const [columnId, setColumnId] = useState("");
-  const [assigneeId, setAssigneeId] = useState("");
+  const [assigneeIds, setAssigneeIds] = useState<string[]>([]);
   const [tagIds, setTagIds] = useState<string[]>([]);
 
   const [drawerTaskId, setDrawerTaskId] = useState<string | null>(null);
@@ -308,7 +314,7 @@ export function TasksPage() {
   const [editDue, setEditDue] = useState("");
   const [editSystemId, setEditSystemId] = useState("");
   const [editColumnId, setEditColumnId] = useState("");
-  const [editAssigneeId, setEditAssigneeId] = useState("");
+  const [editAssigneeIds, setEditAssigneeIds] = useState<string[]>([]);
   const [editTagIds, setEditTagIds] = useState<string[]>([]);
 
   const [formError, setFormError] = useState<string | null>(null);
@@ -561,6 +567,7 @@ export function TasksPage() {
       setModalOpen(false);
       setTitle("");
       setTagIds([]);
+      setAssigneeIds([]);
       setFormError(null);
       toastSuccess("Задача создана");
     },
@@ -629,7 +636,7 @@ export function TasksPage() {
     setEditDue(toLocalInput(task.due_at));
     setEditSystemId(task.system_id);
     setEditColumnId(task.column_id);
-    setEditAssigneeId(task.assignee_id ?? "");
+    setEditAssigneeIds(task.assignees?.map((a) => a.id) ?? []);
     setEditTagIds(task.tags.map((t) => t.id));
     setDrawerLoading(true);
     try {
@@ -641,7 +648,7 @@ export function TasksPage() {
       setEditDue(toLocalInput(fresh.due_at));
       setEditSystemId(fresh.system_id);
       setEditColumnId(fresh.column_id);
-      setEditAssigneeId(fresh.assignee_id ?? "");
+      setEditAssigneeIds(fresh.assignees?.map((a) => a.id) ?? []);
       setEditTagIds(fresh.tags.map((t) => t.id));
     } catch {
       /* оставляем данные с карточки */
@@ -667,7 +674,7 @@ export function TasksPage() {
         due_at: fromLocalInput(editDue),
         system_id: editSystemId,
         column_id: editColumnId,
-        assignee_id: editAssigneeId || null,
+        assignee_ids: editAssigneeIds,
         tag_ids: editTagIds,
       },
     });
@@ -689,7 +696,7 @@ export function TasksPage() {
     const body: TaskCreate = {
       title: title.trim(),
       column_id: columnId,
-      assignee_id: assigneeId || null,
+      assignee_ids: assigneeIds,
       tag_ids: tagIds,
     };
     if (resolvedSid) body.system_id = resolvedSid;
@@ -926,7 +933,10 @@ export function TasksPage() {
         {canCreate && (canViewAllSystems || boardSystems.length > 0) && (
           <button
             type="button"
-            onClick={() => setModalOpen(true)}
+            onClick={() => {
+              setAssigneeIds([]);
+              setModalOpen(true);
+            }}
             className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-md hover:bg-sky-600"
           >
             + Задача
@@ -1252,13 +1262,14 @@ export function TasksPage() {
               </div>
               {assigneeChoices.length > 0 && (
                 <div>
-                  <label className="mb-1 block text-xs font-medium text-slate-500">Исполнитель</label>
-                  <AssigneePicker
-                    value={editAssigneeId}
-                    onChange={setEditAssigneeId}
+                  <label className="mb-1 block text-xs font-medium text-slate-500">Исполнители</label>
+                  <MultiAssigneePicker
+                    value={editAssigneeIds}
+                    onChange={setEditAssigneeIds}
                     candidates={assigneeChoices}
                     disabled={!drawerCanEdit}
-                    selectedDisplayName={drawerTask.assignee?.full_name ?? null}
+                    selfId={user?.id ?? null}
+                    selfDisplayName={user?.full_name ?? "я"}
                   />
                 </div>
               )}
@@ -1431,8 +1442,14 @@ export function TasksPage() {
               </div>
               {assigneeChoices.length > 0 && (
                 <div>
-                  <label className="mb-1 block text-sm">Исполнитель</label>
-                  <AssigneePicker value={assigneeId} onChange={setAssigneeId} candidates={assigneeChoices} />
+                  <label className="mb-1 block text-sm">Исполнители</label>
+                  <MultiAssigneePicker
+                    value={assigneeIds}
+                    onChange={setAssigneeIds}
+                    candidates={assigneeChoices}
+                    selfId={user?.id ?? null}
+                    selfDisplayName={user?.full_name ?? "я"}
+                  />
                 </div>
               )}
               {(tagsQuery.data ?? []).length > 0 && (
@@ -1474,6 +1491,7 @@ export function TasksPage() {
                   onClick={() => {
                     setModalOpen(false);
                     setTagIds([]);
+                    setAssigneeIds([]);
                   }}
                   className="rounded-xl bg-slate-200 px-4 py-2 text-sm dark:bg-slate-700"
                 >

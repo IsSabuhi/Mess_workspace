@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models import KanbanColumn, Notification, NotificationType, Task, User
+from app.models.task import task_assignees_table
 
 _DUE_SOON_WINDOW = timedelta(days=3)
 _TASK_TYPES = {NotificationType.task_due_3_days, NotificationType.task_overdue}
@@ -20,13 +21,14 @@ async def sync_task_deadline_notifications(session: AsyncSession, user: User) ->
     stmt = (
         select(Task)
         .join(KanbanColumn, KanbanColumn.id == Task.column_id)
-        .where(Task.assignee_id == user.id)
+        .join(task_assignees_table, task_assignees_table.c.task_id == Task.id)
+        .where(task_assignees_table.c.user_id == user.id)
         .where(Task.archived_at.is_(None))
         .where(Task.due_at.is_not(None))
         .where(KanbanColumn.is_done_column.is_(False))
         .options(selectinload(Task.system))
     )
-    tasks = (await session.execute(stmt)).scalars().all()
+    tasks = (await session.execute(stmt)).scalars().unique().all()
     if not tasks:
         return
 

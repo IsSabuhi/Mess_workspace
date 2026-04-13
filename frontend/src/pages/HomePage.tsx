@@ -1,4 +1,4 @@
-import { useMemo, useState, type ComponentType } from "react";
+import { lazy, Suspense, useMemo, type ComponentType } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
@@ -9,7 +9,6 @@ import {
   CalendarClock,
   CalendarDays,
   ChevronRight,
-  FolderKanban,
   LayoutGrid,
   Server,
   Settings,
@@ -18,18 +17,31 @@ import {
 } from "lucide-react";
 
 import { listEmployeeDirectory } from "../api/employeeDirectory";
-import { listTasks, type TaskOut } from "../api/tasks";
+import { listTasks } from "../api/tasks";
 import { AppShell } from "../components/AppShell";
+import { ManagerHomeApprovalOverdue } from "../components/manager/ManagerHomeApprovalOverdue";
 import { useAuth } from "../context/AuthContext";
+import { useTheme } from "../context/ThemeContext";
 import { isHomeBlockVisible } from "../lib/homeDashboardBlocks";
+import { taskInApprovalColumn } from "../lib/managerTaskDashboard";
 import {
   canAdminAccess,
   canEmployeeDirectoryAccess,
+  canViewManagerTeamDashboard,
   canViewSchedule,
-  PERM,
-  hasPermission,
 } from "../lib/permissions";
 import { taskIsActiveForDashboard, taskIsOverdueForDashboard } from "../lib/taskStatus";
+
+const EmployeePriorityChart = lazy(() => import("../components/charts/EmployeePriorityChart"));
+
+function ChartSkeleton({ className = "h-64" }: { className?: string }) {
+  return (
+    <div
+      className={`animate-pulse rounded-xl bg-slate-100/90 dark:bg-slate-800/80 ${className}`}
+      aria-hidden
+    />
+  );
+}
 
 function formatDue(iso: string | null): string {
   if (!iso) return "без срока";
@@ -52,184 +64,15 @@ function initialsFromName(name: string): string {
   return name.slice(0, 2).toUpperCase() || "?";
 }
 
-function taskInApprovalColumn(t: { column: { slug: string; name: string } | null }): boolean {
-  const slug = (t.column?.slug ?? "").toLowerCase();
-  const name = (t.column?.name ?? "").toLowerCase();
-  return (
-    slug.includes("approval") ||
-    slug.includes("approve") ||
-    slug.includes("agreement") ||
-    name.includes("соглас")
-  );
-}
-
-const DASH_FILTER_SELECT =
-  "h-9 max-w-[11rem] min-w-[6.75rem] flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-800 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100";
-
-const PRIORITY_FILTER_OPTIONS: { value: string; label: string }[] = [
-  { value: "", label: "Все приоритеты" },
-  { value: "low", label: "Низкий" },
-  { value: "normal", label: "Обычный" },
-  { value: "high", label: "Высокий" },
-  { value: "urgent", label: "Срочный" },
-];
-
-function matchesTaskDashboardFilters(
-  t: TaskOut,
-  filters: { systemId: string; assigneeId: string; priority: string },
-): boolean {
-  if (filters.systemId) {
-    if (filters.systemId === "__none__") {
-      if (t.system_id && t.system) return false;
-    } else if (t.system_id !== filters.systemId) return false;
-  }
-  if (filters.assigneeId) {
-    if (filters.assigneeId === "__unassigned__") {
-      if (t.assignee_id) return false;
-    } else if (t.assignee_id !== filters.assigneeId) return false;
-  }
-  if (filters.priority && t.priority !== filters.priority) return false;
-  return true;
-}
-
-type DashSelectOption = { id: string; name: string };
-
-function DashboardTaskFilterToolbar({
-  systemId,
-  assigneeId,
-  priority,
-  onSystem,
-  onAssignee,
-  onPriority,
-  systems,
-  assignees,
-  matched,
-  total,
-}: {
-  systemId: string;
-  assigneeId: string;
-  priority: string;
-  onSystem: (v: string) => void;
-  onAssignee: (v: string) => void;
-  onPriority: (v: string) => void;
-  systems: DashSelectOption[];
-  assignees: DashSelectOption[];
-  matched: number;
-  total: number;
-}) {
-  const dirty = !!(systemId || assigneeId || priority);
-  return (
-    <div className="mb-3 space-y-2">
-      <div className="flex flex-wrap items-end gap-2">
-        <label className="flex min-w-0 flex-1 flex-col gap-0.5 sm:max-w-[11rem]">
-          <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
-            Система
-          </span>
-          <select value={systemId} onChange={(e) => onSystem(e.target.value)} className={DASH_FILTER_SELECT}>
-            <option value="">Все системы</option>
-            {systems.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex min-w-0 flex-1 flex-col gap-0.5 sm:max-w-[11rem]">
-          <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
-            Исполнитель
-          </span>
-          <select value={assigneeId} onChange={(e) => onAssignee(e.target.value)} className={DASH_FILTER_SELECT}>
-            <option value="">Все</option>
-            <option value="__unassigned__">Не назначен</option>
-            {assignees.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex min-w-0 flex-1 flex-col gap-0.5 sm:max-w-[11rem]">
-          <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
-            Приоритет
-          </span>
-          <select value={priority} onChange={(e) => onPriority(e.target.value)} className={DASH_FILTER_SELECT}>
-            {PRIORITY_FILTER_OPTIONS.map((o) => (
-              <option key={o.value || "all"} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        {dirty && (
-          <button
-            type="button"
-            onClick={() => {
-              onSystem("");
-              onAssignee("");
-              onPriority("");
-            }}
-            className="h-9 shrink-0 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
-          >
-            Сбросить
-          </button>
-        )}
-      </div>
-      <p className="text-[11px] text-slate-500 dark:text-slate-400">
-        По фильтру: <span className="font-semibold text-slate-700 dark:text-slate-200">{matched}</span> из{" "}
-        <span className="tabular-nums">{total}</span> в этом блоке
-      </p>
-    </div>
-  );
-}
-
-function taskBreakdownBySystem(tasks: TaskOut[]): { name: string; n: number }[] {
-  const m = new Map<string, { name: string; n: number }>();
-  for (const t of tasks) {
-    const id = t.system?.id ?? "__none__";
-    const name = t.system?.name ?? "Без системы";
-    const cur = m.get(id) ?? { name, n: 0 };
-    cur.n += 1;
-    m.set(id, cur);
-  }
-  return [...m.values()].sort((a, b) => b.n - a.n || a.name.localeCompare(b.name, "ru"));
-}
-
-function priorityShortLabel(p: string): string {
-  switch (p) {
-    case "urgent":
-      return "Срочный";
-    case "high":
-      return "Высокий";
-    case "low":
-      return "Низкий";
-    case "normal":
-      return "Обычный";
-    default:
-      return p;
-  }
-}
-
 export function HomePage() {
+  const { resolved: themeResolved } = useTheme();
+  const chartDark = themeResolved === "dark";
   const { state } = useAuth();
   const user = state.status === "authenticated" ? state.user : null;
   const name = user?.full_name ?? "";
   const positionLabel = user?.position?.name;
 
-  const [overdueSys, setOverdueSys] = useState("");
-  const [overdueAssignee, setOverdueAssignee] = useState("");
-  const [overduePriority, setOverduePriority] = useState("");
-  const [overdueShowAll, setOverdueShowAll] = useState(false);
-  const [approvalSys, setApprovalSys] = useState("");
-  const [approvalAssignee, setApprovalAssignee] = useState("");
-  const [approvalPriority, setApprovalPriority] = useState("");
-  const [approvalShowAll, setApprovalShowAll] = useState(false);
-
-  const isManager =
-    !!user &&
-    (hasPermission(user, PERM.TASKS_READ_ALL) ||
-      hasPermission(user, PERM.TASKS_UPDATE_ALL) ||
-      hasPermission(user, PERM.USERS_MANAGE) ||
-      user.is_superuser);
+  const isManager = !!user && canViewManagerTeamDashboard(user);
 
   const myTasksQuery = useQuery({
     queryKey: ["tasks", "mine", user?.id],
@@ -268,122 +111,16 @@ export function HomePage() {
       });
   }, [myTasksQuery.data]);
 
-  const statsByAssignee = useMemo(() => {
-    const rows = allTasksQuery.data ?? [];
-    const m = new Map<string, { id: string; name: string; total: number; overdue: number }>();
-    for (const t of rows) {
-      if (!taskIsActiveForDashboard(t)) continue;
-      const key = t.assignee_id ?? "none";
-      const nm = t.assignee?.full_name ?? "Не назначен";
-      if (!m.has(key)) m.set(key, { id: key, name: nm, total: 0, overdue: 0 });
-      const r = m.get(key)!;
-      r.total += 1;
-      if (taskIsOverdueForDashboard(t)) r.overdue += 1;
-    }
-    return [...m.values()].sort((a, b) => b.overdue - a.overdue || b.total - a.total);
-  }, [allTasksQuery.data]);
-
-  const statsBySystem = useMemo(() => {
-    const rows = allTasksQuery.data ?? [];
-    const m = new Map<string, { id: string; name: string; total: number; overdue: number }>();
-    for (const t of rows) {
-      if (!taskIsActiveForDashboard(t)) continue;
-      const key = t.system?.id ?? "none";
-      const nm = t.system?.name ?? "Без системы";
-      if (!m.has(key)) m.set(key, { id: key, name: nm, total: 0, overdue: 0 });
-      const r = m.get(key)!;
-      r.total += 1;
-      if (taskIsOverdueForDashboard(t)) r.overdue += 1;
-    }
-    return [...m.values()].sort((a, b) => b.overdue - a.overdue || b.total - a.total);
-  }, [allTasksQuery.data]);
-
-  const dashboardSystemOptions = useMemo((): DashSelectOption[] => {
-    const rows = allTasksQuery.data ?? [];
-    const m = new Map<string, string>();
-    let hasNoSystem = false;
-    for (const t of rows) {
-      if (!taskIsActiveForDashboard(t)) continue;
-      if (!t.system_id || !t.system) {
-        hasNoSystem = true;
-        continue;
-      }
-      m.set(t.system_id, t.system.name);
-    }
-    const out = [...m.entries()]
-      .map(([id, name]) => ({ id, name }))
-      .sort((a, b) => a.name.localeCompare(b.name, "ru"));
-    if (hasNoSystem) out.unshift({ id: "__none__", name: "Без системы" });
-    return out;
-  }, [allTasksQuery.data]);
-
-  const dashboardAssigneeOptions = useMemo((): DashSelectOption[] => {
-    const rows = allTasksQuery.data ?? [];
-    const m = new Map<string, string>();
-    for (const t of rows) {
-      if (!taskIsActiveForDashboard(t)) continue;
-      if (!t.assignee_id) continue;
-      if (!m.has(t.assignee_id)) m.set(t.assignee_id, t.assignee?.full_name ?? t.assignee_id);
-    }
-    return [...m.entries()]
-      .map(([id, name]) => ({ id, name }))
-      .sort((a, b) => a.name.localeCompare(b.name, "ru"));
-  }, [allTasksQuery.data]);
-
-  const teamOverdueAll = useMemo(() => {
-    return (allTasksQuery.data ?? [])
-      .filter((t) => taskIsActiveForDashboard(t) && taskIsOverdueForDashboard(t))
-      .sort((a, b) => {
-        const da = a.due_at ? new Date(a.due_at).getTime() : 0;
-        const db = b.due_at ? new Date(b.due_at).getTime() : 0;
-        return da - db;
-      });
-  }, [allTasksQuery.data]);
-
-  const filteredTeamOverdue = useMemo(() => {
-    const f = { systemId: overdueSys, assigneeId: overdueAssignee, priority: overduePriority };
-    return teamOverdueAll.filter((t) => matchesTaskDashboardFilters(t, f));
-  }, [teamOverdueAll, overdueSys, overdueAssignee, overduePriority]);
-
-  const overdueBreakdown = useMemo(
-    () => taskBreakdownBySystem(filteredTeamOverdue),
-    [filteredTeamOverdue],
-  );
-
-  const managerOwnTasks = useMemo(() => {
-    return (allTasksQuery.data ?? [])
-      .filter((t) => taskIsActiveForDashboard(t) && t.assignee_id === user?.id)
-      .slice()
-      .sort((a, b) => {
-        const da = a.due_at ? new Date(a.due_at).getTime() : Infinity;
-        const db = b.due_at ? new Date(b.due_at).getTime() : Infinity;
-        return da - db;
-      })
-      .slice(0, 6);
-  }, [allTasksQuery.data, user?.id]);
-
-  const approvalAll = useMemo(() => {
-    return (allTasksQuery.data ?? [])
-      .filter((t) => taskIsActiveForDashboard(t) && taskInApprovalColumn(t))
-      .sort((a, b) => {
-        const da = a.due_at ? new Date(a.due_at).getTime() : Infinity;
-        const db = b.due_at ? new Date(b.due_at).getTime() : Infinity;
-        return da - db;
-      });
-  }, [allTasksQuery.data]);
-
-  const filteredApprovalTasks = useMemo(() => {
-    const f = { systemId: approvalSys, assigneeId: approvalAssignee, priority: approvalPriority };
-    return approvalAll.filter((t) => matchesTaskDashboardFilters(t, f));
-  }, [approvalAll, approvalSys, approvalAssignee, approvalPriority]);
-
-  const approvalBreakdown = useMemo(
-    () => taskBreakdownBySystem(filteredApprovalTasks),
-    [filteredApprovalTasks],
-  );
-
   const totalActive = (allTasksQuery.data ?? []).filter((t) => taskIsActiveForDashboard(t)).length;
   const totalOverdue = (allTasksQuery.data ?? []).filter((t) => taskIsOverdueForDashboard(t)).length;
+
+  const managerApprovalCount = useMemo(() => {
+    let n = 0;
+    for (const t of allTasksQuery.data ?? []) {
+      if (taskIsActiveForDashboard(t) && taskInApprovalColumn(t)) n += 1;
+    }
+    return n;
+  }, [allTasksQuery.data]);
 
   const myActiveCount = myTasksSorted.length;
   const myOverdueCount = myTasksSorted.filter((t) => taskIsOverdueForDashboard(t)).length;
@@ -393,6 +130,15 @@ export function HomePage() {
     return ms >= 0 && ms <= 1000 * 60 * 60 * 24 * 3;
   }).length;
   const myNoDueCount = myTasksSorted.filter((t) => !t.due_at).length;
+
+  const myPriorityCounts = useMemo(() => {
+    const m: Record<string, number> = { low: 0, normal: 0, high: 0, urgent: 0 };
+    for (const t of myTasksSorted) {
+      const p = t.priority in m ? t.priority : "normal";
+      m[p] = (m[p] ?? 0) + 1;
+    }
+    return m;
+  }, [myTasksSorted]);
 
   const showAdmin = user ? canAdminAccess(user) : false;
   const showScheduleQuick = !!user && canViewSchedule(user);
@@ -404,6 +150,9 @@ export function HomePage() {
     description: string;
   }[] = [
     { to: "/tasks", label: "Задачи", icon: LayoutGrid, description: "Канбан-доска" },
+    ...(isManager
+      ? [{ to: "/team-dashboard", label: "Команда", icon: BarChart3, description: "Сводки и графики" }]
+      : []),
     ...(showScheduleQuick
       ? [{ to: "/schedule", label: "Расписание", icon: CalendarDays, description: "График смен" }]
       : []),
@@ -470,6 +219,25 @@ export function HomePage() {
                         {allTasksQuery.isPending ? "…" : totalOverdue}
                       </span>
                       <span className="text-[11px] text-slate-500">по сроку</span>
+                    </div>
+                    <div
+                      className={`flex min-w-[8rem] flex-col rounded-2xl border px-4 py-3 shadow-sm ${
+                        managerApprovalCount > 0
+                          ? "border-amber-200/90 bg-amber-50/80 dark:border-amber-900/50 dark:bg-amber-950/30"
+                          : "border-white/80 bg-white/80 dark:border-slate-700/80 dark:bg-slate-800/80"
+                      }`}
+                    >
+                      <span className="text-xs font-medium text-slate-500 dark:text-slate-400">На согласовании</span>
+                      <span
+                        className={`mt-0.5 text-2xl font-bold tabular-nums ${
+                          managerApprovalCount > 0
+                            ? "text-amber-800 dark:text-amber-200"
+                            : "text-slate-900 dark:text-white"
+                        }`}
+                      >
+                        {allTasksQuery.isPending ? "…" : managerApprovalCount}
+                      </span>
+                      <span className="text-[11px] text-slate-500">ожидают решения</span>
                     </div>
                   </>
                 ) : (
@@ -557,6 +325,22 @@ export function HomePage() {
           </div>
         )}
 
+        {!isManager && user && showBlock("my_tasks_panel") && myTasksSorted.length > 0 && (
+          <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-6 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h3 className="font-semibold text-slate-900 dark:text-white">Мои задачи по приоритету</h3>
+                <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                  Только активные (не в колонке «выполнено»)
+                </p>
+              </div>
+            </div>
+            <Suspense fallback={<ChartSkeleton className="h-64" />}>
+              <EmployeePriorityChart counts={myPriorityCounts} dark={chartDark} />
+            </Suspense>
+          </div>
+        )}
+
         {!isManager && user && showBlock("my_tasks_panel") && (
           <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-6 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
             <div className="mb-4 flex items-center gap-2">
@@ -617,287 +401,30 @@ export function HomePage() {
           </div>
         )}
 
-        {isManager && (
-          <>
-            {showBlock("manager_approval") && approvalAll.length > 0 && (
-              <div className="rounded-2xl border border-amber-200/80 bg-gradient-to-br from-white to-amber-50/70 p-6 shadow-soft dark:border-amber-900/40 dark:from-slate-900 dark:to-amber-950/20">
-                <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <AlertCircle className="h-5 w-5 text-amber-600 dark:text-amber-400" />
-                    <div>
-                      <h3 className="font-semibold text-slate-900 dark:text-white">На согласовании</h3>
-                      <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-                        Колонки с «соглас» в названии или slug approval / agreement
-                      </p>
-                    </div>
-                  </div>
-                  <Link to="/tasks" className="text-sm font-medium text-sky-600 hover:underline dark:text-sky-400">
-                    Открыть канбан
-                  </Link>
-                </div>
-                <DashboardTaskFilterToolbar
-                  systemId={approvalSys}
-                  assigneeId={approvalAssignee}
-                  priority={approvalPriority}
-                  onSystem={setApprovalSys}
-                  onAssignee={setApprovalAssignee}
-                  onPriority={setApprovalPriority}
-                  systems={dashboardSystemOptions}
-                  assignees={dashboardAssigneeOptions}
-                  matched={filteredApprovalTasks.length}
-                  total={approvalAll.length}
-                />
-                {filteredApprovalTasks.length > 0 && approvalBreakdown.length > 0 && (
-                  <p className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[11px] text-slate-600 dark:text-slate-300">
-                    <span className="font-medium text-slate-500 dark:text-slate-400">По системам:</span>
-                    {approvalBreakdown.map((b, i) => (
-                      <span key={`${b.name}-${i}`}>
-                        {b.name}{" "}
-                        <strong className="tabular-nums text-slate-800 dark:text-slate-100">{b.n}</strong>
-                      </span>
-                    ))}
-                  </p>
-                )}
-                {filteredApprovalTasks.length === 0 ? (
-                  <p className="text-sm text-slate-500 dark:text-slate-400">
-                    Нет задач по выбранным фильтрам. Измените условия или сбросьте их.
-                  </p>
-                ) : (
-                  <ul className="space-y-2">
-                    {(approvalShowAll ? filteredApprovalTasks : filteredApprovalTasks.slice(0, 12)).map((t) => (
-                      <li
-                        key={t.id}
-                        className="flex flex-wrap items-start justify-between gap-2 rounded-xl border border-amber-100/80 bg-white/90 px-3 py-2.5 text-sm dark:border-amber-900/30 dark:bg-slate-800/50"
-                      >
-                        <div className="min-w-0">
-                          <p className="font-medium text-slate-900 dark:text-white">{t.title}</p>
-                          <p className="text-xs text-slate-600 dark:text-slate-400">
-                            {t.assignee?.full_name ?? "Не назначен"}
-                            {t.system ? ` · ${t.system.name}` : ""}
-                            {t.column?.name ? ` · ${t.column.name}` : ""}
-                            <span className="text-slate-400 dark:text-slate-500">
-                              {" "}
-                              · {priorityShortLabel(t.priority)}
-                            </span>
-                          </p>
-                        </div>
-                        <span
-                          className={`shrink-0 text-xs font-medium ${
-                            taskIsOverdueForDashboard(t) ? "text-red-700 dark:text-red-300" : "text-slate-500"
-                          }`}
-                        >
-                          {formatDue(t.due_at)}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                {filteredApprovalTasks.length > 12 && (
-                  <button
-                    type="button"
-                    onClick={() => setApprovalShowAll((v) => !v)}
-                    className="mt-3 text-sm font-medium text-sky-600 hover:underline dark:text-sky-400"
-                  >
-                    {approvalShowAll ? "Свернуть список" : `Показать все (${filteredApprovalTasks.length})`}
-                  </button>
-                )}
-              </div>
-            )}
+        {isManager && user && (
+          <ManagerHomeApprovalOverdue
+            tasks={allTasksQuery.data ?? []}
+            showApproval={showBlock("manager_approval")}
+            showOverdue={showBlock("manager_team_overdue")}
+          />
+        )}
 
-            {showBlock("manager_team_overdue") && teamOverdueAll.length > 0 && (
-              <div className="rounded-2xl border border-red-200/70 bg-gradient-to-br from-white to-red-50/40 p-6 shadow-soft dark:border-red-900/40 dark:from-slate-900 dark:to-red-950/25">
-                <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <AlertCircle className="h-5 w-5 text-red-600 dark:text-red-400" />
-                    <div>
-                      <h3 className="font-semibold text-slate-900 dark:text-white">Просроченные задачи команды</h3>
-                      <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-                        Срок в прошлом, задача не в колонке «выполнено»
-                      </p>
-                    </div>
-                  </div>
-                  <Link
-                    to="/tasks"
-                    className="text-sm font-medium text-sky-600 hover:underline dark:text-sky-400"
-                  >
-                    Открыть канбан
-                  </Link>
-                </div>
-                <DashboardTaskFilterToolbar
-                  systemId={overdueSys}
-                  assigneeId={overdueAssignee}
-                  priority={overduePriority}
-                  onSystem={setOverdueSys}
-                  onAssignee={setOverdueAssignee}
-                  onPriority={setOverduePriority}
-                  systems={dashboardSystemOptions}
-                  assignees={dashboardAssigneeOptions}
-                  matched={filteredTeamOverdue.length}
-                  total={teamOverdueAll.length}
-                />
-                {filteredTeamOverdue.length > 0 && overdueBreakdown.length > 0 && (
-                  <p className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[11px] text-slate-600 dark:text-slate-300">
-                    <span className="font-medium text-slate-500 dark:text-slate-400">По системам:</span>
-                    {overdueBreakdown.map((b, i) => (
-                      <span key={`${b.name}-${i}`}>
-                        {b.name}{" "}
-                        <strong className="tabular-nums text-slate-800 dark:text-slate-100">{b.n}</strong>
-                      </span>
-                    ))}
-                  </p>
-                )}
-                {filteredTeamOverdue.length === 0 ? (
-                  <p className="text-sm text-slate-500 dark:text-slate-400">
-                    Нет задач по выбранным фильтрам. Измените условия или сбросьте их.
-                  </p>
-                ) : (
-                  <ul className="space-y-2">
-                    {(overdueShowAll ? filteredTeamOverdue : filteredTeamOverdue.slice(0, 12)).map((t) => (
-                      <li
-                        key={t.id}
-                        className="flex flex-wrap items-start justify-between gap-2 rounded-xl border border-red-100/80 bg-white/90 px-3 py-2.5 text-sm dark:border-red-900/30 dark:bg-slate-800/50"
-                      >
-                        <div className="min-w-0">
-                          <p className="font-medium text-slate-900 dark:text-white">{t.title}</p>
-                          <p className="text-xs text-slate-600 dark:text-slate-400">
-                            {t.assignee?.full_name ?? "Не назначен"}
-                            {t.system ? ` · ${t.system.name}` : ""}
-                            <span className="text-slate-400 dark:text-slate-500">
-                              {" "}
-                              · {priorityShortLabel(t.priority)}
-                            </span>
-                          </p>
-                        </div>
-                        <span className="shrink-0 text-xs font-medium text-red-700 dark:text-red-300">
-                          {formatDue(t.due_at)}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                {filteredTeamOverdue.length > 12 && (
-                  <button
-                    type="button"
-                    onClick={() => setOverdueShowAll((v) => !v)}
-                    className="mt-3 text-sm font-medium text-sky-600 hover:underline dark:text-sky-400"
-                  >
-                    {overdueShowAll ? "Свернуть список" : `Показать все (${filteredTeamOverdue.length})`}
-                  </button>
-                )}
-              </div>
-            )}
-
-            {showBlock("manager_by_system") && statsBySystem.length > 0 && (
-              <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-6 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
-                <div className="mb-4 flex items-center gap-2">
-                  <FolderKanban className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />
-                  <h3 className="font-semibold text-slate-900 dark:text-white">По системам (проектам)</h3>
-                </div>
-                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                  {statsBySystem.map((row) => (
-                    <div
-                      key={row.id}
-                      className="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2.5 text-sm dark:border-slate-700 dark:bg-slate-800/40"
-                    >
-                      <p className="font-medium text-slate-900 dark:text-white">{row.name}</p>
-                      <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
-                        Активных: {row.total}
-                        {row.overdue > 0 ? (
-                          <span className="text-red-700 dark:text-red-300"> · просрочено: {row.overdue}</span>
-                        ) : null}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {showBlock("manager_analytics") && (
-            <div className="rounded-2xl border border-emerald-200/80 bg-gradient-to-br from-white to-emerald-50/90 p-6 shadow-soft dark:border-emerald-900/50 dark:from-slate-900 dark:to-emerald-950/30">
-              <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
-                <div className="flex items-start gap-3">
-                  <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-600 text-white shadow-md">
-                    <BarChart3 className="h-5 w-5" />
-                  </span>
-                  <div>
-                    <h3 className="font-semibold text-slate-900 dark:text-white">Аналитика по сотрудникам</h3>
-                    <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                      Активных задач: <strong>{allTasksQuery.isPending ? "…" : totalActive}</strong>
-                      {totalOverdue > 0 && (
-                        <>
-                          {" "}
-                          · с истёкшим сроком:{" "}
-                          <strong className="text-red-700 dark:text-red-300">{totalOverdue}</strong>
-                        </>
-                      )}
-                    </p>
-                  </div>
-                </div>
-              </div>
-              {allTasksQuery.isPending && <p className="text-sm text-slate-500">Загрузка…</p>}
-              {!allTasksQuery.isPending && (
-                <div className="overflow-x-auto rounded-xl border border-emerald-100/80 dark:border-emerald-900/40">
-                  <table className="w-full min-w-[480px] text-left text-sm">
-                    <thead className="border-b border-emerald-100 bg-emerald-50/50 dark:border-emerald-900/50 dark:bg-emerald-950/30">
-                      <tr>
-                        <th className="px-3 py-2 font-semibold text-slate-700 dark:text-slate-200">
-                          Исполнитель
-                        </th>
-                        <th className="px-3 py-2 font-semibold text-slate-700 dark:text-slate-200">
-                          Активных
-                        </th>
-                        <th className="px-3 py-2 font-semibold text-red-800 dark:text-red-200">Просрочено</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-emerald-50 dark:divide-emerald-900/30">
-                      {statsByAssignee.map((row) => (
-                        <tr key={row.id}>
-                          <td className="px-3 py-2 text-slate-800 dark:text-slate-100">{row.name}</td>
-                          <td className="px-3 py-2">{row.total}</td>
-                          <td className="px-3 py-2">
-                            {row.overdue > 0 ? (
-                              <span className="font-medium text-red-700 dark:text-red-300">{row.overdue}</span>
-                            ) : (
-                              "—"
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {statsByAssignee.length === 0 && (
-                    <p className="px-3 py-4 text-sm text-slate-500">Нет активных задач для сводки.</p>
-                  )}
-                </div>
-              )}
-              <p className="mt-3 text-xs text-slate-500">
-                Выполненные — задачи в колонке «выполнено» для отчётов или в колонке со slug{" "}
-                <span className="font-mono">done</span>. Архив не входит. «Просрочено» — срок прошёл, задача ещё не в
-                «выполнено».{" "}
-                <Link to="/tasks" className="text-sky-600 hover:underline dark:text-sky-400">
-                  Задачи
-                </Link>
+        {isManager && user && (
+          <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200/80 bg-white/80 p-4 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
+            <div className="min-w-0 flex-1">
+              <h3 className="font-semibold text-slate-900 dark:text-white">Подробная аналитика команды</h3>
+              <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                Карточки по системам, таблица по исполнителям и график нагрузки — на отдельной странице.
               </p>
             </div>
-            )}
-
-            {showBlock("manager_own_tasks") && managerOwnTasks.length > 0 && (
-              <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-6 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
-                <h3 className="mb-3 font-semibold text-slate-900 dark:text-white">Ваши задачи как исполнителя</h3>
-                <ul className="grid gap-2 sm:grid-cols-2">
-                  {managerOwnTasks.map((t) => (
-                    <li
-                      key={t.id}
-                      className="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800/40"
-                    >
-                      <p className="font-medium text-slate-900 dark:text-white">{t.title}</p>
-                      <p className="text-xs text-slate-500">{formatDue(t.due_at)}</p>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </>
+            <Link
+              to="/team-dashboard"
+              className="inline-flex shrink-0 items-center gap-1 rounded-xl bg-sky-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-sky-700 dark:bg-sky-500 dark:hover:bg-sky-400"
+            >
+              Открыть
+              <ChevronRight className="h-4 w-4" />
+            </Link>
+          </div>
         )}
 
         {showEmployeeExpiryBlock && (

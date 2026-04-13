@@ -1,7 +1,7 @@
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import { useAuth } from "./context/AuthContext";
-import { canViewSchedule } from "./lib/permissions";
+import { canViewManagerTeamDashboard, canViewSchedule } from "./lib/permissions";
 import { AdminPage } from "./pages/AdminPage";
 import { EmployeeDirectoryPage } from "./pages/EmployeeDirectoryPage";
 import { HomePage } from "./pages/HomePage";
@@ -14,6 +14,7 @@ import { TasksPage } from "./pages/TasksPage";
 import { UsersRedirectPage } from "./pages/UsersRedirectPage";
 import { NotificationsPage } from "./pages/NotificationsPage";
 import { SchedulePage } from "./pages/SchedulePage";
+import { ManagerTeamDashboardPage } from "./pages/ManagerTeamDashboardPage";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { state } = useAuth();
@@ -45,6 +46,17 @@ function RequireScheduleAccess({ children }: { children: React.ReactNode }) {
   return children;
 }
 
+function RequireManagerTeamDashboard({ children }: { children: React.ReactNode }) {
+  const { state } = useAuth();
+  if (state.status !== "authenticated") {
+    return null;
+  }
+  if (!canViewManagerTeamDashboard(state.user)) {
+    return <Navigate to="/" replace />;
+  }
+  return children;
+}
+
 export default function App() {
   return (
     <Routes>
@@ -62,6 +74,16 @@ export default function App() {
         element={
           <ProtectedRoute>
             <TasksPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/team-dashboard"
+        element={
+          <ProtectedRoute>
+            <RequireManagerTeamDashboard>
+              <ManagerTeamDashboardPage />
+            </RequireManagerTeamDashboard>
           </ProtectedRoute>
         }
       />

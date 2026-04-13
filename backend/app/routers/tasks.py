@@ -2,7 +2,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import false, select
+from sqlalchemy import exists, false, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -17,6 +17,7 @@ from app.http_errors import (
 )
 from app.deps import get_current_user, require_permission
 from app.models import Board, KanbanColumn, System, Task, TaskTag, User, UserSystem
+from app.models.task import task_assignees_table
 from app.permissions import TASKS_CREATE, TASKS_READ_ASSIGNED
 from app.schemas.task import ColumnMini, SystemMini, TagMini, TaskCreate, TaskOut, TaskUpdate, UserMini
 from app.services.authz import user_has_permission, user_sees_all_tasks
@@ -29,8 +30,9 @@ async def _user_system_ids(session: AsyncSession, user_id: uuid.UUID) -> list[uu
     r = await session.execute(select(UserSystem.system_id).where(UserSystem.user_id == user_id))
     return list(r.scalars().all())
 
+
 _TASK_LOAD = (
-    selectinload(Task.assignee),
+    selectinload(Task.assignees),
     selectinload(Task.creator),
     selectinload(Task.system),
     selectinload(Task.column),
@@ -46,7 +48,6 @@ def _task_to_out(task: Task) -> TaskOut:
         board_id=task.board_id,
         column_id=task.column_id,
         system_id=task.system_id,
-        assignee_id=task.assignee_id,
         creator_id=task.creator_id,
         priority=task.priority,
         due_at=task.due_at,
@@ -54,7 +55,7 @@ def _task_to_out(task: Task) -> TaskOut:
         created_at=task.created_at,
         updated_at=task.updated_at,
         archived_at=task.archived_at,
-        assignee=UserMini.model_validate(task.assignee) if task.assignee else None,
+        assignees=[UserMini.model_validate(u) for u in task.assignees],
         creator=UserMini.model_validate(task.creator) if task.creator else None,
         system=SystemMini.model_validate(task.system) if task.system else None,
         column=ColumnMini.model_validate(task.column) if task.column else None,
@@ -73,6 +74,17 @@ async def _resolve_tags(session: AsyncSession, tag_ids: list[uuid.UUID]) -> list
     return [tags_by_id[i] for i in unique_ids]
 
 
+async def _resolve_assignee_users(session: AsyncSession, ids: list[uuid.UUID]) -> list[User]:
+    uniq = list(dict.fromkeys(ids))
+    out: list[User] = []
+    for uid in uniq:
+        u = await session.get(User, uid)
+        if not u or not u.is_active:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid assignee")
+        out.append(u)
+    return out
+
+
 async def _apply_task_list_scope(session: AsyncSession, user: User, stmt):
     if await user_sees_all_tasks(session, user):
         return stmt
@@ -80,7 +92,11 @@ async def _apply_task_list_scope(session: AsyncSession, user: User, stmt):
     if system_ids:
         return stmt.where(Task.system_id.in_(system_ids))
     if await user_has_permission(session, user, TASKS_READ_ASSIGNED):
-        return stmt.where(Task.assignee_id == user.id)
+        sub = exists().where(
+            task_assignees_table.c.task_id == Task.id,
+            task_assignees_table.c.user_id == user.id,
+        )
+        return stmt.where(sub)
     return stmt.where(false())
 
 
@@ -100,7 +116,11 @@ async def list_tasks(
     if system_id:
         stmt = stmt.where(Task.system_id == system_id)
     if assignee_id:
-        stmt = stmt.where(Task.assignee_id == assignee_id)
+        sub = exists().where(
+            task_assignees_table.c.task_id == Task.id,
+            task_assignees_table.c.user_id == assignee_id,
+        )
+        stmt = stmt.where(sub)
     if column_id:
         stmt = stmt.where(Task.column_id == column_id)
 
@@ -162,10 +182,7 @@ async def create_task(
     if not sys or not sys.is_active:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=UNKNOWN_SYSTEM)
 
-    if body.assignee_id:
-        assignee = await session.get(User, body.assignee_id)
-        if not assignee or not assignee.is_active:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid assignee")
+    assignees = await _resolve_assignee_users(session, body.assignee_ids)
 
     task = Task(
         title=body.title,
@@ -173,15 +190,14 @@ async def create_task(
         board_id=board_id,
         column_id=body.column_id,
         system_id=resolved_system_id,
-        assignee_id=body.assignee_id,
         creator_id=user.id,
         priority=body.priority,
         due_at=body.due_at,
         position=body.position,
     )
     task.tags = await _resolve_tags(session, body.tag_ids)
+    task.assignees = assignees
     session.add(task)
-    await session.flush()
     await session.commit()
 
     t = (await session.execute(select(Task).where(Task.id == task.id).options(*_TASK_LOAD))).scalar_one()
@@ -220,12 +236,8 @@ async def update_task(
         if not sys or not sys.is_active:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=UNKNOWN_SYSTEM)
         task.system_id = body.system_id
-    if body.assignee_id is not None:
-        if body.assignee_id:
-            assignee = await session.get(User, body.assignee_id)
-            if not assignee or not assignee.is_active:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid assignee")
-        task.assignee_id = body.assignee_id
+    if body.assignee_ids is not None:
+        task.assignees = await _resolve_assignee_users(session, body.assignee_ids)
     if body.priority is not None:
         task.priority = body.priority
     if body.due_at is not None:

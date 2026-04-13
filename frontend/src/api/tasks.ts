@@ -9,7 +9,6 @@ export type TaskOut = {
   board_id: string;
   column_id: string;
   system_id: string;
-  assignee_id: string | null;
   creator_id: string | null;
   priority: TaskPriority;
   due_at: string | null;
@@ -17,7 +16,7 @@ export type TaskOut = {
   created_at: string;
   updated_at: string;
   archived_at: string | null;
-  assignee: { id: string; email: string; full_name: string } | null;
+  assignees: { id: string; email: string; full_name: string }[];
   creator: { id: string; email: string; full_name: string } | null;
   system: { id: string; name: string; slug: string } | null;
   column: { id: string; name: string; slug: string; is_done_column?: boolean } | null;
@@ -30,7 +29,7 @@ export type TaskCreate = {
   column_id: string;
   /** Для руководителя (tasks.read.all) обязателен; иначе можно не передавать при одной системе */
   system_id?: string;
-  assignee_id?: string | null;
+  assignee_ids?: string[];
   priority?: TaskPriority;
   due_at?: string | null;
   position?: number;
@@ -42,7 +41,7 @@ export type TaskUpdate = {
   description?: string | null;
   column_id?: string;
   system_id?: string;
-  assignee_id?: string | null;
+  assignee_ids?: string[];
   priority?: TaskPriority;
   due_at?: string | null;
   position?: number;

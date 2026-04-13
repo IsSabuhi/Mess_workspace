@@ -1,6 +1,8 @@
 import type { UserMe } from "../api/auth";
 import type { TaskOut } from "../api/tasks";
 
+import { taskHasAssignee } from "./taskAssignees";
+
 export const PERM = {
   USERS_MANAGE: "users.manage",
   ROLES_MANAGE: "roles.manage",
@@ -40,6 +42,16 @@ export function canAdminAccess(user: UserMe): boolean {
   return hasPermission(user, PERM.USERS_MANAGE) || hasPermission(user, PERM.ROLES_MANAGE);
 }
 
+/** Сводки и аналитика по задачам всей команды (главная /team-dashboard). */
+export function canViewManagerTeamDashboard(user: UserMe): boolean {
+  return (
+    user.is_superuser ||
+    hasPermission(user, PERM.TASKS_READ_ALL) ||
+    hasPermission(user, PERM.TASKS_UPDATE_ALL) ||
+    hasPermission(user, PERM.USERS_MANAGE)
+  );
+}
+
 export function canEmployeeDirectoryAccess(user: UserMe): boolean {
   return (
     hasPermission(user, PERM.EMPLOYEE_DIRECTORY_READ) ||
@@ -74,7 +86,7 @@ export function canUpdateTask(user: UserMe, task: TaskOut): boolean {
   if (user.is_superuser) return true;
   if (hasPermission(user, PERM.TASKS_UPDATE_ALL)) return true;
   if (hasPermission(user, PERM.TASKS_UPDATE_ASSIGNED)) {
-    if (task.assignee_id === user.id) return true;
+    if (taskHasAssignee(task, user.id)) return true;
     if (taskInUserSystems(user, task)) return true;
   }
   return false;
@@ -85,7 +97,7 @@ export function canMoveTask(user: UserMe, task: TaskOut): boolean {
   if (user.is_superuser) return true;
   if (hasPermission(user, PERM.TASKS_MOVE)) return true;
   if (hasPermission(user, PERM.TASKS_UPDATE_ASSIGNED)) {
-    if (task.assignee_id === user.id) return true;
+    if (taskHasAssignee(task, user.id)) return true;
     if (taskInUserSystems(user, task)) return true;
   }
   return false;

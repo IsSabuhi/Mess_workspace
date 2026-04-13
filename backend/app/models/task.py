@@ -4,7 +4,7 @@ import enum
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import Column, DateTime, Enum, ForeignKey, Integer, String, Table, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -18,6 +18,14 @@ class TaskPriority(str, enum.Enum):
     urgent = "urgent"
 
 
+task_assignees_table = Table(
+    "task_assignees",
+    Base.metadata,
+    Column("task_id", UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="CASCADE"), primary_key=True),
+    Column("user_id", UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+)
+
+
 class Task(Base):
     __tablename__ = "tasks"
 
@@ -29,7 +37,6 @@ class Task(Base):
     column_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("kanban_columns.id", ondelete="RESTRICT"), nullable=False)
     system_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("systems.id", ondelete="RESTRICT"), nullable=False)
 
-    assignee_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     creator_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
     priority: Mapped[TaskPriority] = mapped_column(
@@ -53,8 +60,9 @@ class Task(Base):
     board: Mapped["Board"] = relationship(back_populates="tasks")
     column: Mapped["KanbanColumn"] = relationship(back_populates="tasks")
     system: Mapped["System"] = relationship(back_populates="tasks")
-    assignee: Mapped["User | None"] = relationship(
-        foreign_keys=[assignee_id],
+    assignees: Mapped[list["User"]] = relationship(
+        "User",
+        secondary=task_assignees_table,
         back_populates="assigned_tasks",
     )
     creator: Mapped["User | None"] = relationship(

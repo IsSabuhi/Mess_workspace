@@ -43,8 +43,8 @@ class User(Base):
     )
     assigned_tasks: Mapped[list["Task"]] = relationship(
         "Task",
-        foreign_keys="Task.assignee_id",
-        back_populates="assignee",
+        secondary="task_assignees",
+        back_populates="assignees",
     )
     knowledge_memberships: Mapped[list["KnowledgeSpaceMember"]] = relationship(
         back_populates="user",

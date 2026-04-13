@@ -17,13 +17,18 @@ async def _user_system_id_set(session: AsyncSession, user_id) -> set:
     return set(r.scalars().all())
 
 
+def _user_in_task_assignees(task: Task, user_id) -> bool:
+    return any(a.id == user_id for a in (task.assignees or []))
+
+
 async def can_read_task(session: AsyncSession, user: User, task: Task) -> bool:
     if await user_sees_all_tasks(session, user):
         return True
     if task.system_id in await _user_system_id_set(session, user.id):
         return True
     if await user_has_permission(session, user, TASKS_READ_ASSIGNED):
-        return task.assignee_id == user.id
+        if _user_in_task_assignees(task, user.id):
+            return True
     return False
 
 
@@ -33,9 +38,8 @@ async def can_update_task(session: AsyncSession, user: User, task: Task) -> bool
     if await user_has_permission(session, user, TASKS_UPDATE_ALL):
         return True
     if await user_has_permission(session, user, TASKS_UPDATE_ASSIGNED):
-        if task.assignee_id == user.id:
+        if _user_in_task_assignees(task, user.id):
             return True
-        # Задачи в «своих» производственных системах (не только где исполнитель)
         if task.system_id in await _user_system_id_set(session, user.id):
             return True
     return False
@@ -53,7 +57,7 @@ async def can_move_task(session: AsyncSession, user: User, task: Task) -> bool:
     if await user_has_permission(session, user, TASKS_MOVE):
         return True
     if await user_has_permission(session, user, TASKS_UPDATE_ASSIGNED):
-        if task.assignee_id == user.id:
+        if _user_in_task_assignees(task, user.id):
             return True
         if task.system_id in await _user_system_id_set(session, user.id):
             return True
