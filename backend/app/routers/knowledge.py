@@ -2,23 +2,36 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.http_errors import FORBIDDEN
 from app.deps import get_current_user, require_permission
-from app.models import KnowledgeArticle, KnowledgeSpace, KnowledgeSpaceMember, System, User
+from app.models import (
+    KnowledgeArticle,
+    KnowledgeArticleRevision,
+    KnowledgeSpace,
+    KnowledgeSpaceMember,
+    KnowledgeTemplate,
+    System,
+    User,
+)
 from app.models.knowledge import ArticleStatus, SpaceMemberRole
 from app.permissions import KNOWLEDGE_MANAGE_ALL, KNOWLEDGE_READ_ALL
 from app.schemas.knowledge import (
     KnowledgeArticleCreate,
     KnowledgeArticleOut,
     KnowledgeArticleUpdate,
+    KnowledgeArticleRevisionOut,
+    KnowledgeArticleRestoreIn,
     KnowledgeSpaceCreate,
+    KnowledgeSearchResultOut,
     KnowledgeSpaceOut,
     KnowledgeDirectoryUser,
     KnowledgeSpaceUpdate,
+    KnowledgeTemplateCreate,
+    KnowledgeTemplateOut,
     SpaceMemberIn,
     SpaceMemberOut,
     SpaceMemberUpdate,
@@ -73,6 +86,34 @@ async def _validate_article_parent(
         if not row:
             break
         cur = row.parent_id
+
+
+def _article_snippet(article: KnowledgeArticle, query: str) -> str | None:
+    if not query.strip():
+        return None
+    text = (article.content or "").replace("\n", " ")
+    if not text:
+        return None
+    idx = text.lower().find(query.lower())
+    if idx < 0:
+        return text[:160] if len(text) > 160 else text
+    start = max(0, idx - 60)
+    end = min(len(text), idx + 100)
+    return text[start:end].strip()
+
+
+async def _save_article_revision(session: AsyncSession, article: KnowledgeArticle, user: User) -> None:
+    session.add(
+        KnowledgeArticleRevision(
+            article_id=article.id,
+            space_id=article.space_id,
+            title=article.title,
+            content=article.content,
+            status=article.status,
+            parent_id=article.parent_id,
+            saved_by_id=user.id,
+        )
+    )
 
 
 @router.get("/spaces", response_model=list[KnowledgeSpaceOut])
@@ -365,6 +406,41 @@ async def list_articles(
     return [KnowledgeArticleOut.model_validate(a) for a in result.scalars().all()]
 
 
+@router.get("/spaces/{space_id}/search/articles", response_model=list[KnowledgeSearchResultOut])
+async def search_articles(
+    space_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+    q: str = "",
+) -> list[KnowledgeSearchResultOut]:
+    space = await session.get(KnowledgeSpace, space_id)
+    if not space:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Space not found")
+    if not await can_read_space(session, user, space):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
+    query = q.strip()
+    if not query:
+        return []
+    sees_all_drafts = user.is_superuser or await user_has_permission(session, user, KNOWLEDGE_MANAGE_ALL)
+    stmt = select(KnowledgeArticle).where(KnowledgeArticle.space_id == space_id)
+    if not sees_all_drafts:
+        stmt = stmt.where(
+            or_(
+                KnowledgeArticle.status != ArticleStatus.draft,
+                KnowledgeArticle.created_by_id == user.id,
+            )
+        )
+    like = f"%{query}%"
+    stmt = stmt.where(or_(KnowledgeArticle.title.ilike(like), KnowledgeArticle.content.ilike(like))).order_by(
+        KnowledgeArticle.updated_at.desc()
+    ).limit(50)
+    rows = (await session.execute(stmt)).scalars().all()
+    return [
+        KnowledgeSearchResultOut(article=KnowledgeArticleOut.model_validate(a), snippet=_article_snippet(a, query))
+        for a in rows
+    ]
+
+
 @router.post("/spaces/{space_id}/articles", response_model=KnowledgeArticleOut, status_code=status.HTTP_201_CREATED)
 async def create_article(
     space_id: uuid.UUID,
@@ -401,6 +477,7 @@ async def create_article(
     )
     session.add(article)
     await session.flush()
+    await _save_article_revision(session, article, user)
     return KnowledgeArticleOut.model_validate(article)
 
 
@@ -437,6 +514,74 @@ async def update_article(
     if body.position is not None:
         article.position = body.position
     await session.flush()
+    await _save_article_revision(session, article, user)
+    return KnowledgeArticleOut.model_validate(article)
+
+
+@router.get("/spaces/{space_id}/articles/{article_id}/revisions", response_model=list[KnowledgeArticleRevisionOut])
+async def list_article_revisions(
+    space_id: uuid.UUID,
+    article_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> list[KnowledgeArticleRevisionOut]:
+    space = await session.get(KnowledgeSpace, space_id)
+    if not space:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Space not found")
+    if not await can_read_space(session, user, space):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
+    article = await session.get(KnowledgeArticle, article_id)
+    if not article or article.space_id != space_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Article not found")
+    if not await can_view_article(session, user, article):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Article not found")
+    rows = (
+        await session.execute(
+            select(KnowledgeArticleRevision)
+            .where(
+                KnowledgeArticleRevision.space_id == space_id,
+                KnowledgeArticleRevision.article_id == article_id,
+            )
+            .order_by(KnowledgeArticleRevision.created_at.desc())
+            .limit(200)
+        )
+    ).scalars().all()
+    return [KnowledgeArticleRevisionOut.model_validate(x) for x in rows]
+
+
+@router.post("/spaces/{space_id}/articles/{article_id}/restore", response_model=KnowledgeArticleOut)
+async def restore_article_revision(
+    space_id: uuid.UUID,
+    article_id: uuid.UUID,
+    body: KnowledgeArticleRestoreIn,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> KnowledgeArticleOut:
+    space = await session.get(KnowledgeSpace, space_id)
+    if not space:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Space not found")
+    if not await can_edit_article(session, user, space):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
+    article = await session.get(KnowledgeArticle, article_id)
+    if not article or article.space_id != space_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Article not found")
+    rev = await session.scalar(
+        select(KnowledgeArticleRevision).where(
+            and_(
+                KnowledgeArticleRevision.id == body.revision_id,
+                KnowledgeArticleRevision.article_id == article_id,
+                KnowledgeArticleRevision.space_id == space_id,
+            )
+        )
+    )
+    if not rev:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Revision not found")
+    article.title = rev.title
+    article.content = rev.content
+    article.status = rev.status
+    article.parent_id = rev.parent_id
+    await session.flush()
+    await _save_article_revision(session, article, user)
     return KnowledgeArticleOut.model_validate(article)
 
 
@@ -460,3 +605,63 @@ async def delete_article(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Article not found")
     await session.delete(article)
     await session.commit()
+
+
+@router.get("/templates", response_model=list[KnowledgeTemplateOut])
+async def list_templates(
+    session: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+    space_id: uuid.UUID | None = None,
+) -> list[KnowledgeTemplateOut]:
+    stmt = select(KnowledgeTemplate).order_by(KnowledgeTemplate.name)
+    if space_id:
+        stmt = stmt.where(or_(KnowledgeTemplate.space_id == space_id, KnowledgeTemplate.space_id.is_(None)))
+    else:
+        stmt = stmt.where(KnowledgeTemplate.space_id.is_(None))
+    rows = (await session.execute(stmt)).scalars().all()
+    if user.is_superuser or await user_has_permission(session, user, KNOWLEDGE_MANAGE_ALL):
+        return [KnowledgeTemplateOut.model_validate(x) for x in rows]
+    filtered: list[KnowledgeTemplate] = []
+    for t in rows:
+        if t.space_id is None:
+            filtered.append(t)
+            continue
+        space = await session.get(KnowledgeSpace, t.space_id)
+        if space and await can_read_space(session, user, space):
+            filtered.append(t)
+    return [KnowledgeTemplateOut.model_validate(x) for x in filtered]
+
+
+@router.post("/templates", response_model=KnowledgeTemplateOut, status_code=status.HTTP_201_CREATED)
+async def create_template(
+    body: KnowledgeTemplateCreate,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> KnowledgeTemplateOut:
+    if body.space_id is None:
+        if not (user.is_superuser or await user_has_permission(session, user, KNOWLEDGE_MANAGE_ALL)):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
+    else:
+        space = await session.get(KnowledgeSpace, body.space_id)
+        if not space:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Space not found")
+        if not await can_edit_article(session, user, space):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
+    exists = await session.scalar(
+        select(KnowledgeTemplate.id).where(
+            KnowledgeTemplate.slug == body.slug,
+            KnowledgeTemplate.space_id == body.space_id,
+        )
+    )
+    if exists:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Template slug already exists")
+    row = KnowledgeTemplate(
+        name=body.name,
+        slug=body.slug,
+        content=body.content,
+        space_id=body.space_id,
+        created_by_id=user.id,
+    )
+    session.add(row)
+    await session.flush()
+    return KnowledgeTemplateOut.model_validate(row)

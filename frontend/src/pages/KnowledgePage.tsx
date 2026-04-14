@@ -7,13 +7,18 @@ import {
   addSpaceMember,
   createArticle,
   createKnowledgeSpace,
+  createKnowledgeTemplate,
   deleteArticle,
   getArticle,
   getKnowledgeSpace,
+  listArticleRevisions,
   listArticles,
   listKnowledgeSpaces,
+  listKnowledgeTemplates,
   listSpaceMembers,
   removeSpaceMember,
+  restoreArticleRevision,
+  searchArticles,
   searchSpaceUsers,
   updateArticle,
   updateSpaceMember,
@@ -23,11 +28,13 @@ import type {
   KnowledgeArticleCreate,
   KnowledgeArticleOut,
   KnowledgeArticleUpdate,
+  KnowledgeTemplateOut,
   SpaceMemberRole,
 } from "../api/knowledge";
 import { listSystems } from "../api/systems";
 import { AppShell } from "../components/AppShell";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { KnowledgeArticleReader, extractTocFromArticleHtml } from "../components/KnowledgeArticleReader";
 import { KnowledgeRichEditor } from "../components/KnowledgeRichEditor";
 import { useAuth } from "../context/AuthContext";
 import { PERM, hasPermission } from "../lib/permissions";
@@ -107,28 +114,49 @@ function ArticleTreeList({
   canEdit,
   onDeletePage,
   deletingArticleId,
+  activeArticleId,
+  collapsedIds,
+  onToggleCollapse,
 }: {
   nodes: ArticleTreeNode[];
   spaceId: string;
   canEdit: boolean;
   onDeletePage?: (id: string, title: string) => void;
   deletingArticleId?: string | null;
+  activeArticleId?: string | null;
+  collapsedIds?: Set<string>;
+  onToggleCollapse?: (id: string) => void;
 }) {
   if (!nodes.length) return null;
   return (
     <ul className="space-y-1">
       {nodes.map((n) => (
         <li key={n.id}>
-          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-transparent px-1 py-0.5 hover:border-slate-200 dark:hover:border-slate-600">
+          <div
+            className={`flex flex-wrap items-center gap-2 rounded-lg border px-1 py-0.5 ${
+              activeArticleId === n.id
+                ? "border-slate-300 bg-slate-100/80 dark:border-slate-600 dark:bg-slate-800/80"
+                : "border-transparent hover:border-slate-200 dark:hover:border-slate-600"
+            }`}
+          >
+            {n.children.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => onToggleCollapse?.(n.id)}
+                className="rounded px-1 text-xs text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+                title={collapsedIds?.has(n.id) ? "Развернуть" : "Свернуть"}
+              >
+                {collapsedIds?.has(n.id) ? "▸" : "▾"}
+              </button>
+            ) : (
+              <span className="w-3" />
+            )}
             <Link
               to={`/knowledge/${spaceId}/${n.id}`}
               className="font-medium text-slate-900 hover:text-sky-600 dark:text-white dark:hover:text-sky-400"
             >
               {n.title}
             </Link>
-            <span className="text-xs text-slate-500">
-              {n.status === "published" ? "Опубликовано" : "Черновик"}
-            </span>
             {canEdit && (
               <Link
                 to={`/knowledge/${spaceId}/new?parent=${n.id}`}
@@ -149,7 +177,7 @@ function ArticleTreeList({
               </button>
             )}
           </div>
-          {n.children.length > 0 && (
+          {n.children.length > 0 && !collapsedIds?.has(n.id) && (
             <div className="ml-3 mt-1 border-l-2 border-slate-200 pl-3 dark:border-slate-600">
               <ArticleTreeList
                 nodes={n.children}
@@ -157,6 +185,9 @@ function ArticleTreeList({
                 canEdit={canEdit}
                 onDeletePage={onDeletePage}
                 deletingArticleId={deletingArticleId}
+                activeArticleId={activeArticleId}
+                collapsedIds={collapsedIds}
+                onToggleCollapse={onToggleCollapse}
               />
             </div>
           )}
@@ -190,6 +221,18 @@ export function KnowledgePage() {
   const [newMemberRole, setNewMemberRole] = useState<SpaceMemberRole>("viewer");
   const [parentId, setParentId] = useState<string>("");
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; title: string } | null>(null);
+  const [searchQ, setSearchQ] = useState("");
+  const [templateId, setTemplateId] = useState("");
+  const [templateModalOpen, setTemplateModalOpen] = useState(false);
+  const [newTemplateName, setNewTemplateName] = useState("");
+  const [newTemplateSlug, setNewTemplateSlug] = useState("");
+  const [tocHeadings, setTocHeadings] = useState<{ id: string; text: string; level: number }[]>([]);
+  const [spaceSearchQ, setSpaceSearchQ] = useState("");
+  const [sidebarArticleSearchQ, setSidebarArticleSearchQ] = useState("");
+  const [collapsedArticleIds, setCollapsedArticleIds] = useState<Set<string>>(new Set());
+  /** Для существующей статьи — сразу режим чтения; для «new» — редактирование. */
+  const [readingMode, setReadingMode] = useState(() => articleId != null && articleId !== "new");
+  const [revisionsModalOpen, setRevisionsModalOpen] = useState(false);
 
   const isNew = articleId === "new";
 
@@ -239,6 +282,22 @@ export function KnowledgePage() {
     queryFn: () => getArticle(spaceId!, articleId!),
     enabled: !!spaceId && !!articleId && articleId !== "new",
     staleTime: 60_000,
+  });
+  const templatesQuery = useQuery({
+    queryKey: ["knowledge", "templates", spaceId ?? ""],
+    queryFn: () => listKnowledgeTemplates(spaceId),
+    enabled: !!spaceId,
+    staleTime: 60_000,
+  });
+  const searchQuery = useQuery({
+    queryKey: ["knowledge", "space", spaceId ?? "", "search", searchQ],
+    queryFn: () => searchArticles(spaceId!, searchQ),
+    enabled: !!spaceId && searchQ.trim().length >= 2,
+  });
+  const revisionsQuery = useQuery({
+    queryKey: ["knowledge", "space", spaceId ?? "", "article", articleId ?? "", "revisions"],
+    queryFn: () => listArticleRevisions(spaceId!, articleId!),
+    enabled: !!spaceId && !!articleId && articleId !== "new",
   });
 
   /** Стабильный ключ монтирования редактора: без смены при каждом символе, с remount после загрузки статьи с API */
@@ -299,6 +358,14 @@ export function KnowledgePage() {
     setParentId(art.parent_id ?? "");
   }, [articleId, articleQuery.data]);
 
+  useEffect(() => {
+    if (!articleId || articleId === "new") {
+      setReadingMode(false);
+      return;
+    }
+    setReadingMode(true);
+  }, [articleId]);
+
   const createMut = useMutation({
     mutationFn: ({ sid, body }: { sid: string; body: KnowledgeArticleCreate }) => createArticle(sid, body),
     onSuccess: async (created, vars) => {
@@ -310,6 +377,17 @@ export function KnowledgePage() {
       });
       await invalidateAndRefetch(qc, key);
     },
+  });
+  const createTemplateMut = useMutation({
+    mutationFn: createKnowledgeTemplate,
+    onSuccess: () => {
+      setTemplateModalOpen(false);
+      setNewTemplateName("");
+      setNewTemplateSlug("");
+      void qc.invalidateQueries({ queryKey: ["knowledge", "templates", spaceId ?? ""] });
+      toastSuccess("Шаблон сохранён");
+    },
+    onError: (e: unknown) => toastApiError(e, "Не удалось сохранить шаблон"),
   });
 
   const updateMut = useMutation({
@@ -335,6 +413,21 @@ export function KnowledgePage() {
       await invalidateAndRefetch(qc, ["knowledge", "space", v.sid, "articles"]);
       await invalidateAndRefetch(qc, ["knowledge", "space", v.sid, "article", v.aid]);
     },
+  });
+  const restoreRevisionMut = useMutation({
+    mutationFn: ({ sid, aid, rid }: { sid: string; aid: string; rid: string }) =>
+      restoreArticleRevision(sid, aid, rid),
+    onSuccess: async (restored, vars) => {
+      setTitle(restored.title);
+      setHtml(restored.content ?? "<p></p>");
+      setStatus(restored.status);
+      setParentId(restored.parent_id ?? "");
+      await invalidateAndRefetch(qc, ["knowledge", "space", vars.sid, "article", vars.aid]);
+      await invalidateAndRefetch(qc, ["knowledge", "space", vars.sid, "article", vars.aid, "revisions"]);
+      await invalidateAndRefetch(qc, ["knowledge", "space", vars.sid, "articles"]);
+      toastSuccess("Версия восстановлена");
+    },
+    onError: (e: unknown) => toastApiError(e, "Не удалось восстановить версию"),
   });
 
   const deleteArticleMut = useMutation({
@@ -445,6 +538,16 @@ export function KnowledgePage() {
   const article = articleQuery.data ?? null;
   const canEdit = space?.can_edit ?? false;
 
+  const showArticleReader = !!articleId && articleId !== "new" && (!canEdit || readingMode);
+
+  const articleTocItems = useMemo(() => {
+    if (!articleId || articleId === "new") return [];
+    if (!canEdit || readingMode) return extractTocFromArticleHtml(html);
+    return tocHeadings;
+  }, [articleId, canEdit, readingMode, html, tocHeadings]);
+
+  const tocLinksEnabled = !canEdit || readingMode;
+
   const handleSave = async () => {
     if (!spaceId || !canEdit) return;
     const t = title.trim();
@@ -524,8 +627,39 @@ export function KnowledgePage() {
   }, [spaceId, space, articleId, article, articlesQuery.data, parentId]);
 
   const spaces = spacesQuery.data ?? [];
+  const filteredSpaces = useMemo(() => {
+    const q = spaceSearchQ.trim().toLowerCase();
+    if (!q) return spaces;
+    return spaces.filter(
+      (s) =>
+        s.name.toLowerCase().includes(q) ||
+        s.slug.toLowerCase().includes(q) ||
+        (s.description ?? "").toLowerCase().includes(q),
+    );
+  }, [spaces, spaceSearchQ]);
   const articles = articlesQuery.data ?? [];
+  const templates = templatesQuery.data ?? [];
   const articleTree = useMemo(() => buildArticleTree(articles), [articles]);
+  const filteredArticleTree = useMemo(() => {
+    const q = sidebarArticleSearchQ.trim().toLowerCase();
+    if (!q) return articleTree;
+    const filterNodes = (nodes: ArticleTreeNode[]): ArticleTreeNode[] => {
+      const out: ArticleTreeNode[] = [];
+      for (const node of nodes) {
+        const childMatches = filterNodes(node.children);
+        const selfMatch = node.title.toLowerCase().includes(q);
+        if (selfMatch || childMatches.length > 0) {
+          out.push({ ...node, children: childMatches });
+        }
+      }
+      return out;
+    };
+    return filterNodes(articleTree);
+  }, [articleTree, sidebarArticleSearchQ]);
+  const recentArticles = useMemo(
+    () => [...articles].sort((a, b) => +new Date(b.updated_at) - +new Date(a.updated_at)).slice(0, 8),
+    [articles],
+  );
   const parentSelectOptions = useMemo(() => {
     if (!articleId || articleId === "new") {
       return flattenTreeForSelect(articleTree, { skipIds: new Set() });
@@ -534,6 +668,10 @@ export function KnowledgePage() {
     return flattenTreeForSelect(articleTree, { skipIds: skip });
   }, [articleTree, articles, articleId]);
   const systemsOptions = systemsForSpaceQuery.data ?? [];
+  const selectedTemplate = useMemo(
+    () => templates.find((t) => t.id === templateId) ?? null,
+    [templates, templateId],
+  );
 
   const memberIds = useMemo(
     () => new Set((membersQuery.data ?? []).map((m) => m.user_id)),
@@ -559,6 +697,24 @@ export function KnowledgePage() {
     });
   }
 
+  function applyTemplate(nextTemplateId: string) {
+    setTemplateId(nextTemplateId);
+    const tpl = templates.find((t) => t.id === nextTemplateId);
+    if (!tpl) return;
+    if (!title.trim()) setTitle(tpl.name);
+    if (!slug.trim()) setSlug(slugify(tpl.name));
+    if (!html || html === "<p></p>") setHtml(tpl.content || "<p></p>");
+  }
+
+  function toggleArticleCollapsed(id: string) {
+    setCollapsedArticleIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
   if (!spaceId) {
     return (
       <AppShell title="База знаний" subtitle="Пространства, к которым у вас есть доступ" wide>
@@ -568,6 +724,13 @@ export function KnowledgePage() {
           </p>
         )}
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <input
+            type="search"
+            value={spaceSearchQ}
+            onChange={(e) => setSpaceSearchQ(e.target.value)}
+            placeholder="Поиск пространства..."
+            className="min-w-[260px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+          />
           {canManageSpaces && (
             <button
               type="button"
@@ -592,20 +755,34 @@ export function KnowledgePage() {
             администратором.
           </p>
         )}
-        {!loadingRoot && spaces.length > 0 && (
+        {!loadingRoot && filteredSpaces.length > 0 && (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {spaces.map((sp) => (
+            {filteredSpaces.map((sp) => (
               <Link
                 key={sp.id}
                 to={`/knowledge/${sp.id}`}
                 className="rounded-2xl border border-slate-200/80 bg-white/80 p-5 shadow-soft transition hover:border-sky-300 hover:shadow-md dark:border-slate-700 dark:bg-slate-900/60"
               >
-                <h3 className="font-semibold text-slate-900 dark:text-white">{sp.name}</h3>
-                <p className="font-mono text-xs text-slate-500">{sp.slug}</p>
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="font-semibold text-slate-900 dark:text-white">{sp.name}</h3>
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                      sp.can_edit
+                        ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300"
+                        : "bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200"
+                    }`}
+                  >
+                    {sp.can_edit ? "Редактирование" : "Просмотр"}
+                  </span>
+                </div>
+                <p className="mt-1 font-mono text-xs text-slate-500">{sp.slug}</p>
                 {sp.description && <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">{sp.description}</p>}
               </Link>
             ))}
           </div>
+        )}
+        {!loadingRoot && spaceSearchQ.trim() && filteredSpaces.length === 0 && (
+          <p className="text-slate-500">По вашему поиску пространства не найдены.</p>
         )}
 
         {createSpaceOpen && canManageSpaces && (
@@ -839,33 +1016,133 @@ export function KnowledgePage() {
             )}
           </div>
         )}
-        {loadingList && <p className="text-slate-500">Загрузка…</p>}
-        {!loadingList && canEdit && (
-          <div className="mb-4 flex flex-wrap items-center gap-3">
-            <Link
-              to={`/knowledge/${spaceId}/new`}
-              className="inline-flex rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-md hover:bg-sky-600"
-            >
-              + Статья в корне
-            </Link>
-            <span className="text-xs text-slate-500">Дочерние страницы — кнопка «+ Дочерняя» у нужной статьи ниже.</span>
+        <div className="grid gap-5 lg:grid-cols-[290px_1fr]">
+          <aside className="space-y-3 lg:sticky lg:top-24 lg:self-start">
+            {!loadingList && canEdit && (
+              <Link
+                to={`/knowledge/${spaceId}/new`}
+                className="inline-flex w-full justify-center rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-md hover:bg-sky-600"
+              >
+                + Статья в корне
+              </Link>
+            )}
+            {!loadingList && articleTree.length > 0 && (
+              <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-4 dark:border-slate-700 dark:bg-slate-900/60">
+                <h3 className="mb-2 text-sm font-semibold text-slate-900 dark:text-slate-100">Навигация по статьям</h3>
+                <input
+                  type="search"
+                  value={sidebarArticleSearchQ}
+                  onChange={(e) => setSidebarArticleSearchQ(e.target.value)}
+                  placeholder="Поиск по дереву..."
+                  className="mb-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs dark:border-slate-600 dark:bg-slate-800"
+                />
+                <ArticleTreeList
+                  nodes={filteredArticleTree}
+                  spaceId={spaceId!}
+                  canEdit={!!canEdit}
+                  onDeletePage={canEdit ? confirmDeletePage : undefined}
+                  deletingArticleId={
+                    deleteArticleMut.isPending && deleteArticleMut.variables != null
+                      ? deleteArticleMut.variables
+                      : null
+                  }
+                  collapsedIds={collapsedArticleIds}
+                  onToggleCollapse={toggleArticleCollapsed}
+                />
+              </div>
+            )}
+            {!loadingList && recentArticles.length > 0 && (
+              <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-4 dark:border-slate-700 dark:bg-slate-900/60">
+                <h3 className="mb-2 text-sm font-semibold text-slate-900 dark:text-slate-100">Последние изменения</h3>
+                <ul className="space-y-1">
+                  {recentArticles.map((a) => (
+                    <li key={a.id} className="text-sm">
+                      <Link to={`/knowledge/${spaceId}/${a.id}`} className="text-sky-600 hover:underline dark:text-sky-400">
+                        {a.title}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </aside>
+          <div className="space-y-4">
+            {loadingList && <p className="text-slate-500">Загрузка…</p>}
+            {!loadingList && (
+              <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-3 dark:border-slate-700 dark:bg-slate-900/60">
+                <label className="mb-1 block text-xs font-medium text-slate-500">Поиск по статьям пространства</label>
+                <input
+                  type="search"
+                  value={searchQ}
+                  onChange={(e) => setSearchQ(e.target.value)}
+                  placeholder="Минимум 2 символа: заголовок или текст"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+                />
+                {searchQ.trim().length >= 2 && (
+                  <div className="mt-2 space-y-2">
+                    {searchQuery.isPending && <p className="text-xs text-slate-500">Ищем…</p>}
+                    {!searchQuery.isPending && (searchQuery.data ?? []).length === 0 && (
+                      <p className="text-xs text-slate-500">Ничего не найдено</p>
+                    )}
+                    {(searchQuery.data ?? []).slice(0, 10).map((row) => (
+                      <Link
+                        key={row.article.id}
+                        to={`/knowledge/${spaceId}/${row.article.id}`}
+                        className="block rounded-lg border border-slate-100 bg-slate-50/60 px-3 py-2 hover:border-sky-300 dark:border-slate-700 dark:bg-slate-800/50"
+                      >
+                        <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{row.article.title}</p>
+                        {row.snippet && <p className="text-xs text-slate-500">{row.snippet}</p>}
+                      </Link>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            {!loadingList && !articles.length && <p className="text-slate-500">В этом пространстве пока нет статей.</p>}
           </div>
-        )}
-        {!loadingList && articleTree.length > 0 && (
-          <ArticleTreeList
-            nodes={articleTree}
-            spaceId={spaceId!}
-            canEdit={!!canEdit}
-            onDeletePage={canEdit ? confirmDeletePage : undefined}
-            deletingArticleId={
-              deleteArticleMut.isPending && deleteArticleMut.variables != null
-                ? deleteArticleMut.variables
-                : null
-            }
-          />
-        )}
-        {!loadingList && !articles.length && (
-          <p className="text-slate-500">В этом пространстве пока нет статей.</p>
+        </div>
+        {templateModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
+            <div className="glass w-full max-w-md rounded-2xl p-6 shadow-soft-lg">
+              <h2 className="mb-4 text-lg font-semibold text-slate-900 dark:text-white">Новый шаблон</h2>
+              <form
+                className="space-y-3"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  createTemplateMut.mutate({
+                    name: newTemplateName.trim(),
+                    slug: (newTemplateSlug.trim() || slugify(newTemplateName)).toLowerCase(),
+                    content: html,
+                    space_id: spaceId ?? null,
+                  });
+                }}
+              >
+                <input
+                  required
+                  value={newTemplateName}
+                  onChange={(e) => {
+                    setNewTemplateName(e.target.value);
+                    if (!newTemplateSlug) setNewTemplateSlug(slugify(e.target.value));
+                  }}
+                  placeholder="Название шаблона"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+                />
+                <input
+                  required
+                  value={newTemplateSlug}
+                  onChange={(e) => setNewTemplateSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
+                  placeholder="slug"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+                />
+                <div className="flex justify-end gap-2">
+                  <button type="button" onClick={() => setTemplateModalOpen(false)} className="rounded-xl bg-slate-200 px-4 py-2 text-sm dark:bg-slate-700">Отмена</button>
+                  <button type="submit" disabled={createTemplateMut.isPending} className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60">
+                    {createTemplateMut.isPending ? "Сохранение…" : "Сохранить"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
         )}
         {deletePageDialog}
       </AppShell>
@@ -896,7 +1173,27 @@ export function KnowledgePage() {
         )}
         {loadingNew && <p className="text-slate-500">Загрузка…</p>}
         {!loadingNew && space && (
-          <div className="space-y-4">
+          <div className="grid gap-5 lg:grid-cols-[290px_1fr]">
+            <aside className="space-y-3 lg:sticky lg:top-24 lg:self-start">
+              <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-4 dark:border-slate-700 dark:bg-slate-900/60">
+                <h3 className="mb-2 text-sm font-semibold text-slate-900 dark:text-slate-100">Навигация по статьям</h3>
+                <input
+                  type="search"
+                  value={sidebarArticleSearchQ}
+                  onChange={(e) => setSidebarArticleSearchQ(e.target.value)}
+                  placeholder="Поиск по дереву..."
+                  className="mb-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs dark:border-slate-600 dark:bg-slate-800"
+                />
+                <ArticleTreeList
+                  nodes={filteredArticleTree}
+                  spaceId={spaceId!}
+                  canEdit={!!canEdit}
+                  collapsedIds={collapsedArticleIds}
+                  onToggleCollapse={toggleArticleCollapsed}
+                />
+              </div>
+            </aside>
+            <div className="space-y-4">
             {localError && (
               <p className="rounded-xl bg-red-50 px-4 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
                 {localError}
@@ -924,6 +1221,35 @@ export function KnowledgePage() {
                     disabled={!canEdit}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 font-mono text-sm dark:border-slate-600 dark:bg-slate-800"
                   />
+                </div>
+                <div>
+                  <label className="mb-1 block text-sm text-slate-600 dark:text-slate-400">Шаблон</label>
+                  <div className="flex gap-2">
+                    <select
+                      value={templateId}
+                      onChange={(e) => applyTemplate(e.target.value)}
+                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+                    >
+                      <option value="">— Без шаблона —</option>
+                      {templates.map((t: KnowledgeTemplateOut) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name}
+                        </option>
+                      ))}
+                    </select>
+                    {canEdit && (
+                      <button
+                        type="button"
+                        onClick={() => setTemplateModalOpen(true)}
+                        className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs dark:border-slate-600 dark:bg-slate-800"
+                      >
+                        + Шаблон
+                      </button>
+                    )}
+                  </div>
+                  {selectedTemplate?.content ? (
+                    <p className="mt-1 text-xs text-slate-500">Шаблон применён к содержимому</p>
+                  ) : null}
                 </div>
               </div>
               <div className="rounded-xl border border-slate-200 bg-white/80 p-3 dark:border-slate-700 dark:bg-slate-900/50">
@@ -954,10 +1280,34 @@ export function KnowledgePage() {
                 editable={canEdit}
                 onHtmlChange={setHtml}
                 onUploadImage={uploadImage}
+                onHeadingsChange={setTocHeadings}
               />
             </div>
+            {tocHeadings.length > 0 && (
+              <div className="rounded-xl border border-slate-200 bg-white/80 p-3 text-sm dark:border-slate-700 dark:bg-slate-900/60">
+                <p className="mb-2 text-xs font-medium text-slate-500">Оглавление</p>
+                <ul className="space-y-1">
+                  {tocHeadings.map((h) => (
+                    <li key={`${h.id}-${h.text}`} className={h.level > 1 ? "ml-3 text-xs" : ""}>
+                      {h.text}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             {canEdit && (
               <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setReadingMode((v) => !v)}
+                  className={`rounded-xl border px-4 py-2 text-sm ${
+                    readingMode
+                      ? "border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300"
+                      : "border-slate-300 dark:border-slate-600"
+                  }`}
+                >
+                  {readingMode ? "Сейчас: Чтение" : "Сейчас: Редактирование"}
+                </button>
                 <button
                   type="button"
                   onClick={() => navigate(`/knowledge/${spaceId}`)}
@@ -978,6 +1328,7 @@ export function KnowledgePage() {
             {!canEdit && (
               <p className="text-sm text-slate-500">У вас нет прав на редактирование в этом пространстве.</p>
             )}
+            </div>
           </div>
         )}
         {deletePageDialog}
@@ -987,20 +1338,30 @@ export function KnowledgePage() {
 
   return (
     <AppShell title={title || "Статья"} subtitle={space?.name} wide>
-      <nav className="mb-4 flex flex-wrap gap-2 text-sm text-slate-500">
-        {breadcrumbs.map((b, i) => (
-          <span key={`${b.label}-${i}`} className="flex items-center gap-2">
-            {i > 0 && <span className="text-slate-300">/</span>}
-            {b.to ? (
-              <Link to={b.to} className="text-sky-600 hover:underline dark:text-sky-400">
-                {b.label}
-              </Link>
-            ) : (
-              <span className="text-slate-800 dark:text-slate-200">{b.label}</span>
-            )}
+      {!showArticleReader && (
+        <nav className="mb-4 flex flex-wrap gap-2 text-sm text-slate-500">
+          {breadcrumbs.map((b, i) => (
+            <span key={`${b.label}-${i}`} className="flex items-center gap-2">
+              {i > 0 && <span className="text-slate-300">/</span>}
+              {b.to ? (
+                <Link to={b.to} className="text-sky-600 hover:underline dark:text-sky-400">
+                  {b.label}
+                </Link>
+              ) : (
+                <span className="text-slate-800 dark:text-slate-200">{b.label}</span>
+              )}
+            </span>
+          ))}
+        </nav>
+      )}
+      {canEdit && !readingMode && (
+        <div className="mb-4 rounded-xl border border-slate-200/80 bg-white/80 px-3 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-300">
+          Режим:{" "}
+          <span className="font-semibold">
+            {readingMode ? "Чтение" : "Редактирование"}
           </span>
-        ))}
-      </nav>
+        </div>
+      )}
       {errorArticle && (
         <p className="mb-4 rounded-xl bg-red-50 px-4 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
           {errorArticle}
@@ -1013,92 +1374,305 @@ export function KnowledgePage() {
       )}
       {loadingArticle && <p className="text-slate-500">Загрузка…</p>}
       {!loadingArticle && (
-        <div className="space-y-4">
-          <div className="grid gap-4 lg:grid-cols-[1fr_220px]">
-            <div className="space-y-3">
-              <div>
-                <label className="mb-1 block text-sm text-slate-600 dark:text-slate-400">Заголовок</label>
-                <input
-                  value={title}
-                  onChange={(e) => {
-                    setTitle(e.target.value);
-                  }}
-                  disabled={!canEdit}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800"
-                />
+        <div className="grid gap-5 lg:grid-cols-[290px_1fr]">
+          <aside className="space-y-3 lg:sticky lg:top-24 lg:self-start">
+            <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-4 dark:border-slate-700 dark:bg-slate-900/60">
+              <h3 className="mb-2 text-sm font-semibold text-slate-900 dark:text-slate-100">Навигация по статьям</h3>
+              <ArticleTreeList
+                nodes={filteredArticleTree}
+                spaceId={spaceId!}
+                canEdit={!!canEdit}
+                onDeletePage={canEdit ? confirmDeletePage : undefined}
+                deletingArticleId={
+                  deleteArticleMut.isPending && deleteArticleMut.variables != null
+                    ? deleteArticleMut.variables
+                    : null
+                }
+                activeArticleId={articleId ?? null}
+                collapsedIds={collapsedArticleIds}
+                onToggleCollapse={toggleArticleCollapsed}
+              />
+            </div>
+            {!showArticleReader && recentArticles.length > 0 && (
+              <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-4 dark:border-slate-700 dark:bg-slate-900/60">
+                <h3 className="mb-2 text-sm font-semibold text-slate-900 dark:text-slate-100">Последние изменения</h3>
+                <ul className="space-y-1">
+                  {recentArticles.map((a) => (
+                    <li key={a.id} className="text-sm">
+                      <Link to={`/knowledge/${spaceId}/${a.id}`} className="text-sky-600 hover:underline dark:text-sky-400">
+                        {a.title}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
               </div>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-white/80 p-3 dark:border-slate-700 dark:bg-slate-900/50">
-              <p className="mb-2 text-xs font-medium text-slate-500">Статус</p>
-              <select
-                value={status}
-                onChange={(e) => setStatus(e.target.value as "draft" | "published")}
-                disabled={!canEdit}
-                className="w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
-              >
-                <option value="draft">Черновик</option>
-                <option value="published">Опубликовано</option>
-              </select>
-              {article && (
-                <p className="mt-3 text-xs text-slate-500">
-                  Обновлено: {new Date(article.updated_at).toLocaleString("ru-RU")}
-                </p>
-              )}
-            </div>
+            )}
+          </aside>
+          <div className="space-y-4">
+            {showArticleReader ? (
+              <>
+                {canEdit && (
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      disabled={deleteArticleMut.isPending || updateMut.isPending}
+                      onClick={() =>
+                        articleId &&
+                        articleId !== "new" &&
+                        confirmDeletePage(articleId, title.trim() || article?.title || "Страница")
+                      }
+                      className="rounded-xl border border-red-200 bg-white px-4 py-2 text-sm text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-900/50 dark:bg-slate-800 dark:text-red-300 dark:hover:bg-red-950/40"
+                    >
+                      {deleteArticleMut.isPending ? "Удаление…" : "Удалить"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setReadingMode(false)}
+                      className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600"
+                    >
+                      Редактировать
+                    </button>
+                    {!!articleId && articleId !== "new" && (
+                      <button
+                        type="button"
+                        onClick={() => setRevisionsModalOpen(true)}
+                        className="rounded-xl border border-slate-300 px-4 py-2 text-sm dark:border-slate-600"
+                      >
+                        История версий
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/knowledge/${spaceId}`)}
+                      className="rounded-xl bg-slate-200 px-4 py-2 text-sm dark:bg-slate-700"
+                    >
+                      Назад
+                    </button>
+                  </div>
+                )}
+                <header className="border-b border-slate-200/80 pb-6 dark:border-slate-700/80">
+                  <h1 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-50 sm:text-4xl">
+                    {title || "Без заголовка"}
+                  </h1>
+                  {article && (
+                    <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+                      Обновлено {new Date(article.updated_at).toLocaleString("ru-RU")}
+                      {" · "}
+                      {status === "published" ? "Опубликовано" : "Черновик"}
+                    </p>
+                  )}
+                </header>
+                <div
+                  className={
+                    articleTocItems.length > 0
+                      ? "grid gap-8 pt-2 lg:grid-cols-[minmax(0,1fr)_min(13rem,28%)]"
+                      : "pt-2"
+                  }
+                >
+                  <div className="min-w-0">
+                    <KnowledgeArticleReader html={html} />
+                  </div>
+                  {articleTocItems.length > 0 && (
+                    <aside className="max-h-[min(70vh,calc(100vh-7rem))] overflow-y-auto text-sm lg:sticky lg:top-24 lg:self-start">
+                      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">На странице</p>
+                      <ul className="space-y-1.5 border-l border-slate-200 pl-3 dark:border-slate-600">
+                        {articleTocItems.map((h) => (
+                          <li
+                            key={`${h.id}-${h.text}`}
+                            className={h.level > 1 ? "ml-2 text-xs" : "text-[0.9375rem] leading-snug"}
+                          >
+                            <a
+                              href={`#${h.id}`}
+                              className="text-slate-600 hover:text-sky-600 dark:text-slate-300 dark:hover:text-sky-400"
+                            >
+                              {h.text}
+                            </a>
+                          </li>
+                        ))}
+                      </ul>
+                    </aside>
+                  )}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="grid gap-4 lg:grid-cols-[1fr_220px]">
+                  <div className="space-y-3">
+                    <div>
+                      <label className="mb-1 block text-sm text-slate-600 dark:text-slate-400">Заголовок</label>
+                      <input
+                        value={title}
+                        onChange={(e) => {
+                          setTitle(e.target.value);
+                        }}
+                        disabled={!canEdit}
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800"
+                      />
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-white/80 p-3 dark:border-slate-700 dark:bg-slate-900/50">
+                    <p className="mb-2 text-xs font-medium text-slate-500">Статус</p>
+                    <select
+                      value={status}
+                      onChange={(e) => setStatus(e.target.value as "draft" | "published")}
+                      disabled={!canEdit}
+                      className="w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+                    >
+                      <option value="draft">Черновик</option>
+                      <option value="published">Опубликовано</option>
+                    </select>
+                    {article && (
+                      <p className="mt-3 text-xs text-slate-500">
+                        Обновлено: {new Date(article.updated_at).toLocaleString("ru-RU")}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <ParentPageSelect
+                  value={parentId}
+                  onChange={setParentId}
+                  disabled={!canEdit}
+                  options={parentSelectOptions}
+                  pending={articlesQuery.isPending}
+                />
+                <div
+                  className={
+                    articleTocItems.length > 0
+                      ? "grid gap-6 lg:grid-cols-[minmax(0,1fr)_min(240px,32%)]"
+                      : ""
+                  }
+                >
+                  <div className="min-w-0">
+                    <p className="mb-2 text-sm font-medium text-slate-700 dark:text-slate-300">Содержание</p>
+                    <KnowledgeRichEditor
+                      articleKey={knowledgeEditorKey}
+                      initialHtml={html}
+                      editable={canEdit}
+                      onHtmlChange={setHtml}
+                      onUploadImage={uploadImage}
+                      onHeadingsChange={setTocHeadings}
+                    />
+                  </div>
+                  {articleTocItems.length > 0 && (
+                    <aside className="max-h-[min(70vh,calc(100vh-7rem))] overflow-y-auto rounded-xl border border-slate-200 bg-white/80 p-3 text-sm lg:sticky lg:top-24 lg:self-start dark:border-slate-700 dark:bg-slate-900/60">
+                      <p className="mb-2 text-xs font-medium text-slate-500">Оглавление</p>
+                      <ul className="space-y-1">
+                        {articleTocItems.map((h) => (
+                          <li
+                            key={`${h.id}-${h.text}`}
+                            className={h.level > 1 ? "ml-3 text-xs" : "text-sm"}
+                          >
+                            {tocLinksEnabled ? (
+                              <a
+                                href={`#${h.id}`}
+                                className="text-sky-600 hover:underline dark:text-sky-400"
+                              >
+                                {h.text}
+                              </a>
+                            ) : (
+                              <span className="text-slate-700 dark:text-slate-200">{h.text}</span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </aside>
+                  )}
+                </div>
+                {canEdit && (
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      disabled={deleteArticleMut.isPending || updateMut.isPending}
+                      onClick={() =>
+                        articleId &&
+                        articleId !== "new" &&
+                        confirmDeletePage(articleId, title.trim() || article?.title || "Страница")
+                      }
+                      className="rounded-xl border border-red-200 bg-white px-4 py-2 text-sm text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-900/50 dark:bg-slate-800 dark:text-red-300 dark:hover:bg-red-950/40"
+                    >
+                      {deleteArticleMut.isPending ? "Удаление…" : "Удалить страницу"}
+                    </button>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setReadingMode((v) => !v)}
+                        className="rounded-xl border border-slate-300 px-4 py-2 text-sm dark:border-slate-600"
+                      >
+                        Чтение
+                      </button>
+                      {!!articleId && articleId !== "new" && (
+                        <button
+                          type="button"
+                          onClick={() => setRevisionsModalOpen(true)}
+                          className="rounded-xl border border-slate-300 px-4 py-2 text-sm dark:border-slate-600"
+                        >
+                          История версий
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/knowledge/${spaceId}`)}
+                        className="rounded-xl bg-slate-200 px-4 py-2 text-sm dark:bg-slate-700"
+                      >
+                        Назад
+                      </button>
+                      <button
+                        type="button"
+                        disabled={updateMut.isPending}
+                        onClick={() => void handleSave()}
+                        className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600 disabled:opacity-60"
+                      >
+                        {updateMut.isPending ? "Сохранение…" : "Сохранить"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+            {!canEdit && !showArticleReader && (
+              <p className="text-sm text-slate-500">У вас нет прав на редактирование в этом пространстве.</p>
+            )}
           </div>
-          <ParentPageSelect
-            value={parentId}
-            onChange={setParentId}
-            disabled={!canEdit}
-            options={parentSelectOptions}
-            pending={articlesQuery.isPending}
-          />
-          <div>
-            <p className="mb-2 text-sm font-medium text-slate-700 dark:text-slate-300">Содержание</p>
-            <KnowledgeRichEditor
-              articleKey={knowledgeEditorKey}
-              initialHtml={html}
-              editable={canEdit}
-              onHtmlChange={setHtml}
-              onUploadImage={uploadImage}
-            />
-          </div>
-          {canEdit && (
-            <div className="flex flex-wrap items-center justify-between gap-2">
+        </div>
+      )}
+      {revisionsModalOpen && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
+          <div className="glass w-full max-w-lg rounded-2xl p-6 shadow-soft-lg">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-base font-semibold text-slate-900 dark:text-white">История версий</h3>
               <button
                 type="button"
-                disabled={deleteArticleMut.isPending || updateMut.isPending}
-                onClick={() =>
-                  articleId &&
-                  articleId !== "new" &&
-                  confirmDeletePage(articleId, title.trim() || article?.title || "Страница")
-                }
-                className="rounded-xl border border-red-200 bg-white px-4 py-2 text-sm text-red-700 hover:bg-red-50 disabled:opacity-50 dark:border-red-900/50 dark:bg-slate-800 dark:text-red-300 dark:hover:bg-red-950/40"
+                onClick={() => setRevisionsModalOpen(false)}
+                className="rounded-lg px-2 py-1 text-sm text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
               >
-                {deleteArticleMut.isPending ? "Удаление…" : "Удалить страницу"}
+                ✕
               </button>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => navigate(`/knowledge/${spaceId}`)}
-                  className="rounded-xl bg-slate-200 px-4 py-2 text-sm dark:bg-slate-700"
-                >
-                  Назад
-                </button>
-                <button
-                  type="button"
-                  disabled={updateMut.isPending}
-                  onClick={() => void handleSave()}
-                  className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600 disabled:opacity-60"
-                >
-                  {updateMut.isPending ? "Сохранение…" : "Сохранить"}
-                </button>
-              </div>
             </div>
-          )}
-          {!canEdit && (
-            <p className="text-sm text-slate-500">У вас нет прав на редактирование в этом пространстве.</p>
-          )}
+            <div className="max-h-80 space-y-1 overflow-auto">
+              {(revisionsQuery.data ?? []).length === 0 && (
+                <p className="text-sm text-slate-500">Версий пока нет.</p>
+              )}
+              {(revisionsQuery.data ?? []).map((rev) => (
+                <button
+                  key={rev.id}
+                  type="button"
+                  disabled={!canEdit || restoreRevisionMut.isPending}
+                  onClick={() =>
+                    canEdit &&
+                    spaceId &&
+                    articleId &&
+                    restoreRevisionMut.mutate(
+                      { sid: spaceId, aid: articleId, rid: rev.id },
+                      { onSuccess: () => setRevisionsModalOpen(false) },
+                    )
+                  }
+                  className="block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-sm hover:bg-slate-50 disabled:opacity-60 dark:border-slate-600 dark:bg-slate-800"
+                >
+                  {new Date(rev.created_at).toLocaleString("ru-RU")}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       )}
       {deletePageDialog}

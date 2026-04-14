@@ -85,3 +85,41 @@ class KnowledgeArticleOut(ORMModel):
     created_by_id: uuid.UUID | None
     created_at: datetime
     updated_at: datetime
+
+
+class KnowledgeTemplateCreate(BaseModel):
+    name: str = Field(..., max_length=255)
+    slug: str = Field(..., max_length=128, pattern=r"^[a-z0-9-]+$")
+    content: str | None = None
+    space_id: uuid.UUID | None = None
+
+
+class KnowledgeTemplateOut(ORMModel):
+    id: uuid.UUID
+    name: str
+    slug: str
+    content: str | None
+    space_id: uuid.UUID | None
+    created_by_id: uuid.UUID | None
+    created_at: datetime
+
+
+class KnowledgeArticleRevisionOut(ORMModel):
+    id: uuid.UUID
+    article_id: uuid.UUID
+    space_id: uuid.UUID
+    title: str
+    content: str | None
+    status: ArticleStatus
+    parent_id: uuid.UUID | None
+    saved_by_id: uuid.UUID | None
+    created_at: datetime
+
+
+class KnowledgeArticleRestoreIn(BaseModel):
+    revision_id: uuid.UUID
+
+
+class KnowledgeSearchResultOut(ORMModel):
+    article: KnowledgeArticleOut
+    snippet: str | None = None

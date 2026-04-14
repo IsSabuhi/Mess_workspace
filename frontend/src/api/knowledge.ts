@@ -57,6 +57,33 @@ export type KnowledgeArticleOut = {
   updated_at: string;
 };
 
+export type KnowledgeTemplateOut = {
+  id: string;
+  name: string;
+  slug: string;
+  content: string | null;
+  space_id: string | null;
+  created_by_id: string | null;
+  created_at: string;
+};
+
+export type KnowledgeArticleRevisionOut = {
+  id: string;
+  article_id: string;
+  space_id: string;
+  title: string;
+  content: string | null;
+  status: ArticleStatus;
+  parent_id: string | null;
+  saved_by_id: string | null;
+  created_at: string;
+};
+
+export type KnowledgeSearchResultOut = {
+  article: KnowledgeArticleOut;
+  snippet: string | null;
+};
+
 export type KnowledgeArticleCreate = {
   title: string;
   slug: string;
@@ -150,6 +177,46 @@ export async function updateArticle(
 export async function deleteArticle(spaceId: string, articleId: string): Promise<void> {
   await apiFetch(`/api/v1/knowledge/spaces/${spaceId}/articles/${articleId}`, {
     method: "DELETE",
+  });
+}
+
+export async function listKnowledgeTemplates(spaceId?: string): Promise<KnowledgeTemplateOut[]> {
+  const q = spaceId ? `?space_id=${encodeURIComponent(spaceId)}` : "";
+  return apiFetch<KnowledgeTemplateOut[]>(`/api/v1/knowledge/templates${q}`);
+}
+
+export async function createKnowledgeTemplate(body: {
+  name: string;
+  slug: string;
+  content?: string | null;
+  space_id?: string | null;
+}): Promise<KnowledgeTemplateOut> {
+  return apiFetch<KnowledgeTemplateOut>("/api/v1/knowledge/templates", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function searchArticles(spaceId: string, q: string): Promise<KnowledgeSearchResultOut[]> {
+  const qs = q.trim() ? `?q=${encodeURIComponent(q.trim())}` : "";
+  return apiFetch<KnowledgeSearchResultOut[]>(`/api/v1/knowledge/spaces/${spaceId}/search/articles${qs}`);
+}
+
+export async function listArticleRevisions(
+  spaceId: string,
+  articleId: string,
+): Promise<KnowledgeArticleRevisionOut[]> {
+  return apiFetch<KnowledgeArticleRevisionOut[]>(`/api/v1/knowledge/spaces/${spaceId}/articles/${articleId}/revisions`);
+}
+
+export async function restoreArticleRevision(
+  spaceId: string,
+  articleId: string,
+  revisionId: string,
+): Promise<KnowledgeArticleOut> {
+  return apiFetch<KnowledgeArticleOut>(`/api/v1/knowledge/spaces/${spaceId}/articles/${articleId}/restore`, {
+    method: "POST",
+    body: JSON.stringify({ revision_id: revisionId }),
   });
 }
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { Editor } from "@tiptap/core";
+import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
 import { Color, FontFamily, TextStyle } from "@tiptap/extension-text-style";
 import { TableKit } from "@tiptap/extension-table";
 import { Image } from "@tiptap/extension-image";
@@ -8,6 +9,31 @@ import { Highlight } from "@tiptap/extension-highlight";
 import { Placeholder } from "@tiptap/extension-placeholder";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
+import { createLowlight } from "lowlight";
+import bash from "highlight.js/lib/languages/bash";
+import javascript from "highlight.js/lib/languages/javascript";
+import typescript from "highlight.js/lib/languages/typescript";
+import python from "highlight.js/lib/languages/python";
+import json from "highlight.js/lib/languages/json";
+import xml from "highlight.js/lib/languages/xml";
+import css from "highlight.js/lib/languages/css";
+import sql from "highlight.js/lib/languages/sql";
+
+const lowlight = createLowlight();
+lowlight.register("bash", bash);
+lowlight.register("javascript", javascript);
+lowlight.register("typescript", typescript);
+lowlight.register("python", python);
+lowlight.register("json", json);
+lowlight.register("xml", xml);
+lowlight.register("css", css);
+lowlight.register("sql", sql);
+lowlight.register("plaintext", () => ({
+  name: "Plaintext",
+  aliases: ["text", "txt"],
+  disableAutodetect: true,
+  contains: [],
+}));
 
 type Props = {
   articleKey: string;
@@ -15,6 +41,7 @@ type Props = {
   editable: boolean;
   onHtmlChange: (html: string) => void;
   onUploadImage: (file: File) => Promise<string>;
+  onHeadingsChange?: (rows: { id: string; text: string; level: number }[]) => void;
 };
 
 const FONTS = [
@@ -22,6 +49,18 @@ const FONTS = [
   { label: "DM Sans", value: "DM Sans, system-ui, sans-serif" },
   { label: "Georgia", value: "Georgia, serif" },
   { label: "Monospace", value: "ui-monospace, monospace" },
+];
+
+const CODE_LANGUAGES = [
+  { label: "Код (авто)", value: "" },
+  { label: "Bash", value: "bash" },
+  { label: "JavaScript", value: "javascript" },
+  { label: "TypeScript", value: "typescript" },
+  { label: "Python", value: "python" },
+  { label: "JSON", value: "json" },
+  { label: "XML/HTML", value: "xml" },
+  { label: "CSS", value: "css" },
+  { label: "SQL", value: "sql" },
 ];
 
 function collectClipboardImageFiles(event: ClipboardEvent): File[] {
@@ -62,6 +101,7 @@ export function KnowledgeRichEditor({
   editable,
   onHtmlChange,
   onUploadImage,
+  onHeadingsChange,
 }: Props) {
   const editorRef = useRef<Editor | null>(null);
   const linkInputRef = useRef<HTMLInputElement>(null);
@@ -101,7 +141,9 @@ export function KnowledgeRichEditor({
         StarterKit.configure({
           heading: { levels: [1, 2, 3] },
           link: { openOnClick: false, autolink: true },
+          codeBlock: false,
         }),
+        CodeBlockLowlight.configure({ lowlight }),
         TableKit.configure({
           table: { resizable: false },
         }),
@@ -118,7 +160,17 @@ export function KnowledgeRichEditor({
       ],
       content: initialHtml || "<p></p>",
       onUpdate: ({ editor: ed }) => {
-        onHtmlChange(ed.getHTML());
+        const html = ed.getHTML();
+        onHtmlChange(html);
+        if (onHeadingsChange) {
+          const doc = new DOMParser().parseFromString(html, "text/html");
+          const hs = [...doc.querySelectorAll("h1, h2, h3")].map((el, idx) => ({
+            id: `toc-${idx}`,
+            text: (el.textContent || "").trim(),
+            level: Number(el.tagName.slice(1)),
+          }));
+          onHeadingsChange(hs.filter((x) => x.text));
+        }
       },
       editorProps: {
         attributes: {
@@ -221,9 +273,9 @@ export function KnowledgeRichEditor({
   }
 
   return (
-    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900/40">
+    <div className="overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900/40">
       {editable && (
-        <div className="flex flex-wrap items-center gap-1 border-b border-slate-100 bg-slate-50/90 px-2 py-1.5 dark:border-slate-700 dark:bg-slate-800/80">
+        <div className="sticky top-0 z-20 flex flex-wrap items-center gap-1 border-b border-slate-100 bg-slate-50/95 px-2 py-2 backdrop-blur dark:border-slate-700 dark:bg-slate-800/90">
           <select
             key={articleKey}
             title="Шрифт текста (применяется к выделению или к вводу)"
@@ -294,7 +346,7 @@ export function KnowledgeRichEditor({
           >
             Фон
           </button>
-          <span className="select-none text-slate-300 dark:text-slate-600">|</span>
+          <span className="mx-0.5 select-none text-slate-300 dark:text-slate-600">|</span>
           <button
             type="button"
             title="Заголовок первого уровня (крупный). Повторное нажатие — обычный абзац"
@@ -345,12 +397,32 @@ export function KnowledgeRichEditor({
           </button>
           <button
             type="button"
-            title="Блок кода (моноширинный)"
+            title="Блок кода (выберите язык справа)"
             className="rounded-lg px-2 py-1 text-xs hover:bg-slate-200 dark:hover:bg-slate-700"
             onClick={() => editor.chain().focus().toggleCodeBlock().run()}
           >
             &lt;/&gt;
           </button>
+          <select
+            title="Язык блока кода"
+            aria-label="Язык кода"
+            className="max-w-[130px] rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs dark:border-slate-600 dark:bg-slate-800"
+            value={editor.getAttributes("codeBlock").language ?? ""}
+            onChange={(e) => {
+              const lang = e.target.value;
+              if (!editor.isActive("codeBlock")) {
+                editor.chain().focus().setCodeBlock({ language: lang || "plaintext" }).run();
+                return;
+              }
+              editor.chain().focus().updateAttributes("codeBlock", { language: lang || "plaintext" }).run();
+            }}
+          >
+            {CODE_LANGUAGES.map((l) => (
+              <option key={l.label} value={l.value}>
+                {l.label}
+              </option>
+            ))}
+          </select>
           <button
             type="button"
             title="Ссылка: сначала выделите текст, затем нажмите и введите URL. Пустой URL — убрать ссылку"

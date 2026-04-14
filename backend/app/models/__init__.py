@@ -7,12 +7,15 @@ from app.models.position import Position
 from app.models.knowledge import (
     ArticleStatus,
     KnowledgeArticle,
+    KnowledgeArticleRevision,
     KnowledgeSpace,
     KnowledgeSpaceMember,
+    KnowledgeTemplate,
     SpaceMemberRole,
 )
 from app.models.role import Permission, Role, RolePermission, UserRole
 from app.models.system import System
+from app.models.system_setting import SystemSetting
 from app.models.task import Task, TaskPriority
 from app.models.task_tag import TaskTag, TaskTagLink
 from app.models.user import User
@@ -30,13 +33,16 @@ __all__ = [
     "Board",
     "KanbanColumn",
     "KnowledgeArticle",
+    "KnowledgeArticleRevision",
     "KnowledgeSpace",
     "KnowledgeSpaceMember",
+    "KnowledgeTemplate",
     "Permission",
     "Role",
     "RolePermission",
     "SpaceMemberRole",
     "System",
+    "SystemSetting",
     "Task",
     "TaskPriority",
     "TaskTag",

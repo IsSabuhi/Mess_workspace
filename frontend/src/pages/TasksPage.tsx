@@ -188,6 +188,11 @@ function DraggableTaskCard({
                   Просрочено
                 </span>
               )}
+              {task.archived_at && (
+                <span className="rounded-full bg-slate-200 px-1.5 py-0.5 font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-200">
+                  Архив
+                </span>
+              )}
               {assigneesLine && (
                 <span className="truncate" title={(task.assignees ?? []).map((a) => a.full_name).join(", ")}>
                   {assigneesLine}
@@ -285,6 +290,7 @@ export function TasksPage() {
 
   const [filterSystem, setFilterSystem] = useState<string>("");
   const [showOverdueOnly, setShowOverdueOnly] = useState(false);
+  const [archiveFilter, setArchiveFilter] = useState<"active" | "archived" | "all">("active");
   /** Пусто — все задачи; иначе показываются задачи, у которых есть хотя бы один из выбранных тегов */
   const [filterTagIds, setFilterTagIds] = useState<string[]>([]);
   const [tagFilterExpanded, setTagFilterExpanded] = useState(false);
@@ -340,12 +346,15 @@ export function TasksPage() {
       hasPermission(user, PERM.TASKS_UPDATE_ALL))
   );
 
-  const tasksQueryKey = useMemo(() => ["tasks", user?.id ?? ""] as const, [user?.id]);
+  const tasksQueryKey = useMemo(
+    () => ["tasks", user?.id ?? "", archiveFilter] as const,
+    [user?.id, archiveFilter],
+  );
 
   const boardQuery = useQuery({ queryKey: ["board", "default"], queryFn: getDefaultBoard });
   const tasksQuery = useQuery({
     queryKey: tasksQueryKey,
-    queryFn: () => listTasks({ include_archived: false }),
+    queryFn: () => listTasks({ include_archived: archiveFilter !== "active" }),
   });
   const systemsQuery = useQuery({
     queryKey: ["systems"],
@@ -595,6 +604,19 @@ export function TasksPage() {
       toastApiError(e, "Не удалось сохранить задачу");
     },
   });
+  const archiveMut = useMutation({
+    mutationFn: ({ id, archived }: { id: string; archived: boolean }) =>
+      updateTask(id, { archived_at: archived ? new Date().toISOString() : null }),
+    onSuccess: (updated) => {
+      qc.setQueriesData<TaskOut[]>({ queryKey: tasksQueryKey }, (old) =>
+        old ? old.map((t) => (t.id === updated.id ? { ...t, ...updated } : t)) : old,
+      );
+      if (drawerTask?.id === updated.id) setDrawerTask(updated);
+      void qc.invalidateQueries({ queryKey: tasksQueryKey, refetchType: "none" });
+      toastSuccess(updated.archived_at ? "Задача отправлена в архив" : "Задача восстановлена из архива");
+    },
+    onError: (e: unknown) => toastApiError(e, "Не удалось изменить статус архива"),
+  });
 
   const columns = board?.columns ?? [];
   const sortedCols = useMemo(
@@ -606,6 +628,9 @@ export function TasksPage() {
     const m = new Map<string, TaskOut[]>();
     for (const c of sortedCols) m.set(c.id, []);
     for (const t of tasks) {
+      const isArchived = !!t.archived_at;
+      if (archiveFilter === "active" && isArchived) continue;
+      if (archiveFilter === "archived" && !isArchived) continue;
       if (filterSystem && t.system_id !== filterSystem) continue;
       if (showOverdueOnly && !taskIsOverdueForDashboard(t)) continue;
       if (filterTagIds.length > 0) {
@@ -617,15 +642,18 @@ export function TasksPage() {
       if (arr) arr.push(t);
     }
     return m;
-  }, [tasks, sortedCols, filterSystem, showOverdueOnly, filterTagIds]);
+  }, [tasks, sortedCols, archiveFilter, filterSystem, showOverdueOnly, filterTagIds]);
 
   const overdueById = useMemo(() => {
     const s = new Set<string>();
     for (const t of tasks) {
+      const isArchived = !!t.archived_at;
+      if (archiveFilter === "active" && isArchived) continue;
+      if (archiveFilter === "archived" && !isArchived) continue;
       if (taskIsOverdueForDashboard(t)) s.add(t.id);
     }
     return s;
-  }, [tasks]);
+  }, [tasks, archiveFilter]);
 
   async function openDrawer(task: TaskOut) {
     setDrawerTaskId(task.id);
@@ -678,6 +706,10 @@ export function TasksPage() {
         tag_ids: editTagIds,
       },
     });
+  }
+
+  function toggleArchiveTask(task: TaskOut) {
+    archiveMut.mutate({ id: task.id, archived: !task.archived_at });
   }
 
   function handleCreate(e: React.FormEvent) {
@@ -930,6 +962,18 @@ export function TasksPage() {
           />
           Показывать только просроченные
         </label>
+        <label className="flex items-center gap-2 text-sm">
+          <span className="text-slate-600 dark:text-slate-400">Показ</span>
+          <select
+            value={archiveFilter}
+            onChange={(e) => setArchiveFilter(e.target.value as "active" | "archived" | "all")}
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+          >
+            <option value="active">Только активные</option>
+            <option value="archived">Только архив</option>
+            <option value="all">Все задачи</option>
+          </select>
+        </label>
         {canCreate && (canViewAllSystems || boardSystems.length > 0) && (
           <button
             type="button"
@@ -1060,11 +1104,11 @@ export function TasksPage() {
                                 <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
                                   {col.name}
                                 </h3>
-                      {col.is_done_column ? (
+                      {/* {col.is_done_column ? (
                         <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200">
                           выполнено
                         </span>
-                      ) : null}
+                      ) : null} */}
                       <span
                         className="inline-flex min-h-[1.5rem] min-w-[1.5rem] items-center justify-center rounded-full bg-gradient-to-br from-slate-100 to-slate-200/90 px-2 text-xs font-bold tabular-nums text-slate-700 shadow-inner ring-1 ring-slate-200/80 dark:from-slate-700 dark:to-slate-800 dark:text-slate-100 dark:ring-slate-600/80"
                         title="Задач в колонке (с учётом фильтра по системе)"
@@ -1347,6 +1391,18 @@ export function TasksPage() {
               </div>
               {drawerCanEdit && (
                 <div className="flex justify-end gap-2 pb-2 pt-2">
+                  <button
+                    type="button"
+                    disabled={archiveMut.isPending}
+                    onClick={() => toggleArchiveTask(drawerTask)}
+                    className="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-60 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+                  >
+                    {archiveMut.isPending
+                      ? "Обновление…"
+                      : drawerTask.archived_at
+                        ? "Восстановить"
+                        : "В архив"}
+                  </button>
                   <button
                     type="button"
                     onClick={closeDrawer}

@@ -47,3 +47,11 @@ class SystemMemberOut(BaseModel):
     full_name: str
     email: EmailStr
     position: PositionBrief | None = None
+
+
+class TaskArchiveSettingsOut(BaseModel):
+    auto_archive_done_days: int = Field(ge=1, le=3650)
+
+
+class TaskArchiveSettingsUpdate(BaseModel):
+    auto_archive_done_days: int = Field(ge=1, le=3650)

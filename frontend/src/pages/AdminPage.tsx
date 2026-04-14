@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Navigate, useSearchParams } from "react-router-dom";
 
@@ -15,7 +15,7 @@ import {
 import type { PositionOut } from "../api/positions";
 import { listPositions } from "../api/positions";
 import type { SystemOut } from "../api/systems";
-import { listSystems } from "../api/systems";
+import { getTaskArchiveSettings, listSystems, updateTaskArchiveSettings } from "../api/systems";
 import type { UserCreate, UserUpdate } from "../api/users";
 import { createUser, deleteUser, listUsers, updateUser } from "../api/users";
 import { AppShell } from "../components/AppShell";
@@ -24,7 +24,7 @@ import { invalidateAndRefetch } from "../lib/queryClient";
 import { PERM, canAdminAccess, hasPermission } from "../lib/permissions";
 import { toastApiError, toastError, toastSuccess } from "../lib/toast";
 
-type Tab = "users" | "roles";
+type Tab = "users" | "roles" | "system-settings";
 
 function groupPermissions(perms: PermissionOut[]): Map<string, PermissionOut[]> {
   const m = new Map<string, PermissionOut[]>();
@@ -357,7 +357,12 @@ export function AdminPage() {
   const { state } = useAuth();
   const [params, setParams] = useSearchParams();
   const tabParam = params.get("tab");
-  const tab: Tab = tabParam === "roles" ? "roles" : "users";
+  const tab: Tab =
+    tabParam === "roles"
+      ? "roles"
+      : tabParam === "system-settings"
+        ? "system-settings"
+        : "users";
 
   const setTab = useCallback(
     (t: Tab) => {
@@ -377,18 +382,25 @@ export function AdminPage() {
 
   const showUsers = hasPermission(user, PERM.USERS_MANAGE);
   const showRoles = hasPermission(user, PERM.ROLES_MANAGE);
+  const canManageTaskArchive = hasPermission(user, PERM.SYSTEMS_MANAGE);
 
   useEffect(() => {
-    if (!showUsers && showRoles && tab === "users") setTab("roles");
-    if (showUsers && !showRoles && tab === "roles") setTab("users");
-  }, [showUsers, showRoles, tab, setTab]);
+    const visibleTabs: Tab[] = [];
+    if (showUsers) visibleTabs.push("users");
+    if (showRoles) visibleTabs.push("roles");
+    if (canManageTaskArchive) visibleTabs.push("system-settings");
+    if (!visibleTabs.length) return;
+    if (!visibleTabs.includes(tab)) {
+      setTab(visibleTabs[0]);
+    }
+  }, [showUsers, showRoles, canManageTaskArchive, tab, setTab]);
 
   return (
     <AppShell
       title="Администрирование"
-      subtitle="Пользователи, роли и права доступа"
+      subtitle="Пользователи, роли и системные настройки"
     >
-      {(showUsers || showRoles) && (
+      {(showUsers || showRoles || canManageTaskArchive) && (
         <div className="mb-6 flex flex-wrap gap-2 rounded-2xl border border-slate-200/80 bg-white/70 p-1.5 dark:border-slate-700 dark:bg-slate-900/50">
           {showUsers && (
             <button
@@ -416,12 +428,91 @@ export function AdminPage() {
               Роли и права
             </button>
           )}
+          {canManageTaskArchive && (
+            <button
+              type="button"
+              onClick={() => setTab("system-settings")}
+              className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
+                tab === "system-settings"
+                  ? "bg-sky-500 text-white shadow-md"
+                  : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+              }`}
+            >
+              Настройки системы
+            </button>
+          )}
         </div>
       )}
 
       {tab === "users" && showUsers && <UsersSection />}
       {tab === "roles" && showRoles && <RolesSection />}
+      {tab === "system-settings" && canManageTaskArchive && <SystemSettingsSection />}
     </AppShell>
+  );
+}
+
+function SystemSettingsSection() {
+  const qc = useQueryClient();
+  const [autoArchiveDays, setAutoArchiveDays] = useState("60");
+  const taskArchiveQuery = useQuery({
+    queryKey: ["admin", "task-archive-settings"],
+    queryFn: getTaskArchiveSettings,
+  });
+  useEffect(() => {
+    if (!taskArchiveQuery.data) return;
+    setAutoArchiveDays(String(taskArchiveQuery.data.auto_archive_done_days));
+  }, [taskArchiveQuery.data]);
+  const taskArchiveMut = useMutation({
+    mutationFn: (days: number) => updateTaskArchiveSettings(days),
+    onSuccess: async (saved) => {
+      setAutoArchiveDays(String(saved.auto_archive_done_days));
+      toastSuccess("Период автоархивации сохранён");
+      await qc.invalidateQueries({ queryKey: ["admin", "task-archive-settings"] });
+    },
+    onError: (e: unknown) => toastApiError(e, "Не удалось сохранить период автоархивации"),
+  });
+
+  return (
+    <div className="space-y-6">
+      <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-5 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
+        <h3 className="text-base font-semibold text-slate-900 dark:text-white">Автоархивация выполненных задач</h3>
+        <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+          Задачи в колонке «выполнено» автоматически переходят в архив после указанного периода.
+        </p>
+        <form
+          className="mt-4 flex flex-wrap items-end gap-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const parsed = Number(autoArchiveDays);
+            if (!Number.isFinite(parsed) || parsed < 1) {
+              toastError("Введите число дней от 1");
+              return;
+            }
+            taskArchiveMut.mutate(Math.floor(parsed));
+          }}
+        >
+          <label className="text-sm text-slate-700 dark:text-slate-300">
+            Период (дней)
+            <input
+              type="number"
+              min={1}
+              max={3650}
+              value={autoArchiveDays}
+              onChange={(e) => setAutoArchiveDays(e.target.value)}
+              disabled={taskArchiveQuery.isPending || taskArchiveMut.isPending}
+              className="ml-2 w-28 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+            />
+          </label>
+          <button
+            type="submit"
+            disabled={taskArchiveQuery.isPending || taskArchiveMut.isPending}
+            className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-md hover:bg-sky-600 disabled:opacity-60"
+          >
+            {taskArchiveMut.isPending ? "Сохранение…" : "Сохранить"}
+          </button>
+        </form>
+      </div>
+    </div>
   );
 }
 

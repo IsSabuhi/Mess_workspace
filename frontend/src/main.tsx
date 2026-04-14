@@ -10,6 +10,8 @@ import { ThemeProvider } from "./context/ThemeContext";
 import { queryClient } from "./lib/queryClient";
 import "sonner/dist/styles.css";
 import "./index.css";
+/* После index.css: цвета токенов hljs не должны проигрывать нашим базовым правилам */
+import "highlight.js/styles/vs2015.min.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

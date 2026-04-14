@@ -39,7 +39,11 @@ export function canViewSchedule(user: UserMe): boolean {
 }
 
 export function canAdminAccess(user: UserMe): boolean {
-  return hasPermission(user, PERM.USERS_MANAGE) || hasPermission(user, PERM.ROLES_MANAGE);
+  return (
+    hasPermission(user, PERM.USERS_MANAGE) ||
+    hasPermission(user, PERM.ROLES_MANAGE) ||
+    hasPermission(user, PERM.SYSTEMS_MANAGE)
+  );
 }
 
 /** Сводки и аналитика по задачам всей команды (главная /team-dashboard). */

@@ -11,7 +11,15 @@ from app.deps import get_current_user, require_permission
 from app.models import System, Task, User, UserSystem
 from app.permissions import SYSTEMS_MANAGE
 from app.schemas.position import PositionBrief
-from app.schemas.system import SystemCreate, SystemMemberOut, SystemOut, SystemUpdate
+from app.schemas.system import (
+    SystemCreate,
+    SystemMemberOut,
+    SystemOut,
+    SystemUpdate,
+    TaskArchiveSettingsOut,
+    TaskArchiveSettingsUpdate,
+)
+from app.services.task_archive import get_task_auto_archive_days, set_task_auto_archive_days
 
 router = APIRouter(prefix="/systems", tags=["systems"])
 
@@ -143,3 +151,22 @@ async def delete_system(
         )
     await session.delete(s)
     await session.flush()
+
+
+@router.get("/settings/task-archive", response_model=TaskArchiveSettingsOut)
+async def get_task_archive_settings(
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(require_permission(SYSTEMS_MANAGE))],
+) -> TaskArchiveSettingsOut:
+    days = await get_task_auto_archive_days(session)
+    return TaskArchiveSettingsOut(auto_archive_done_days=days)
+
+
+@router.patch("/settings/task-archive", response_model=TaskArchiveSettingsOut)
+async def update_task_archive_settings(
+    body: TaskArchiveSettingsUpdate,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(require_permission(SYSTEMS_MANAGE))],
+) -> TaskArchiveSettingsOut:
+    days = await set_task_auto_archive_days(session, body.auto_archive_done_days)
+    return TaskArchiveSettingsOut(auto_archive_done_days=days)

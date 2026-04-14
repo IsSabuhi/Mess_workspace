@@ -21,6 +21,7 @@ from app.models.task import task_assignees_table
 from app.permissions import TASKS_CREATE, TASKS_READ_ASSIGNED
 from app.schemas.task import ColumnMini, SystemMini, TagMini, TaskCreate, TaskOut, TaskUpdate, UserMini
 from app.services.authz import user_has_permission, user_sees_all_tasks
+from app.services.task_archive import auto_archive_done_tasks
 from app.services.task_policy import can_delete_task, can_read_task, can_update_task
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -109,6 +110,7 @@ async def list_tasks(
     column_id: uuid.UUID | None = None,
     include_archived: bool = False,
 ) -> list[TaskOut]:
+    await auto_archive_done_tasks(session)
     stmt = select(Task).options(*_TASK_LOAD).order_by(Task.position, Task.created_at)
     stmt = await _apply_task_list_scope(session, user, stmt)
     if not include_archived:
@@ -244,7 +246,7 @@ async def update_task(
         task.due_at = body.due_at
     if body.position is not None:
         task.position = body.position
-    if body.archived_at is not None:
+    if "archived_at" in body.model_fields_set:
         task.archived_at = body.archived_at
     if body.tag_ids is not None:
         task.tags = await _resolve_tags(session, body.tag_ids)

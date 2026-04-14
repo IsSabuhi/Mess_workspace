@@ -266,9 +266,6 @@ export function ManagerHomeApprovalOverdue({ tasks, showApproval, showOverdue }:
               <AlertCircle className="h-5 w-5 text-amber-600 dark:text-amber-400" />
               <div>
                 <h3 className="font-semibold text-slate-900 dark:text-white">На согласовании</h3>
-                <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-                  Колонки с «соглас» в названии или slug approval / agreement
-                </p>
               </div>
             </div>
             <Link to="/tasks" className="text-sm font-medium text-sky-600 hover:underline dark:text-sky-400">
@@ -351,9 +348,6 @@ export function ManagerHomeApprovalOverdue({ tasks, showApproval, showOverdue }:
               <AlertCircle className="h-5 w-5 text-red-600 dark:text-red-400" />
               <div>
                 <h3 className="font-semibold text-slate-900 dark:text-white">Просроченные задачи команды</h3>
-                <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-                  Срок в прошлом, задача не в колонке «выполнено»
-                </p>
               </div>
             </div>
             <Link to="/tasks" className="text-sm font-medium text-sky-600 hover:underline dark:text-sky-400">

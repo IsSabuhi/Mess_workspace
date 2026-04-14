@@ -34,6 +34,10 @@ export type SystemUpdate = {
   is_active?: boolean;
 };
 
+export type TaskArchiveSettingsOut = {
+  auto_archive_done_days: number;
+};
+
 export async function listSystems(activeOnly = true): Promise<SystemOut[]> {
   const q = activeOnly ? "?active_only=true" : "?active_only=false";
   return apiFetch<SystemOut[]>(`/api/v1/systems${q}`);
@@ -59,4 +63,15 @@ export async function deleteSystem(systemId: string): Promise<void> {
 
 export async function listSystemMembers(systemId: string): Promise<SystemMemberOut[]> {
   return apiFetch<SystemMemberOut[]>(`/api/v1/systems/${systemId}/members`);
+}
+
+export async function getTaskArchiveSettings(): Promise<TaskArchiveSettingsOut> {
+  return apiFetch<TaskArchiveSettingsOut>("/api/v1/systems/settings/task-archive");
+}
+
+export async function updateTaskArchiveSettings(auto_archive_done_days: number): Promise<TaskArchiveSettingsOut> {
+  return apiFetch<TaskArchiveSettingsOut>("/api/v1/systems/settings/task-archive", {
+    method: "PATCH",
+    body: JSON.stringify({ auto_archive_done_days }),
+  });
 }
