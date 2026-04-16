@@ -39,3 +39,6 @@ frontend/pnpm-debug.log*
 .idea/
 .DS_Store
 Thumbs.db
+
+userData_mes.xlsx
+userData_mes_заполнено.xlsx

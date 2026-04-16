@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    database_url: str = "postgresql+asyncpg://dev:devuser1111@192.168.0.108:5432/mess_todo"
+    database_url: str = "postgresql+asyncpg://dev:devuser1111@172.24.230.140:5432/mess_workspace"
     secret_key: str = "change-me"
     access_token_expire_minutes: int = 60
     refresh_token_expire_days: int = 14
