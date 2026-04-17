@@ -87,13 +87,16 @@ export function SystemsPage() {
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     setFormError(null);
-    const payload = {
-      name: name.trim(),
-      slug: slug.trim().toLowerCase().replace(/[^a-z0-9-]/g, ""),
-      description: description.trim() || null,
-      sort_order: sortOrder,
-    };
+    const normalizedSlug = slug.trim().toLowerCase().replace(/[^a-z0-9-]/g, "");
     if (editingSystem) {
+      const payload: Parameters<typeof updateSystem>[1] = {
+        name: name.trim(),
+        description: description.trim() || null,
+        sort_order: sortOrder,
+      };
+      if (normalizedSlug) {
+        payload.slug = normalizedSlug;
+      }
       try {
         await updateMut.mutateAsync({ id: editingSystem.id, body: payload });
         setModal(false);
@@ -107,6 +110,16 @@ export function SystemsPage() {
       }
       return;
     }
+    if (!normalizedSlug) {
+      setFormError("Slug обязателен и должен содержать только a-z, 0-9 и '-'");
+      return;
+    }
+    const payload = {
+      name: name.trim(),
+      slug: normalizedSlug,
+      description: description.trim() || null,
+      sort_order: sortOrder,
+    };
     createMut.mutate(payload);
   }
 

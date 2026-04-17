@@ -15,7 +15,7 @@ class ScheduleUserRow(BaseModel):
     email: str
     schedule_mode: str
     systems_label: str
-    work_schedule_kind: str = Field(description="five_two | shift — из справочника сотрудника")
+    work_schedule_kind: str = Field(description="five_two | shift | two_two — из справочника сотрудника")
     gender: str = Field(description="male | female | unspecified — для 5/2 из пола считаются 8 ч или 7.2 ч")
     row_kind: str = Field(
         description="shift | five_two | fixed | manual — для подсветки строки",
@@ -37,12 +37,38 @@ class ScheduleGroupOut(BaseModel):
     users: list[ScheduleUserRow]
 
 
+class ShiftStaffingNoteOut(BaseModel):
+    """В системе меньше сменщиков, чем требуемый минимум на смену — правило недостижимо."""
+
+    system_id: uuid.UUID
+    system_name: str
+    shift_staff_total: int
+    message: str
+
+
+class ShiftCoverageWarningOut(BaseModel):
+    """В этот день у сменщиков системы «на работе» меньше min, «о»/«у» и пустые ячейки не считаются."""
+
+    system_id: uuid.UUID
+    system_name: str
+    day: int
+    working_count: int
+    shift_staff_total: int
+    message: str
+
+
 class ScheduleMonthOut(BaseModel):
     year: int
     month: int
     days_in_month: int
     days: list[ScheduleDayInfo]
     groups: list[ScheduleGroupOut]
+    min_shift_staff_required: int = Field(
+        2,
+        description="Минимум сменщиков «на работе» в день по каждой системе (проверка покрытия)",
+    )
+    shift_staffing_notes: list[ShiftStaffingNoteOut] = Field(default_factory=list)
+    shift_coverage_warnings: list[ShiftCoverageWarningOut] = Field(default_factory=list)
 
 
 class ScheduleCellPatch(BaseModel):
@@ -69,6 +95,21 @@ class ScheduleAutofillIn(BaseModel):
 
 class ScheduleAutofillOut(BaseModel):
     cells_written: int
+
+
+class ScheduleRegenerateIn(BaseModel):
+    year: int = Field(..., ge=2000, le=2100)
+    month: int = Field(..., ge=1, le=12)
+
+
+class ScheduleExcelImportOut(BaseModel):
+    year: int
+    month: int
+    sheet_used: str
+    users_matched: int
+    rows_parsed: int
+    cells_imported: int
+    unmatched_names: list[str] = Field(default_factory=list)
 
 
 class ScheduleUserModePatch(BaseModel):

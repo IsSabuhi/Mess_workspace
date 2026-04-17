@@ -186,7 +186,7 @@ async def list_employee_directory(
     ),
     work_schedule_kind: str | None = Query(
         None,
-        description="Фильтр по графику (five_two / shift). Нет профиля → five_two.",
+        description="Фильтр по графику (five_two / shift / two_two). Нет профиля → five_two.",
     ),
 ) -> list[EmployeeDirectoryRowOut]:
     stmt = (
@@ -201,6 +201,8 @@ async def list_employee_directory(
     )
 
     cond = []
+    # В справочнике сотрудников показываем только сотрудников с назначенной должностью.
+    cond.append(User.position_id.is_not(None))
     if not include_inactive_users:
         cond.append(User.is_active.is_(True))
     if search:

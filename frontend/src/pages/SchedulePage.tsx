@@ -9,14 +9,22 @@ function scheduleRowTitle(row: {
   work_schedule_kind: string;
   gender: string;
 }): string {
-  const graph =
-    row.work_schedule_kind === "shift"
-      ? "Сменщик"
-      : `5/2 · ${row.gender === "female" ? "7.2 ч" : "8 ч"} (будни)`;
+  const graph = isShiftKind(row.work_schedule_kind)
+    ? row.work_schedule_kind === "two_two"
+      ? "2/2"
+      : "Сменный"
+    : `5/2 · ${row.gender === "female" ? "7.2 ч" : "8 ч"} (будни)`;
   return `${row.full_name}\n${row.email}\nСистемы: ${row.systems_label}\nГрафик: ${graph}`;
 }
 
-import { getScheduleMonth, patchScheduleCell, postScheduleAutofill, type ScheduleDayInfo, type ScheduleUserRow } from "../api/schedule";
+import {
+  getScheduleMonth,
+  patchScheduleCell,
+  postScheduleAutofill,
+  postScheduleRegenerate,
+  type ScheduleDayInfo,
+  type ScheduleUserRow,
+} from "../api/schedule";
 import { AppShell } from "../components/AppShell";
 import { useAuth } from "../context/AuthContext";
 import { shiftWorkerRowClass } from "../lib/shiftWorkerRowStyle";
@@ -57,9 +65,13 @@ function rowBgClass(kind: string): string {
   return "bg-slate-50/80 dark:bg-slate-900/90 dark:text-slate-100";
 }
 
+function isShiftKind(kind: string): boolean {
+  return kind === "shift" || kind === "two_two";
+}
+
 /** Подсветка строки: сменщики из справочника — палитра как в Excel; остальное — по виду ячеек. */
 function scheduleTableRowClass(row: ScheduleUserRow): string {
-  if (row.work_schedule_kind === "shift") {
+  if (isShiftKind(row.work_schedule_kind)) {
     return shiftWorkerRowClass(row.user_id);
   }
   return rowBgClass(row.row_kind);
@@ -74,15 +86,19 @@ function formatHoursTotal(v: number): string {
   return rounded.toFixed(1).replace(/\.0$/, "");
 }
 
-function dayHeaderClass(d: ScheduleDayInfo | undefined): string {
-  if (!d) return "";
+function dayHeaderClass(d: ScheduleDayInfo | undefined, coverageGap?: boolean): string {
+  const gap =
+    coverageGap === true
+      ? " ring-2 ring-inset ring-rose-400/80 dark:ring-rose-500/55"
+      : "";
+  if (!d) return gap.trimStart();
   if (d.is_ru_holiday) {
-    return "bg-amber-100/95 text-amber-950 dark:bg-amber-950/60 dark:text-amber-100 dark:ring-1 dark:ring-inset dark:ring-amber-800/50";
+    return `bg-amber-100/95 text-amber-950 dark:bg-amber-950/60 dark:text-amber-100 dark:ring-1 dark:ring-inset dark:ring-amber-800/50${gap}`;
   }
   if (d.is_weekend) {
-    return "bg-slate-100/90 text-slate-600 dark:bg-slate-700/90 dark:text-slate-200 dark:ring-1 dark:ring-inset dark:ring-slate-600/40";
+    return `bg-slate-100/90 text-slate-600 dark:bg-slate-700/90 dark:text-slate-200 dark:ring-1 dark:ring-inset dark:ring-slate-600/40${gap}`;
   }
-  return "text-slate-600 dark:text-slate-400";
+  return `text-slate-600 dark:text-slate-400${gap}`;
 }
 
 export function SchedulePage() {
@@ -112,6 +128,11 @@ export function SchedulePage() {
     return m;
   }, [scheduleQuery.data?.days]);
 
+  const coverageGapDays = useMemo(() => {
+    const ws = scheduleQuery.data?.shift_coverage_warnings ?? [];
+    return new Set(ws.map((w) => w.day));
+  }, [scheduleQuery.data?.shift_coverage_warnings]);
+
   const patchMut = useMutation({
     mutationFn: patchScheduleCell,
     onSuccess: async () => {
@@ -132,6 +153,18 @@ export function SchedulePage() {
       await qc.invalidateQueries({ queryKey: ["schedule", "month", year, month] });
     },
     onError: (e) => toastApiError(e, "Автозаполнение не выполнено"),
+  });
+  const regenerateMut = useMutation({
+    mutationFn: () =>
+      postScheduleRegenerate({
+        year,
+        month,
+      }),
+    onSuccess: async (data) => {
+      toastSuccess(`Перегенерация выполнена: ${data.cells_written} ячеек`);
+      await qc.invalidateQueries({ queryKey: ["schedule", "month", year, month] });
+    },
+    onError: (e) => toastApiError(e, "Перегенерация не выполнена"),
   });
 
   const daysInMonth = scheduleQuery.data?.days_in_month ?? new Date(year, month, 0).getDate();
@@ -206,6 +239,15 @@ export function SchedulePage() {
               >
                 {autofillMut.isPending ? "Заполнение…" : "Автозаполнение"}
               </button>
+              <button
+                type="button"
+                disabled={regenerateMut.isPending}
+                onClick={() => regenerateMut.mutate()}
+                className="rounded-xl bg-violet-600 px-4 py-2 text-sm font-medium text-white shadow hover:bg-violet-700 disabled:opacity-60 dark:bg-violet-500 dark:text-slate-950 dark:hover:bg-violet-400"
+                title="Перегенерировать месяц с учетом уже введенных вручную смен"
+              >
+                {regenerateMut.isPending ? "Перегенерация…" : "Перегенерировать по ручным"}
+              </button>
             </>
           )}
           {!canManage && (
@@ -231,7 +273,8 @@ export function SchedulePage() {
               <p className="mt-1 text-xs">
                 Колонка «Часы» — сумма только числовых ячеек (8, 7.2, 11, 3…); буквы не входят. «Часы» и «Система»
                 не закреплены — прокрутите таблицу вправо, чтобы увидеть конец месяца без перекрытий; слева закреплено только
-                ФИО.
+                ФИО. Для сменщиков по каждой системе считается покрытие: в день должно быть не меньше двух человек «на работе»;
+                отпуск <span className="font-mono">о</span>, учёба <span className="font-mono">у</span> и пустые ячейки в расчёт не входят — см. блок предупреждений над таблицей и розовую обводку дат.
               </p>
               <p className="mt-1 text-xs">
                 <span className="font-mono">о</span> отпуск / праздник РФ (будни) · <span className="font-mono">у</span> учёба ·{" "}
@@ -243,8 +286,13 @@ export function SchedulePage() {
               <p className="font-medium text-slate-800 dark:text-slate-100">Автозаполнение</p>
               <p className="mt-1 text-xs">
                 5/2 — часы из пола в кадровом справочнике; праздники РФ — «о»; сб/вс пустые. Отпуск — периоды в справочнике.
-                Сменщики — пока только отпуск «о»; строки подсвечены цветом (как в «График_смен»). Наведите на ФИО —
+                Сменщики — автозаполнение по режиму: 11-3-8 или 2/2 (11д/11в), отпускные дни — «о». Строки подсвечены
+                цветом (как в «График_смен»). Наведите на ФИО —
                 email, системы и тип графика.
+              </p>
+              <p className="mt-1 text-xs">
+                Кнопка «Перегенерировать по ручным» использует уже введенные в месяце коды как опорные точки и
+                достраивает оставшиеся дни по циклу.
               </p>
             </div>
           </div>
@@ -255,6 +303,28 @@ export function SchedulePage() {
       {scheduleQuery.isError && (
         <p className="text-sm text-red-600 dark:text-red-400">Не удалось загрузить расписание.</p>
       )}
+
+      {scheduleQuery.data &&
+        (scheduleQuery.data.shift_staffing_notes.length > 0 ||
+          scheduleQuery.data.shift_coverage_warnings.length > 0) && (
+          <div className="mb-3 space-y-2 rounded-2xl border border-slate-200/90 bg-white/90 px-4 py-3 text-sm shadow-soft dark:border-slate-600/70 dark:bg-slate-900/85 dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)]">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              Покрытие сменщиков (≥{scheduleQuery.data.min_shift_staff_required ?? 2} в день по системе)
+            </p>
+            {scheduleQuery.data.shift_staffing_notes.map((n) => (
+              <p key={`note-${n.system_id}`} className="text-xs text-sky-800 dark:text-sky-200/95">
+                {n.message}
+              </p>
+            ))}
+            {scheduleQuery.data.shift_coverage_warnings.length > 0 && (
+              <ul className="max-h-40 list-inside list-disc space-y-1 overflow-y-auto text-xs text-rose-800 dark:text-rose-200/90">
+                {scheduleQuery.data.shift_coverage_warnings.map((w) => (
+                  <li key={`${w.system_id}-${w.day}`}>{w.message}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
 
       {scheduleQuery.data && (
         <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white/90 shadow-soft dark:border-slate-600/70 dark:bg-slate-950 dark:shadow-[0_0_0_1px_rgba(148,163,184,0.08),inset_0_1px_0_0_rgba(255,255,255,0.04)]">
@@ -269,7 +339,7 @@ export function SchedulePage() {
                   return (
                     <th
                       key={d}
-                      className={`w-[2.35rem] min-w-[2.35rem] max-w-[2.35rem] px-0 py-0.5 text-center text-[9px] font-medium leading-none ${dayHeaderClass(di)}`}
+                      className={`w-[2.35rem] min-w-[2.35rem] max-w-[2.35rem] px-0 py-0.5 text-center text-[9px] font-medium leading-none ${dayHeaderClass(di, coverageGapDays.has(d))}`}
                     >
                       {weekdayLabel(year, month, d)}
                     </th>
@@ -298,7 +368,7 @@ export function SchedulePage() {
                   return (
                     <th
                       key={d}
-                      className={`w-[2.35rem] min-w-[2.35rem] px-0 py-0.5 text-center text-[10px] font-semibold leading-none ${dayHeaderClass(di)} ${!di?.is_ru_holiday && !di?.is_weekend ? "text-slate-700 dark:text-slate-300" : ""}`}
+                      className={`w-[2.35rem] min-w-[2.35rem] px-0 py-0.5 text-center text-[10px] font-semibold leading-none ${dayHeaderClass(di, coverageGapDays.has(d))} ${!di?.is_ru_holiday && !di?.is_weekend ? "text-slate-700 dark:text-slate-300" : ""}`}
                     >
                       {d}
                     </th>

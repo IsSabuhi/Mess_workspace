@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 class EmployeeImportRowStatus(StrEnum):
     created = "created"
+    updated = "updated"
     skipped_duplicate_file = "skipped_duplicate_file"
     skipped_exists = "skipped_exists"
     skipped_invalid = "skipped_invalid"
@@ -24,5 +25,6 @@ class EmployeeImportOut(BaseModel):
     """Результат массового импорта из Excel (УчетнаяЗапись, ФИО, Должность)."""
 
     created: int
+    updated: int = 0
     skipped: int
     rows: list[EmployeeImportRowDetail]

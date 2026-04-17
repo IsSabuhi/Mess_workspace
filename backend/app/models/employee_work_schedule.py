@@ -5,7 +5,8 @@ from __future__ import annotations
 # График работы (автозаполнение расписания)
 WORK_SCHEDULE_FIVE_TWO = "five_two"
 WORK_SCHEDULE_SHIFT = "shift"
-WORK_SCHEDULE_VALUES = frozenset({WORK_SCHEDULE_FIVE_TWO, WORK_SCHEDULE_SHIFT})
+WORK_SCHEDULE_TWO_TWO = "two_two"
+WORK_SCHEDULE_VALUES = frozenset({WORK_SCHEDULE_FIVE_TWO, WORK_SCHEDULE_SHIFT, WORK_SCHEDULE_TWO_TWO})
 
 # Пол: для пятидневки женский → 7.2 ч, остальные варианты → 8 ч (ст. 320 ТК РФ)
 EMPLOYEE_GENDER_MALE = "male"

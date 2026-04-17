@@ -5,7 +5,7 @@ export type VacationPeriod = {
   end: string;
 };
 
-export type WorkScheduleKind = "five_two" | "shift";
+export type WorkScheduleKind = "five_two" | "shift" | "two_two";
 /** Пол сотрудника: для 5/2 из него считаются 8 ч или 7.2 ч */
 export type EmployeeGender = "male" | "female" | "unspecified";
 

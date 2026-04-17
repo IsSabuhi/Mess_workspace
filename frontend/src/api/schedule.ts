@@ -12,7 +12,7 @@ export type ScheduleUserRow = {
   email: string;
   schedule_mode: string;
   systems_label: string;
-  work_schedule_kind: "five_two" | "shift";
+  work_schedule_kind: "five_two" | "shift" | "two_two";
   gender: "male" | "female" | "unspecified";
   row_kind: string;
   cells: Record<string, string | null>;
@@ -26,12 +26,32 @@ export type ScheduleGroupOut = {
   users: ScheduleUserRow[];
 };
 
+export type ShiftStaffingNoteOut = {
+  system_id: string;
+  system_name: string;
+  shift_staff_total: number;
+  message: string;
+};
+
+export type ShiftCoverageWarningOut = {
+  system_id: string;
+  system_name: string;
+  day: number;
+  working_count: number;
+  shift_staff_total: number;
+  message: string;
+};
+
 export type ScheduleMonthOut = {
   year: number;
   month: number;
   days_in_month: number;
   days: ScheduleDayInfo[];
   groups: ScheduleGroupOut[];
+  /** Минимум сменщиков «на работе» в день по системе (серверная проверка). */
+  min_shift_staff_required: number;
+  shift_staffing_notes: ShiftStaffingNoteOut[];
+  shift_coverage_warnings: ShiftCoverageWarningOut[];
 };
 
 export async function getScheduleMonth(year: number, month: number): Promise<ScheduleMonthOut> {
@@ -68,6 +88,16 @@ export async function postScheduleAutofill(body: {
   only_empty: boolean;
 }): Promise<{ cells_written: number }> {
   return apiFetch("/api/v1/schedule/autofill", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function postScheduleRegenerate(body: {
+  year: number;
+  month: number;
+}): Promise<{ cells_written: number }> {
+  return apiFetch("/api/v1/schedule/regenerate", {
     method: "POST",
     body: JSON.stringify(body),
   });

@@ -3,7 +3,7 @@ import uuid
 from collections import defaultdict
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -21,14 +21,20 @@ from app.schemas.schedule import (
     ScheduleCellOut,
     ScheduleCellPatch,
     ScheduleDayInfo,
+    ScheduleExcelImportOut,
     ScheduleGroupOut,
     ScheduleModePatchOut,
     ScheduleMonthOut,
+    ScheduleRegenerateIn,
     ScheduleUserModePatch,
     ScheduleUserRow,
+    ShiftCoverageWarningOut,
+    ShiftStaffingNoteOut,
 )
 from app.services.ru_calendar import is_weekend, ru_holiday_dates
-from app.services.schedule_autofill import run_schedule_autofill
+from app.services.schedule_autofill import run_schedule_autofill, run_schedule_regenerate_from_manual
+from app.services.schedule_coverage import MIN_SHIFT_STAFF_DEFAULT, build_shift_coverage_reports
+from app.services.schedule_excel_import import import_schedule_month_excel
 from app.services.schedule_hours import sum_month_hours
 
 router = APIRouter(prefix="/schedule", tags=["schedule"])
@@ -140,7 +146,7 @@ async def get_schedule_month(
     users = (
         await session.execute(
             select(User)
-            .where(User.is_active.is_(True))
+            .where(User.is_active.is_(True), User.position_id.is_not(None))
             .options(
                 selectinload(User.system_memberships).selectinload(UserSystem.system),
                 selectinload(User.employee_profile),
@@ -203,12 +209,29 @@ async def get_schedule_month(
             )
         )
 
+    system_names: dict[uuid.UUID, str] = {}
+    for u in users:
+        for us in u.system_memberships:
+            if us.system and us.system.is_active:
+                system_names[us.system.id] = us.system.name
+
+    raw_notes, raw_warns = build_shift_coverage_reports(
+        list(users),
+        by_user,
+        dim,
+        system_names=system_names,
+        min_staff=MIN_SHIFT_STAFF_DEFAULT,
+    )
+
     return ScheduleMonthOut(
         year=year,
         month=month,
         days_in_month=dim,
         days=day_infos,
         groups=groups,
+        min_shift_staff_required=MIN_SHIFT_STAFF_DEFAULT,
+        shift_staffing_notes=[ShiftStaffingNoteOut(**n) for n in raw_notes],
+        shift_coverage_warnings=[ShiftCoverageWarningOut(**w) for w in raw_warns],
     )
 
 
@@ -288,6 +311,50 @@ async def autofill_schedule(
         editor_id=editor.id,
     )
     return ScheduleAutofillOut(cells_written=n)
+
+
+@router.post("/regenerate", response_model=ScheduleAutofillOut)
+async def regenerate_schedule(
+    body: ScheduleRegenerateIn,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    editor: Annotated[User, Depends(require_permission(SCHEDULE_MANAGE))],
+) -> ScheduleAutofillOut:
+    n = await run_schedule_regenerate_from_manual(
+        session,
+        year=body.year,
+        month=body.month,
+        editor_id=editor.id,
+    )
+    return ScheduleAutofillOut(cells_written=n)
+
+
+@router.post("/import-excel", response_model=ScheduleExcelImportOut)
+async def import_schedule_excel(
+    session: Annotated[AsyncSession, Depends(get_db)],
+    editor: Annotated[User, Depends(require_permission(SCHEDULE_MANAGE))],
+    year: int = Form(..., ge=2000, le=2100),
+    month: int = Form(..., ge=1, le=12),
+    sheet_name: str | None = Form(None),
+    file: UploadFile = File(..., description="Excel .xlsx с листами по месяцам"),
+) -> ScheduleExcelImportOut:
+    fname = (file.filename or "").lower()
+    if not fname.endswith(".xlsx"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ожидается файл .xlsx")
+    content = await file.read()
+    if len(content) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Файл больше 20 МБ")
+
+    res = await import_schedule_month_excel(
+        session,
+        year=year,
+        month=month,
+        content=content,
+        editor_id=editor.id,
+        sheet_name=sheet_name,
+    )
+    if "error" in res:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=res["error"])
+    return ScheduleExcelImportOut(**res)
 
 
 @router.patch("/users/{user_id}/mode", response_model=ScheduleModePatchOut)

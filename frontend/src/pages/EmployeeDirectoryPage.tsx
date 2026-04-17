@@ -39,12 +39,13 @@ function formatGenderCell(g: string | undefined): string {
 }
 
 function employeeDirectoryShiftRowClass(row: EmployeeDirectoryRowOut): string | undefined {
-  if (row.work_schedule_kind === "shift") return shiftWorkerRowClass(row.id);
+  if (row.work_schedule_kind === "shift" || row.work_schedule_kind === "two_two") return shiftWorkerRowClass(row.id);
   return undefined;
 }
 
 function formatScheduleSummary(row: EmployeeDirectoryRowOut): string {
-  if (row.work_schedule_kind === "shift") return "Сменщик";
+  if (row.work_schedule_kind === "shift") return "Сменный";
+  if (row.work_schedule_kind === "two_two") return "2/2";
   const norm = row.gender === "female" ? "7.2 ч" : "8 ч";
   return `5/2 · ${norm}`;
 }
@@ -283,7 +284,15 @@ export function EmployeeDirectoryPage() {
       return;
     }
     const lines: string[] = [];
-    if (patch.work_schedule_kind) lines.push(`график: ${patch.work_schedule_kind === "shift" ? "сменщик" : "5/2"}`);
+    if (patch.work_schedule_kind) {
+      const sk =
+        patch.work_schedule_kind === "shift"
+          ? "Сменный"
+          : patch.work_schedule_kind === "two_two"
+            ? "2/2"
+            : "5/2";
+      lines.push(`график: ${sk}`);
+    }
     if (patch.gender !== undefined)
       lines.push(
         `пол: ${patch.gender === "female" ? "женский" : patch.gender === "male" ? "мужской" : "не указан"}`,
@@ -538,7 +547,8 @@ export function EmployeeDirectoryPage() {
                       >
                         <option value="">Все</option>
                         <option value="five_two">5/2</option>
-                        <option value="shift">Сменщик</option>
+                        <option value="shift">Сменный</option>
+                        <option value="two_two">2/2</option>
                       </select>
                     </label>
                   </div>
@@ -584,7 +594,8 @@ export function EmployeeDirectoryPage() {
                         className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm disabled:opacity-50 dark:border-slate-600 dark:bg-slate-900"
                       >
                         <option value="five_two">5/2</option>
-                        <option value="shift">Сменщик</option>
+                        <option value="shift">Сменный</option>
+                        <option value="two_two">2/2</option>
                       </select>
                     </label>
                     <label className="flex flex-col gap-2 rounded-xl border border-slate-200/80 bg-white/90 p-3 dark:border-slate-600 dark:bg-slate-800/80">
@@ -1043,7 +1054,8 @@ export function EmployeeDirectoryPage() {
                     className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
                   >
                     <option value="five_two">Пятидневка (5/2)</option>
-                    <option value="shift">Сменщик (смены заполняются вручную, позже — авто)</option>
+                    <option value="shift">Сменный</option>
+                    <option value="two_two">2/2</option>
                   </select>
                 </label>
                 <label className="block text-xs text-slate-500 dark:text-slate-400">
@@ -1066,7 +1078,7 @@ export function EmployeeDirectoryPage() {
                 <p className="text-[11px] text-slate-500 dark:text-slate-400">
                   При пятидневке в будни без праздника часы подставляются автоматически: женский — 7.2 ч, мужской или не
                   указан — 8 ч. Праздники РФ (будни) — «о»; сб/вс при автозаполнении остаются пустыми. Отпуск — из
-                  периодов ниже. Для сменщиков сейчас учитывается только отпуск.
+                  периодов ниже. Сменный: цикл 11-3-8-о. 2/2: цикл 11д-11в-о-о.
                 </p>
               </div>
               <div className="rounded-xl border border-slate-200/80 bg-slate-50/80 p-3 dark:border-slate-600 dark:bg-slate-800/40">
