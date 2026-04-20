@@ -23,6 +23,7 @@ import { useAuth } from "../context/AuthContext";
 import { invalidateAndRefetch } from "../lib/queryClient";
 import { PERM, canAdminAccess, hasPermission } from "../lib/permissions";
 import { toastApiError, toastError, toastSuccess } from "../lib/toast";
+import { useModalLayer } from "../lib/useModalLayer";
 
 type Tab = "users" | "roles" | "system-settings";
 
@@ -757,6 +758,11 @@ function UserFormModal({
   const [saving, setSaving] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
 
+  const { backdropProps: userFormBackdrop, stopPanelPointer: userFormPanelStop } = useModalLayer(true, onClose, {
+    closeOnBackdrop: !(saving || deleteBusy),
+    closeOnEscape: !(saving || deleteBusy),
+  });
+
   const toggleRole = (id: string) => {
     setRoleIds((prev) => {
       const n = new Set(prev);
@@ -835,8 +841,16 @@ function UserFormModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
-      <div className="glass max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl p-6 shadow-soft-lg">
+    <div
+      {...userFormBackdrop}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+    >
+      <div
+        className="glass max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl p-6 shadow-soft-lg"
+        role="dialog"
+        aria-modal="true"
+        onClick={userFormPanelStop}
+      >
         <div className="mb-4 flex items-start justify-between gap-2">
           <h2 className="text-lg font-semibold text-slate-900 dark:text-white">{title}</h2>
           <button
@@ -1228,6 +1242,11 @@ function RoleFormModal({
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  const { backdropProps: roleFormBackdrop, stopPanelPointer: roleFormPanelStop } = useModalLayer(true, onClose, {
+    closeOnBackdrop: !saving,
+    closeOnEscape: !saving,
+  });
+
   const toggle = (id: string) => {
     setSelected((prev) => {
       const n = new Set(prev);
@@ -1277,8 +1296,16 @@ function RoleFormModal({
   const readOnlyPerms = Boolean(initial?.is_system && !isSuperuser);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
-      <div className="glass max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl p-6 shadow-soft-lg">
+    <div
+      {...roleFormBackdrop}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+    >
+      <div
+        className="glass max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl p-6 shadow-soft-lg"
+        role="dialog"
+        aria-modal="true"
+        onClick={roleFormPanelStop}
+      >
         <div className="mb-4 flex items-start justify-between gap-2">
           <h2 className="text-lg font-semibold text-slate-900 dark:text-white">{title}</h2>
           <button

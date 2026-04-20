@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, FileSpreadsheet } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 
 function scheduleRowTitle(row: {
@@ -21,6 +21,7 @@ import {
   getScheduleMonth,
   patchScheduleCell,
   postScheduleAutofill,
+  postScheduleImportExcel,
   postScheduleRegenerate,
   type ScheduleDayInfo,
   type ScheduleUserRow,
@@ -30,6 +31,7 @@ import { useAuth } from "../context/AuthContext";
 import { shiftWorkerRowClass } from "../lib/shiftWorkerRowStyle";
 import { PERM, canViewSchedule, hasPermission } from "../lib/permissions";
 import { toastApiError, toastSuccess } from "../lib/toast";
+import { useModalLayer } from "../lib/useModalLayer";
 
 const MONTH_NAMES = [
   "Январь",
@@ -112,6 +114,15 @@ export function SchedulePage() {
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [onlyEmptyAutofill, setOnlyEmptyAutofill] = useState(true);
   const [showScheduleHelp, setShowScheduleHelp] = useState(false);
+  const [importModalOpen, setImportModalOpen] = useState(false);
+  const [importSheetName, setImportSheetName] = useState("");
+  const [importFile, setImportFile] = useState<File | null>(null);
+
+  const closeImportExcelModal = useCallback(() => {
+    setImportModalOpen(false);
+    setImportSheetName("");
+    setImportFile(null);
+  }, []);
 
   const qc = useQueryClient();
 
@@ -166,6 +177,37 @@ export function SchedulePage() {
     },
     onError: (e) => toastApiError(e, "Перегенерация не выполнена"),
   });
+
+  const importExcelMut = useMutation({
+    mutationFn: (file: File) =>
+      postScheduleImportExcel({
+        year,
+        month,
+        file,
+        sheet_name: importSheetName.trim() || undefined,
+      }),
+    onSuccess: async (data) => {
+      const extra =
+        data.unmatched_names.length > 0
+          ? ` Не сопоставлено ФИО: ${data.unmatched_names.length}.`
+          : "";
+      toastSuccess(
+        `Импорт: ${data.cells_imported} ячеек, сотрудников: ${data.users_matched} (лист «${data.sheet_used || "—"}»).${extra}`,
+      );
+      closeImportExcelModal();
+      await qc.invalidateQueries({ queryKey: ["schedule", "month", year, month] });
+    },
+    onError: (e) => toastApiError(e, "Импорт из Excel не выполнен"),
+  });
+
+  const { backdropProps: importBackdropProps, stopPanelPointer: importStopPanelPointer } = useModalLayer(
+    !!(canManage && importModalOpen),
+    closeImportExcelModal,
+    {
+      closeOnBackdrop: !importExcelMut.isPending,
+      closeOnEscape: !importExcelMut.isPending,
+    },
+  );
 
   const daysInMonth = scheduleQuery.data?.days_in_month ?? new Date(year, month, 0).getDate();
   const dayNumbers = useMemo(() => Array.from({ length: daysInMonth }, (_, i) => i + 1), [daysInMonth]);
@@ -248,6 +290,16 @@ export function SchedulePage() {
               >
                 {regenerateMut.isPending ? "Перегенерация…" : "Перегенерировать по ручным"}
               </button>
+              <button
+                type="button"
+                disabled={importExcelMut.isPending}
+                onClick={() => setImportModalOpen(true)}
+                className="group inline-flex items-center gap-2 rounded-xl border border-emerald-200/90 bg-gradient-to-br from-emerald-500 via-teal-500 to-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-md shadow-emerald-900/15 ring-1 ring-white/25 transition hover:from-emerald-400 hover:via-teal-400 hover:to-cyan-500 hover:shadow-lg disabled:opacity-60 dark:border-emerald-400/30 dark:from-emerald-600 dark:via-teal-600 dark:to-cyan-700 dark:ring-white/10 dark:hover:from-emerald-500 dark:hover:via-teal-500 dark:hover:to-cyan-600"
+                title="Загрузить месяц из файла Excel (как «График_смен»)"
+              >
+                <FileSpreadsheet className="h-4 w-4 shrink-0 opacity-95 group-hover:scale-105" aria-hidden />
+                Из Excel
+              </button>
             </>
           )}
           {!canManage && (
@@ -294,10 +346,80 @@ export function SchedulePage() {
                 Кнопка «Перегенерировать по ручным» использует уже введенные в месяце коды как опорные точки и
                 достраивает оставшиеся дни по циклу.
               </p>
+              <p className="mt-1 text-xs">
+                «Из Excel» — загрузка листа месяца из .xlsx: строки по ФИО сопоставляются с сотрудниками в системе.
+              </p>
             </div>
           </div>
         )}
       </div>
+
+      {canManage && importModalOpen && (
+        <div
+          {...importBackdropProps}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 p-4 backdrop-blur-sm"
+        >
+          <div
+            className="w-full max-w-md overflow-hidden rounded-2xl border border-emerald-200/60 bg-white shadow-2xl dark:border-emerald-900/40 dark:bg-slate-900"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="schedule-import-title"
+            onClick={importStopPanelPointer}
+          >
+            <div className="border-b border-emerald-100 bg-gradient-to-r from-emerald-50 to-teal-50 px-5 py-4 dark:border-emerald-900/50 dark:from-emerald-950/50 dark:to-teal-950/40">
+              <h2 id="schedule-import-title" className="flex items-center gap-2 text-lg font-semibold text-emerald-950 dark:text-emerald-100">
+                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-700 dark:bg-emerald-400/20 dark:text-emerald-200">
+                  <FileSpreadsheet className="h-5 w-5" aria-hidden />
+                </span>
+                Импорт из Excel
+              </h2>
+              <p className="mt-1 text-sm text-emerald-900/80 dark:text-emerald-200/80">
+                Месяц: <span className="font-medium">{MONTH_NAMES[month - 1]} {year}</span> — данные подставятся в текущую таблицу.
+              </p>
+            </div>
+            <div className="space-y-4 px-5 py-4">
+              <label className="block text-sm text-slate-700 dark:text-slate-200">
+                Лист (необязательно)
+                <input
+                  value={importSheetName}
+                  onChange={(e) => setImportSheetName(e.target.value)}
+                  placeholder={`Например: ${MONTH_NAMES[month - 1]} — иначе по названию месяца`}
+                  className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+                />
+              </label>
+              <label className="block text-sm text-slate-700 dark:text-slate-200">
+                Файл .xlsx
+                <input
+                  key={importFile?.name ?? "empty"}
+                  type="file"
+                  accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  className="mt-1.5 block w-full text-sm text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-emerald-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-emerald-900 hover:file:bg-emerald-200 dark:text-slate-300 dark:file:bg-emerald-900/40 dark:file:text-emerald-100 dark:hover:file:bg-emerald-800/50"
+                  onChange={(e) => setImportFile(e.target.files?.[0] ?? null)}
+                />
+              </label>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-slate-100 bg-slate-50/80 px-5 py-3 dark:border-slate-700 dark:bg-slate-800/80">
+              <button
+                type="button"
+                onClick={closeImportExcelModal}
+                className="rounded-xl px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200/80 dark:text-slate-300 dark:hover:bg-slate-700"
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                disabled={!importFile || importExcelMut.isPending}
+                onClick={() => {
+                  if (importFile) importExcelMut.mutate(importFile);
+                }}
+                className="rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2 text-sm font-semibold text-white shadow-md hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50 dark:from-emerald-500 dark:to-teal-500 dark:hover:from-emerald-400 dark:hover:to-teal-400"
+              >
+                {importExcelMut.isPending ? "Загрузка…" : "Загрузить расписание"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {scheduleQuery.isPending && <p className="text-sm text-slate-500">Загрузка…</p>}
       {scheduleQuery.isError && (

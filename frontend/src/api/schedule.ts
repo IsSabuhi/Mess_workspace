@@ -102,3 +102,33 @@ export async function postScheduleRegenerate(body: {
     body: JSON.stringify(body),
   });
 }
+
+export type ScheduleExcelImportOut = {
+  year: number;
+  month: number;
+  sheet_used: string;
+  users_matched: number;
+  rows_parsed: number;
+  cells_imported: number;
+  unmatched_names: string[];
+};
+
+/** Импорт месяца из .xlsx (лист по имени месяца или sheet_name). */
+export async function postScheduleImportExcel(params: {
+  year: number;
+  month: number;
+  file: File;
+  sheet_name?: string;
+}): Promise<ScheduleExcelImportOut> {
+  const fd = new FormData();
+  fd.set("year", String(params.year));
+  fd.set("month", String(params.month));
+  if (params.sheet_name?.trim()) {
+    fd.set("sheet_name", params.sheet_name.trim());
+  }
+  fd.set("file", params.file);
+  return apiFetch<ScheduleExcelImportOut>("/api/v1/schedule/import-excel", {
+    method: "POST",
+    body: fd,
+  });
+}

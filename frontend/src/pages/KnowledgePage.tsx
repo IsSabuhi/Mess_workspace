@@ -48,6 +48,7 @@ import {
 } from "../lib/knowledgeTree";
 import { invalidateAndRefetch } from "../lib/queryClient";
 import { toastApiError, toastError, toastSuccess } from "../lib/toast";
+import { useModalLayer } from "../lib/useModalLayer";
 
 function slugify(s: string): string {
   const t = s
@@ -715,6 +716,35 @@ export function KnowledgePage() {
     });
   }
 
+  const closeCreateSpaceModal = useCallback(() => setCreateSpaceOpen(false), []);
+  const closeTemplateModal = useCallback(() => setTemplateModalOpen(false), []);
+  const closeRevisionsModal = useCallback(() => setRevisionsModalOpen(false), []);
+
+  const { backdropProps: rootSpaceModalBackdrop, stopPanelPointer: rootSpaceModalPanelStop } = useModalLayer(
+    !spaceId && canManageSpaces && createSpaceOpen,
+    closeCreateSpaceModal,
+    {
+      closeOnEscape: !createSpaceMut.isPending,
+      closeOnBackdrop: !createSpaceMut.isPending,
+    },
+  );
+  const { backdropProps: tplModalBackdrop, stopPanelPointer: tplModalPanelStop } = useModalLayer(
+    !!spaceId && !articleId && templateModalOpen,
+    closeTemplateModal,
+    {
+      closeOnEscape: !createTemplateMut.isPending,
+      closeOnBackdrop: !createTemplateMut.isPending,
+    },
+  );
+  const { backdropProps: revModalBackdrop, stopPanelPointer: revModalPanelStop } = useModalLayer(
+    !!spaceId && !!articleId && articleId !== "new" && revisionsModalOpen,
+    closeRevisionsModal,
+    {
+      closeOnEscape: !restoreRevisionMut.isPending,
+      closeOnBackdrop: !restoreRevisionMut.isPending,
+    },
+  );
+
   if (!spaceId) {
     return (
       <AppShell title="База знаний" subtitle="Пространства, к которым у вас есть доступ" wide>
@@ -786,8 +816,16 @@ export function KnowledgePage() {
         )}
 
         {createSpaceOpen && canManageSpaces && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
-            <div className="glass w-full max-w-md rounded-2xl p-6 shadow-soft-lg">
+          <div
+            {...rootSpaceModalBackdrop}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+          >
+            <div
+              className="glass w-full max-w-md rounded-2xl p-6 shadow-soft-lg"
+              role="dialog"
+              aria-modal="true"
+              onClick={rootSpaceModalPanelStop}
+            >
               <h2 className="mb-1 text-lg font-semibold text-slate-900 dark:text-white">Новое пространство</h2>
               <p className="mb-4 text-sm text-slate-600 dark:text-slate-400">
                 Отдельная «база» со статьями. Привязка к системе необязательна.
@@ -850,7 +888,7 @@ export function KnowledgePage() {
                 <div className="flex justify-end gap-2 pt-2">
                   <button
                     type="button"
-                    onClick={() => setCreateSpaceOpen(false)}
+                    onClick={closeCreateSpaceModal}
                     className="rounded-xl bg-slate-200 px-4 py-2 text-sm dark:bg-slate-700"
                   >
                     Отмена
@@ -1102,8 +1140,16 @@ export function KnowledgePage() {
           </div>
         </div>
         {templateModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
-            <div className="glass w-full max-w-md rounded-2xl p-6 shadow-soft-lg">
+          <div
+            {...tplModalBackdrop}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+          >
+            <div
+              className="glass w-full max-w-md rounded-2xl p-6 shadow-soft-lg"
+              role="dialog"
+              aria-modal="true"
+              onClick={tplModalPanelStop}
+            >
               <h2 className="mb-4 text-lg font-semibold text-slate-900 dark:text-white">Новый шаблон</h2>
               <form
                 className="space-y-3"
@@ -1135,7 +1181,7 @@ export function KnowledgePage() {
                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
                 />
                 <div className="flex justify-end gap-2">
-                  <button type="button" onClick={() => setTemplateModalOpen(false)} className="rounded-xl bg-slate-200 px-4 py-2 text-sm dark:bg-slate-700">Отмена</button>
+                  <button type="button" onClick={closeTemplateModal} className="rounded-xl bg-slate-200 px-4 py-2 text-sm dark:bg-slate-700">Отмена</button>
                   <button type="submit" disabled={createTemplateMut.isPending} className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60">
                     {createTemplateMut.isPending ? "Сохранение…" : "Сохранить"}
                   </button>
@@ -1636,13 +1682,21 @@ export function KnowledgePage() {
         </div>
       )}
       {revisionsModalOpen && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
-          <div className="glass w-full max-w-lg rounded-2xl p-6 shadow-soft-lg">
+        <div
+          {...revModalBackdrop}
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+        >
+          <div
+            className="glass w-full max-w-lg rounded-2xl p-6 shadow-soft-lg"
+            role="dialog"
+            aria-modal="true"
+            onClick={revModalPanelStop}
+          >
             <div className="mb-3 flex items-center justify-between">
               <h3 className="text-base font-semibold text-slate-900 dark:text-white">История версий</h3>
               <button
                 type="button"
-                onClick={() => setRevisionsModalOpen(false)}
+                onClick={closeRevisionsModal}
                 className="rounded-lg px-2 py-1 text-sm text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
               >
                 ✕

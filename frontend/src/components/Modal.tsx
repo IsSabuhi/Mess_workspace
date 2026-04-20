@@ -1,5 +1,7 @@
 import { useEffect, useId, useRef, type ReactNode } from "react";
 
+import { useModalLayer } from "../lib/useModalLayer";
+
 export type ModalSize = "sm" | "md" | "lg";
 
 export type ModalProps = {
@@ -47,23 +49,11 @@ export function Modal({
   const descId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = prevOverflow;
-    };
-  }, [open]);
-
-  useEffect(() => {
-    if (!open || !closeOnEscape) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, closeOnEscape, onClose]);
+  const { backdropProps, stopPanelPointer } = useModalLayer(open, onClose, {
+    closeOnBackdrop,
+    closeOnEscape,
+    lockBodyScroll: true,
+  });
 
   useEffect(() => {
     if (!open) return;
@@ -78,9 +68,8 @@ export function Modal({
 
   return (
     <div
+      {...backdropProps}
       className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
-      role="presentation"
-      onClick={() => closeOnBackdrop && onClose()}
     >
       <div
         ref={panelRef}
@@ -90,7 +79,7 @@ export function Modal({
         aria-describedby={ariaDescribedBy}
         tabIndex={-1}
         className={`glass w-full ${sizeClass[size]} rounded-2xl border border-white/60 p-0 shadow-soft-lg outline-none dark:border-slate-700/60 ${className}`}
-        onClick={(e) => e.stopPropagation()}
+        onClick={stopPanelPointer}
       >
         {(title || description) && (
           <div className="border-b border-slate-200/80 px-5 py-4 dark:border-slate-700/80">

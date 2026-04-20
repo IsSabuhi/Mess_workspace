@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
 import { ApiError } from "../api/client";
 import { createSystem, deleteSystem, listSystemMembers, listSystems, updateSystem } from "../api/systems";
@@ -9,6 +9,7 @@ import { useAuth } from "../context/AuthContext";
 import { invalidateAndRefetch } from "../lib/queryClient";
 import { PERM, hasPermission } from "../lib/permissions";
 import { toastApiError, toastSuccess } from "../lib/toast";
+import { useModalLayer } from "../lib/useModalLayer";
 
 export function SystemsPage() {
   const { state } = useAuth();
@@ -84,6 +85,26 @@ export function SystemsPage() {
     },
   });
 
+  const closeSystemFormModal = useCallback(() => {
+    setModal(false);
+    setEditingSystem(null);
+    setSortOrder(0);
+  }, []);
+  const closeMembersModal = useCallback(() => setMembersModalSystem(null), []);
+
+  const { backdropProps: systemFormBackdrop, stopPanelPointer: systemFormPanelStop } = useModalLayer(
+    !!(modal && canManage),
+    closeSystemFormModal,
+    {
+      closeOnBackdrop: !(createMut.isPending || updateMut.isPending),
+      closeOnEscape: !(createMut.isPending || updateMut.isPending),
+    },
+  );
+  const { backdropProps: systemMembersBackdrop, stopPanelPointer: systemMembersPanelStop } = useModalLayer(
+    !!membersModalSystem,
+    closeMembersModal,
+  );
+
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     setFormError(null);
@@ -99,12 +120,10 @@ export function SystemsPage() {
       }
       try {
         await updateMut.mutateAsync({ id: editingSystem.id, body: payload });
-        setModal(false);
-        setEditingSystem(null);
+        closeSystemFormModal();
         setName("");
         setSlug("");
         setDescription("");
-        setSortOrder(0);
       } catch {
         // handled by mutation
       }
@@ -249,8 +268,16 @@ export function SystemsPage() {
       )}
 
       {modal && canManage && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
-          <div className="glass w-full max-w-md rounded-2xl p-6 shadow-soft-lg">
+        <div
+          {...systemFormBackdrop}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+        >
+          <div
+            className="glass w-full max-w-md rounded-2xl p-6 shadow-soft-lg"
+            role="dialog"
+            aria-modal="true"
+            onClick={systemFormPanelStop}
+          >
             <h2 className="mb-4 text-lg font-semibold">
               {editingSystem ? "Редактировать систему" : "Новая система"}
             </h2>
@@ -297,11 +324,7 @@ export function SystemsPage() {
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => {
-                    setModal(false);
-                    setEditingSystem(null);
-                    setSortOrder(0);
-                  }}
+                  onClick={closeSystemFormModal}
                   className="rounded-xl bg-slate-200 px-4 py-2 text-sm dark:bg-slate-700"
                 >
                   Отмена
@@ -326,8 +349,16 @@ export function SystemsPage() {
       )}
 
       {membersModalSystem && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
-          <div className="glass w-full max-w-2xl rounded-2xl p-6 shadow-soft-lg">
+        <div
+          {...systemMembersBackdrop}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+        >
+          <div
+            className="glass w-full max-w-2xl rounded-2xl p-6 shadow-soft-lg"
+            role="dialog"
+            aria-modal="true"
+            onClick={systemMembersPanelStop}
+          >
             <div className="mb-4 flex items-start justify-between gap-3">
               <div>
                 <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
@@ -337,7 +368,7 @@ export function SystemsPage() {
               </div>
               <button
                 type="button"
-                onClick={() => setMembersModalSystem(null)}
+                onClick={closeMembersModal}
                 className="rounded-lg px-3 py-1 text-sm text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
               >
                 ✕

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useModalLayer } from "../lib/useModalLayer";
 import { toast } from "sonner";
 import type { Editor } from "@tiptap/core";
 import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
@@ -112,6 +113,11 @@ export function KnowledgeRichEditor({
 
   const [linkModalOpen, setLinkModalOpen] = useState(false);
   const [linkUrlDraft, setLinkUrlDraft] = useState("");
+  const closeLinkModal = useCallback(() => setLinkModalOpen(false), []);
+  const { backdropProps: linkModalBackdrop, stopPanelPointer: linkModalPanelStop } = useModalLayer(
+    linkModalOpen,
+    closeLinkModal,
+  );
 
   const insertImagesFromFiles = useCallback(async (files: File[], insertPos?: number | null) => {
     const ed = editorRef.current;
@@ -258,14 +264,7 @@ export function KnowledgeRichEditor({
   useEffect(() => {
     if (!linkModalOpen) return;
     const t = window.setTimeout(() => linkInputRef.current?.focus(), 50);
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setLinkModalOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.clearTimeout(t);
-      window.removeEventListener("keydown", onKey);
-    };
+    return () => window.clearTimeout(t);
   }, [linkModalOpen]);
 
   if (!editor) {
@@ -456,15 +455,15 @@ export function KnowledgeRichEditor({
 
       {linkModalOpen && (
         <div
+          {...linkModalBackdrop}
           className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="kb-link-dialog-title"
-          onClick={() => setLinkModalOpen(false)}
         >
           <div
             className="glass w-full max-w-md rounded-2xl p-5 shadow-soft-lg dark:border-slate-600"
-            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="kb-link-dialog-title"
+            onClick={linkModalPanelStop}
           >
             <h2 id="kb-link-dialog-title" className="mb-1 text-base font-semibold text-slate-900 dark:text-white">
               Адрес ссылки
@@ -490,7 +489,7 @@ export function KnowledgeRichEditor({
               <button
                 type="button"
                 className="rounded-xl bg-slate-200 px-4 py-2 text-sm dark:bg-slate-700"
-                onClick={() => setLinkModalOpen(false)}
+                onClick={closeLinkModal}
               >
                 Отмена
               </button>

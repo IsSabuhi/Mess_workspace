@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
 import { ApiError } from "../api/client";
 import { toastApiError, toastSuccess } from "../lib/toast";
@@ -9,6 +9,7 @@ import { AppShell } from "../components/AppShell";
 import { useAuth } from "../context/AuthContext";
 import { invalidateAndRefetch } from "../lib/queryClient";
 import { PERM, hasPermission } from "../lib/permissions";
+import { useModalLayer } from "../lib/useModalLayer";
 
 export function PositionsPage() {
   const { state } = useAuth();
@@ -64,6 +65,16 @@ export function PositionsPage() {
     },
     onError: (e: unknown) => toastApiError(e, "Не удалось удалить"),
   });
+
+  const closeCreateModal = useCallback(() => setModal(false), []);
+  const { backdropProps: positionModalBackdrop, stopPanelPointer: positionModalPanelStop } = useModalLayer(
+    !!(modal && canManage),
+    closeCreateModal,
+    {
+      closeOnBackdrop: !createMut.isPending,
+      closeOnEscape: !createMut.isPending,
+    },
+  );
 
   function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -168,8 +179,16 @@ export function PositionsPage() {
       )}
 
       {modal && canManage && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
-          <div className="glass w-full max-w-md rounded-2xl p-6 shadow-soft-lg">
+        <div
+          {...positionModalBackdrop}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+        >
+          <div
+            className="glass w-full max-w-md rounded-2xl p-6 shadow-soft-lg"
+            role="dialog"
+            aria-modal="true"
+            onClick={positionModalPanelStop}
+          >
             <h2 className="mb-4 text-lg font-semibold text-slate-900 dark:text-white">Новая должность</h2>
             <form onSubmit={handleCreate} className="space-y-3">
               <div>
@@ -202,7 +221,7 @@ export function PositionsPage() {
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setModal(false)}
+                  onClick={closeCreateModal}
                   className="rounded-xl bg-slate-200 px-4 py-2 text-sm dark:bg-slate-700"
                 >
                   Отмена

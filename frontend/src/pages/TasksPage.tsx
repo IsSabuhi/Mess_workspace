@@ -14,7 +14,7 @@ import { arrayMove, SortableContext, horizontalListSortingStrategy, useSortable 
 import { CSS } from "@dnd-kit/utilities";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { GripVertical, Pencil, Tags, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ApiError } from "../api/client";
 import {
@@ -43,6 +43,7 @@ import {
 import { formatAssigneesLabel } from "../lib/taskAssignees";
 import { taskIsOverdueForDashboard } from "../lib/taskStatus";
 import { toastApiError, toastError, toastSuccess } from "../lib/toast";
+import { useModalLayer } from "../lib/useModalLayer";
 
 const PRIORITY_LABEL: Record<string, string> = {
   low: "Низкий",
@@ -618,6 +619,68 @@ export function TasksPage() {
     onError: (e: unknown) => toastApiError(e, "Не удалось изменить статус архива"),
   });
 
+  const closeDrawer = useCallback(() => {
+    setDrawerTaskId(null);
+    setDrawerTask(null);
+  }, []);
+
+  const { backdropProps: drawerBackdropProps, stopPanelPointer: drawerPanelStop } = useModalLayer(
+    !!(drawerTaskId && drawerTask && user),
+    closeDrawer,
+    {
+      closeOnBackdrop: false,
+      closeOnEscape: !saveMut.isPending,
+    },
+  );
+
+  const closeNewTaskModal = useCallback(() => {
+    setModalOpen(false);
+    setTagIds([]);
+    setAssigneeIds([]);
+  }, []);
+  const { backdropProps: newTaskBackdrop, stopPanelPointer: newTaskPanelStop } = useModalLayer(
+    !!(modalOpen && canCreate),
+    closeNewTaskModal,
+    {
+      closeOnBackdrop: !createMut.isPending,
+      closeOnEscape: !createMut.isPending,
+    },
+  );
+
+  const closeTagModal = useCallback(() => {
+    setTagModalOpen(false);
+    setEditingTagId(null);
+  }, []);
+  const { backdropProps: tagModalBackdrop, stopPanelPointer: tagModalPanelStop } = useModalLayer(
+    !!(tagModalOpen && canCreate),
+    closeTagModal,
+  );
+
+  const closeColumnCreateModal = useCallback(() => {
+    setColumnModalOpen(false);
+    setNewColumnName("");
+    setNewColumnSlug("");
+    setNewColumnIsDone(false);
+  }, []);
+  const { backdropProps: colCreateBackdrop, stopPanelPointer: colCreatePanelStop } = useModalLayer(
+    !!(columnModalOpen && canManageCols),
+    closeColumnCreateModal,
+    {
+      closeOnBackdrop: !addColumnMut.isPending,
+      closeOnEscape: !addColumnMut.isPending,
+    },
+  );
+
+  const closeColumnEditModal = useCallback(() => setColumnEdit(null), []);
+  const { backdropProps: colEditBackdrop, stopPanelPointer: colEditPanelStop } = useModalLayer(
+    !!(columnEdit && canManageCols && board),
+    closeColumnEditModal,
+    {
+      closeOnBackdrop: !updateColumnMut.isPending,
+      closeOnEscape: !updateColumnMut.isPending,
+    },
+  );
+
   const columns = board?.columns ?? [];
   const sortedCols = useMemo(
     () => [...columns].sort((a, b) => a.sort_order - b.sort_order),
@@ -683,11 +746,6 @@ export function TasksPage() {
     } finally {
       setDrawerLoading(false);
     }
-  }
-
-  function closeDrawer() {
-    setDrawerTaskId(null);
-    setDrawerTask(null);
   }
 
   function saveDrawer() {
@@ -1210,9 +1268,17 @@ export function TasksPage() {
       )}
 
       {drawerTaskId && drawerTask && user && (
-        <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/40 backdrop-blur-sm">
+        <div
+          {...drawerBackdropProps}
+          className="fixed inset-0 z-50 flex justify-end bg-slate-900/40 backdrop-blur-sm"
+        >
           <button type="button" className="h-full flex-1 cursor-default" aria-label="Закрыть" onClick={closeDrawer} />
-          <div className="glass flex h-full w-full max-w-lg flex-col overflow-y-auto border-l border-white/40 shadow-2xl dark:border-slate-700">
+          <div
+            className="glass flex h-full w-full max-w-lg flex-col overflow-y-auto border-l border-white/40 shadow-2xl dark:border-slate-700"
+            role="dialog"
+            aria-modal="true"
+            onClick={drawerPanelStop}
+          >
             <div className="sticky top-0 flex items-start justify-between gap-3 border-b border-slate-200/80 bg-white/90 px-5 py-4 dark:border-slate-700 dark:bg-slate-900/90">
               <div>
                 <p className="text-xs uppercase tracking-wide text-slate-500">Задача</p>
@@ -1445,8 +1511,16 @@ export function TasksPage() {
       )}
 
       {modalOpen && canCreate && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
-          <div className="glass w-full max-w-md rounded-2xl p-6 shadow-soft-lg">
+        <div
+          {...newTaskBackdrop}
+          className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+        >
+          <div
+            className="glass w-full max-w-md rounded-2xl p-6 shadow-soft-lg"
+            role="dialog"
+            aria-modal="true"
+            onClick={newTaskPanelStop}
+          >
             <h2 className="mb-4 text-lg font-semibold text-slate-900 dark:text-white">Новая задача</h2>
             <form onSubmit={handleCreate} className="space-y-3">
               <div>
@@ -1544,11 +1618,7 @@ export function TasksPage() {
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => {
-                    setModalOpen(false);
-                    setTagIds([]);
-                    setAssigneeIds([]);
-                  }}
+                  onClick={closeNewTaskModal}
                   className="rounded-xl bg-slate-200 px-4 py-2 text-sm dark:bg-slate-700"
                 >
                   Отмена
@@ -1567,8 +1637,16 @@ export function TasksPage() {
       )}
 
       {tagModalOpen && canCreate && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
-          <div className="glass w-full max-w-md rounded-2xl p-6 shadow-soft-lg">
+        <div
+          {...tagModalBackdrop}
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+        >
+          <div
+            className="glass w-full max-w-md rounded-2xl p-6 shadow-soft-lg"
+            role="dialog"
+            aria-modal="true"
+            onClick={tagModalPanelStop}
+          >
             <h2 className="mb-4 text-lg font-semibold text-slate-900 dark:text-white">
               {editingTagId ? "Редактировать тег" : "Новый тег"}
             </h2>
@@ -1603,10 +1681,7 @@ export function TasksPage() {
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => {
-                    setTagModalOpen(false);
-                    setEditingTagId(null);
-                  }}
+                  onClick={closeTagModal}
                   className="rounded-xl bg-slate-200 px-4 py-2 text-sm dark:bg-slate-700"
                 >
                   Отмена
@@ -1656,8 +1731,16 @@ export function TasksPage() {
       )}
 
       {columnModalOpen && canManageCols && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
-          <div className="glass w-full max-w-md rounded-2xl p-6 shadow-soft-lg">
+        <div
+          {...colCreateBackdrop}
+          className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+        >
+          <div
+            className="glass w-full max-w-md rounded-2xl p-6 shadow-soft-lg"
+            role="dialog"
+            aria-modal="true"
+            onClick={colCreatePanelStop}
+          >
             <h2 className="mb-1 text-lg font-semibold text-slate-900 dark:text-white">Новая колонка</h2>
             <p className="mb-4 text-sm text-slate-600 dark:text-slate-400">
               Доступно при праве «управление колонками доски» (например, роль «Руководитель направления»).
@@ -1698,12 +1781,7 @@ export function TasksPage() {
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => {
-                    setColumnModalOpen(false);
-                    setNewColumnName("");
-                    setNewColumnSlug("");
-                    setNewColumnIsDone(false);
-                  }}
+                  onClick={closeColumnCreateModal}
                   className="rounded-xl bg-slate-200 px-4 py-2 text-sm dark:bg-slate-700"
                 >
                   Отмена
@@ -1722,8 +1800,16 @@ export function TasksPage() {
       )}
 
       {columnEdit && canManageCols && board && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
-          <div className="glass w-full max-w-md rounded-2xl p-6 shadow-soft-lg">
+        <div
+          {...colEditBackdrop}
+          className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+        >
+          <div
+            className="glass w-full max-w-md rounded-2xl p-6 shadow-soft-lg"
+            role="dialog"
+            aria-modal="true"
+            onClick={colEditPanelStop}
+          >
             <h2 className="mb-1 text-lg font-semibold text-slate-900 dark:text-white">Колонка</h2>
             <p className="mb-4 font-mono text-xs text-slate-500">{columnEdit.slug}</p>
             <form onSubmit={handleSaveColumnEdit} className="space-y-3">
@@ -1751,7 +1837,7 @@ export function TasksPage() {
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setColumnEdit(null)}
+                  onClick={closeColumnEditModal}
                   className="rounded-xl bg-slate-200 px-4 py-2 text-sm dark:bg-slate-700"
                 >
                   Отмена

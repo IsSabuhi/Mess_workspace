@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, Filter, SlidersHorizontal } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { ApiError } from "../api/client";
@@ -26,6 +26,7 @@ import {
 } from "../lib/permissions";
 import { shiftWorkerRowClass } from "../lib/shiftWorkerRowStyle";
 import { toastApiError, toastError, toastSuccess } from "../lib/toast";
+import { useModalLayer } from "../lib/useModalLayer";
 import { useAuth } from "../context/AuthContext";
 
 function asInputDate(v: string | null | undefined): string {
@@ -231,6 +232,26 @@ export function EmployeeDirectoryPage() {
     },
     onError: (e: unknown) => toastApiError(e, "Не удалось сохранить"),
   });
+
+  const closeComplianceModal = useCallback(() => setEditingCompliance(null), []);
+  const closeProfileModal = useCallback(() => setEditingProfile(null), []);
+
+  const { backdropProps: compModalBackdrop, stopPanelPointer: compModalPanelStop } = useModalLayer(
+    !!editingCompliance && canComplianceEdit,
+    closeComplianceModal,
+    {
+      closeOnBackdrop: !saveComplianceMut.isPending,
+      closeOnEscape: !saveComplianceMut.isPending,
+    },
+  );
+  const { backdropProps: profModalBackdrop, stopPanelPointer: profModalPanelStop } = useModalLayer(
+    !!editingProfile && canProfileEdit,
+    closeProfileModal,
+    {
+      closeOnBackdrop: !saveProfileMut.isPending,
+      closeOnEscape: !saveProfileMut.isPending,
+    },
+  );
 
   const bulkProfileMut = useMutation({
     mutationFn: (body: { user_ids: string[]; patch: EmployeeDirectoryBulkProfilePatch }) =>
@@ -857,8 +878,16 @@ export function EmployeeDirectoryPage() {
       )}
 
       {editingCompliance && canComplianceEdit && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
-          <div className="glass max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl p-6 shadow-soft-lg">
+        <div
+          {...compModalBackdrop}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+        >
+          <div
+            className="glass max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl p-6 shadow-soft-lg"
+            role="dialog"
+            aria-modal="true"
+            onClick={compModalPanelStop}
+          >
             <h2 className="mb-4 text-lg font-semibold text-slate-900 dark:text-white">{editingCompliance.full_name}</h2>
             <p className="mb-3 text-xs text-slate-500 dark:text-slate-400">
               Раздел контроля: экзамен по электробезопасности и пропуск. График и отпуск — во вкладке «Кадровый
@@ -951,7 +980,7 @@ export function EmployeeDirectoryPage() {
               <div className="flex justify-end gap-2">
                 <button
                   type="button"
-                  onClick={() => setEditingCompliance(null)}
+                  onClick={closeComplianceModal}
                   className="rounded-xl bg-slate-200 px-4 py-2 text-sm dark:bg-slate-700"
                 >
                   Отмена
@@ -970,8 +999,16 @@ export function EmployeeDirectoryPage() {
       )}
 
       {editingProfile && canProfileEdit && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
-          <div className="glass max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl p-6 shadow-soft-lg">
+        <div
+          {...profModalBackdrop}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+        >
+          <div
+            className="glass max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl p-6 shadow-soft-lg"
+            role="dialog"
+            aria-modal="true"
+            onClick={profModalPanelStop}
+          >
             <h2 className="mb-4 text-lg font-semibold text-slate-900 dark:text-white">{editingProfile.full_name}</h2>
             <form
               onSubmit={(e) => {
@@ -1148,7 +1185,7 @@ export function EmployeeDirectoryPage() {
               <div className="flex justify-end gap-2">
                 <button
                   type="button"
-                  onClick={() => setEditingProfile(null)}
+                  onClick={closeProfileModal}
                   className="rounded-xl bg-slate-200 px-4 py-2 text-sm dark:bg-slate-700"
                 >
                   Отмена
