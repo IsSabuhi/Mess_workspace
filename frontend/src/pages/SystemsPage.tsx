@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from "react";
 
 import { ApiError } from "../api/client";
 import { createSystem, deleteSystem, listSystemMembers, listSystems, updateSystem } from "../api/systems";
 import type { SystemOut } from "../api/systems";
 import { AppShell } from "../components/AppShell";
+import { EmployeeDirectoryViewModal } from "../components/EmployeeDirectoryViewModal";
 import { useAuth } from "../context/AuthContext";
 import { invalidateAndRefetch } from "../lib/queryClient";
 import { PERM, hasPermission } from "../lib/permissions";
@@ -15,6 +16,7 @@ export function SystemsPage() {
   const { state } = useAuth();
   const user = state.status === "authenticated" ? state.user : null;
   const canManage = user && hasPermission(user, PERM.SYSTEMS_MANAGE);
+  const canViewEmployeeDirectory = !!(user && hasPermission(user, PERM.EMPLOYEE_DIRECTORY_READ));
   const qc = useQueryClient();
 
   const [showInactive, setShowInactive] = useState(false);
@@ -26,6 +28,8 @@ export function SystemsPage() {
   const [description, setDescription] = useState("");
   const [sortOrder, setSortOrder] = useState(0);
   const [formError, setFormError] = useState<string | null>(null);
+  const [systemMembersSearchQ, setSystemMembersSearchQ] = useState("");
+  const [employeeDetailUserId, setEmployeeDetailUserId] = useState<string | null>(null);
 
   const systemsQuery = useQuery({
     queryKey: ["systems", showInactive],
@@ -36,6 +40,24 @@ export function SystemsPage() {
     queryFn: () => listSystemMembers(membersModalSystem!.id),
     enabled: !!membersModalSystem,
   });
+
+  const filteredSystemMembers = useMemo(() => {
+    const rows = membersQuery.data ?? [];
+    const q = systemMembersSearchQ.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter((m) => {
+      const pos = m.position?.name?.toLowerCase() ?? "";
+      return (
+        m.full_name.toLowerCase().includes(q) ||
+        m.email.toLowerCase().includes(q) ||
+        pos.includes(q)
+      );
+    });
+  }, [membersQuery.data, systemMembersSearchQ]);
+
+  useEffect(() => {
+    if (!membersModalSystem) setSystemMembersSearchQ("");
+  }, [membersModalSystem]);
 
   const items = systemsQuery.data ?? [];
   const loading = systemsQuery.isPending;
@@ -90,7 +112,11 @@ export function SystemsPage() {
     setEditingSystem(null);
     setSortOrder(0);
   }, []);
-  const closeMembersModal = useCallback(() => setMembersModalSystem(null), []);
+  const closeMembersModal = useCallback(() => {
+    setMembersModalSystem(null);
+    setSystemMembersSearchQ("");
+    setEmployeeDetailUserId(null);
+  }, []);
 
   const { backdropProps: systemFormBackdrop, stopPanelPointer: systemFormPanelStop } = useModalLayer(
     !!(modal && canManage),
@@ -226,7 +252,10 @@ export function SystemsPage() {
               </p>
               <button
                 type="button"
-                onClick={() => setMembersModalSystem(s)}
+                onClick={() => {
+                  setSystemMembersSearchQ("");
+                  setMembersModalSystem(s);
+                }}
                 className="mt-2 text-xs font-medium text-sky-600 hover:underline dark:text-sky-400"
               >
                 Показать сотрудников
@@ -354,65 +383,138 @@ export function SystemsPage() {
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
         >
           <div
-            className="glass w-full max-w-2xl rounded-2xl p-6 shadow-soft-lg"
+            className="glass flex max-h-[min(90vh,56rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl shadow-soft-lg"
             role="dialog"
             aria-modal="true"
+            aria-labelledby="system-members-title"
             onClick={systemMembersPanelStop}
           >
-            <div className="mb-4 flex items-start justify-between gap-3">
-              <div>
-                <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
+            <div className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200/80 px-5 py-4 dark:border-slate-600/60">
+              <div className="min-w-0">
+                <h2
+                  id="system-members-title"
+                  className="text-lg font-semibold text-slate-900 dark:text-white"
+                >
                   Сотрудники системы: {membersModalSystem.name}
                 </h2>
-                <p className="text-xs text-slate-500 dark:text-slate-400">{membersModalSystem.slug}</p>
+                <p className="truncate text-xs text-slate-500 dark:text-slate-400">{membersModalSystem.slug}</p>
               </div>
               <button
                 type="button"
                 onClick={closeMembersModal}
-                className="rounded-lg px-3 py-1 text-sm text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+                className="shrink-0 rounded-lg px-3 py-1 text-sm text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
               >
                 ✕
               </button>
             </div>
-            {membersQuery.isPending && <p className="text-sm text-slate-500">Загрузка…</p>}
-            {membersQuery.isError && (
-              <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
-                {membersQuery.error instanceof ApiError ? membersQuery.error.detail : "Не удалось загрузить сотрудников"}
-              </p>
-            )}
-            {!membersQuery.isPending && !membersQuery.isError && (
-              <>
-                {(membersQuery.data ?? []).length === 0 ? (
-                  <p className="text-sm text-slate-600 dark:text-slate-400">
-                    В этой системе пока нет активных сотрудников.
-                  </p>
-                ) : (
-                  <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-700">
-                    <table className="w-full text-left text-sm">
-                      <thead className="bg-slate-50 dark:bg-slate-800/70">
-                        <tr>
-                          <th className="px-3 py-2 font-semibold text-slate-700 dark:text-slate-200">Сотрудник</th>
-                          <th className="px-3 py-2 font-semibold text-slate-700 dark:text-slate-200">Должность</th>
-                          <th className="px-3 py-2 font-semibold text-slate-700 dark:text-slate-200">Email</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-                        {(membersQuery.data ?? []).map((m) => (
-                          <tr key={m.id}>
-                            <td className="px-3 py-2 text-slate-900 dark:text-white">{m.full_name}</td>
-                            <td className="px-3 py-2 text-slate-600 dark:text-slate-300">{m.position?.name ?? "—"}</td>
-                            <td className="px-3 py-2 text-slate-500 dark:text-slate-400">{m.email}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </>
-            )}
+
+            <div className="min-h-0 flex-1 overflow-hidden px-5 pb-5 pt-3">
+              {membersQuery.isPending && <p className="text-sm text-slate-500">Загрузка…</p>}
+              {membersQuery.isError && (
+                <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
+                  {membersQuery.error instanceof ApiError
+                    ? membersQuery.error.detail
+                    : "Не удалось загрузить сотрудников"}
+                </p>
+              )}
+              {!membersQuery.isPending && !membersQuery.isError && (
+                <>
+                  {(membersQuery.data ?? []).length === 0 ? (
+                    <p className="text-sm text-slate-600 dark:text-slate-400">
+                      В этой системе пока нет активных сотрудников.
+                    </p>
+                  ) : (
+                    <>
+                      <label className="mb-2 block text-xs font-medium text-slate-600 dark:text-slate-400">
+                        Поиск
+                        <input
+                          type="search"
+                          value={systemMembersSearchQ}
+                          onChange={(e) => setSystemMembersSearchQ(e.target.value)}
+                          placeholder="Имя, должность или email…"
+                          autoComplete="off"
+                          className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                        />
+                      </label>
+                      <p className="mb-2 text-xs text-slate-500 dark:text-slate-400">
+                        Показано: {filteredSystemMembers.length} из {(membersQuery.data ?? []).length}
+                        {canViewEmployeeDirectory ? (
+                          <span className="text-slate-400"> · строка — открыть карточку</span>
+                        ) : null}
+                      </p>
+                      <div className="max-h-[min(60vh,28rem)] overflow-auto rounded-xl border border-slate-200 dark:border-slate-700">
+                        <table className="w-full min-w-[24rem] text-left text-sm">
+                          <thead className="sticky top-0 z-10 bg-slate-50 shadow-sm dark:bg-slate-800/95 dark:shadow-[0_1px_0_0_rgba(51,65,85,0.6)]">
+                            <tr>
+                              <th className="px-3 py-2.5 font-semibold text-slate-700 dark:text-slate-200">
+                                Сотрудник
+                              </th>
+                              <th className="px-3 py-2.5 font-semibold text-slate-700 dark:text-slate-200">
+                                Должность
+                              </th>
+                              <th className="px-3 py-2.5 font-semibold text-slate-700 dark:text-slate-200">Email</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
+                            {filteredSystemMembers.length === 0 ? (
+                              <tr>
+                                <td
+                                  colSpan={3}
+                                  className="px-3 py-6 text-center text-sm text-slate-500 dark:text-slate-400"
+                                >
+                                  Никого не найдено по запросу.
+                                </td>
+                              </tr>
+                            ) : (
+                              filteredSystemMembers.map((m) => {
+                                const interactive = canViewEmployeeDirectory;
+                                return (
+                                  <tr
+                                    key={m.id}
+                                    className={
+                                      interactive
+                                        ? "cursor-pointer bg-white/80 hover:bg-sky-50/90 dark:bg-slate-900/40 dark:hover:bg-sky-950/35"
+                                        : "bg-white/80 dark:bg-slate-900/40"
+                                    }
+                                    {...(interactive
+                                      ? {
+                                          role: "button" as const,
+                                          tabIndex: 0,
+                                          onClick: () => setEmployeeDetailUserId(m.id),
+                                          onKeyDown: (e: KeyboardEvent) => {
+                                            if (e.key === "Enter" || e.key === " ") {
+                                              e.preventDefault();
+                                              setEmployeeDetailUserId(m.id);
+                                            }
+                                          },
+                                        }
+                                      : {})}
+                                  >
+                                    <td className="px-3 py-2 text-slate-900 dark:text-white">{m.full_name}</td>
+                                    <td className="px-3 py-2 text-slate-600 dark:text-slate-300">
+                                      {m.position?.name ?? "—"}
+                                    </td>
+                                    <td className="break-all px-3 py-2 text-slate-500 dark:text-slate-400">{m.email}</td>
+                                  </tr>
+                                );
+                              })
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
           </div>
         </div>
       )}
+
+      <EmployeeDirectoryViewModal
+        userId={employeeDetailUserId}
+        onClose={() => setEmployeeDetailUserId(null)}
+      />
     </AppShell>
   );
 }

@@ -292,6 +292,29 @@ async def list_employee_directory(
     return [_row_to_out(u) for u in users]
 
 
+@router.get("/{user_id}", response_model=EmployeeDirectoryRowOut)
+async def get_employee_directory_row(
+    user_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(require_permission(EMPLOYEE_DIRECTORY_READ))],
+) -> EmployeeDirectoryRowOut:
+    """Одна карточка справочника (тот же состав полей, что и в списке)."""
+    u = (
+        await session.execute(
+            select(User)
+            .where(User.id == user_id)
+            .options(
+                selectinload(User.position),
+                selectinload(User.employee_profile),
+                selectinload(User.system_memberships).selectinload(UserSystem.system),
+            ),
+        )
+    ).scalar_one_or_none()
+    if not u:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    return _row_to_out(u)
+
+
 @router.post("/bulk-profile", response_model=EmployeeDirectoryBulkProfileOut)
 async def bulk_profile_patch(
     body: EmployeeDirectoryBulkProfileIn,

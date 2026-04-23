@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
 from app.schemas.common import ORMModel
 
@@ -37,3 +37,9 @@ class PositionBrief(BaseModel):
     id: uuid.UUID
     name: str
     slug: str
+
+
+class PositionMemberOut(BaseModel):
+    id: uuid.UUID
+    full_name: str
+    email: EmailStr

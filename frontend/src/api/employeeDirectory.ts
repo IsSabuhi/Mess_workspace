@@ -86,6 +86,10 @@ export async function listEmployeeDirectory(
   return apiFetch<EmployeeDirectoryRowOut[]>(`/api/v1/employee-directory${q ? `?${q}` : ""}`);
 }
 
+export async function getEmployeeDirectoryUser(userId: string): Promise<EmployeeDirectoryRowOut> {
+  return apiFetch<EmployeeDirectoryRowOut>(`/api/v1/employee-directory/${userId}`);
+}
+
 export async function patchEmployeeDirectory(
   userId: string,
   body: EmployeeDirectoryPatch,

@@ -25,10 +25,20 @@ export type PositionUpdate = {
   is_active?: boolean;
 };
 
+export type PositionMemberOut = {
+  id: string;
+  full_name: string;
+  email: string;
+};
+
 export async function listPositions(activeOnly = true): Promise<PositionOut[]> {
   const sp = new URLSearchParams();
   sp.set("active_only", activeOnly ? "true" : "false");
   return apiFetch<PositionOut[]>(`/api/v1/positions?${sp.toString()}`);
+}
+
+export async function listPositionMembers(positionId: string): Promise<PositionMemberOut[]> {
+  return apiFetch<PositionMemberOut[]>(`/api/v1/positions/${positionId}/members`);
 }
 
 export async function createPosition(body: PositionCreate): Promise<PositionOut> {

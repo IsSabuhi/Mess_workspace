@@ -9,7 +9,7 @@ from app.database import get_db
 from app.deps import get_current_user, require_permission
 from app.models import Position, User
 from app.permissions import POSITIONS_MANAGE
-from app.schemas.position import PositionCreate, PositionOut, PositionUpdate
+from app.schemas.position import PositionCreate, PositionMemberOut, PositionOut, PositionUpdate
 
 router = APIRouter(prefix="/positions", tags=["positions"])
 
@@ -41,6 +41,28 @@ async def list_positions(
         stmt = stmt.where(Position.is_active.is_(True))
     result = await session.execute(stmt)
     return [_position_to_out(p, counts.get(p.id, 0)) for p in result.scalars().all()]
+
+
+@router.get("/{position_id}/members", response_model=list[PositionMemberOut])
+async def list_position_members(
+    position_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(get_current_user)],
+) -> list[PositionMemberOut]:
+    pos = await session.get(Position, position_id)
+    if not pos:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Position not found")
+
+    stmt = (
+        select(User)
+        .where(User.position_id == position_id, User.is_active.is_(True))
+        .order_by(User.full_name, User.email)
+    )
+    rows = (await session.execute(stmt)).scalars().all()
+    return [
+        PositionMemberOut(id=u.id, full_name=u.full_name, email=u.email)
+        for u in rows
+    ]
 
 
 @router.post("", response_model=PositionOut, status_code=status.HTTP_201_CREATED)
