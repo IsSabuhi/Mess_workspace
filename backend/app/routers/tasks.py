@@ -1,4 +1,5 @@
 import uuid
+import re
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -16,15 +17,27 @@ from app.http_errors import (
     UNKNOWN_SYSTEM,
 )
 from app.deps import get_current_user, require_permission
-from app.models import Board, KanbanColumn, System, Task, TaskTag, User, UserSystem
+from app.models import Board, KanbanColumn, Notification, NotificationType, System, Task, TaskComment, TaskTag, User, UserSystem
 from app.models.task import task_assignees_table
 from app.permissions import TASKS_CREATE, TASKS_READ_ASSIGNED
-from app.schemas.task import ColumnMini, SystemMini, TagMini, TaskCreate, TaskOut, TaskUpdate, UserMini
+from app.schemas.task import (
+    ColumnMini,
+    SystemMini,
+    TagMini,
+    TaskCommentCreate,
+    TaskCommentOut,
+    TaskCommentUpdate,
+    TaskCreate,
+    TaskOut,
+    TaskUpdate,
+    UserMini,
+)
 from app.services.authz import user_has_permission, user_sees_all_tasks
 from app.services.task_archive import auto_archive_done_tasks
 from app.services.task_policy import can_delete_task, can_read_task, can_update_task
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
+_MENTION_RE = re.compile(r"@([a-zA-Z0-9_.+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})")
 
 
 async def _user_system_ids(session: AsyncSession, user_id: uuid.UUID) -> list[uuid.UUID]:
@@ -99,6 +112,66 @@ async def _apply_task_list_scope(session: AsyncSession, user: User, stmt):
         )
         return stmt.where(sub)
     return stmt.where(false())
+
+
+def _comment_to_out(comment: TaskComment) -> TaskCommentOut:
+    return TaskCommentOut(
+        id=comment.id,
+        task_id=comment.task_id,
+        author_id=comment.author_id,
+        body=comment.body,
+        created_at=comment.created_at,
+        updated_at=comment.updated_at,
+        author=UserMini.model_validate(comment.author) if comment.author else None,
+    )
+
+
+async def _can_manage_comment(session: AsyncSession, user: User, task: Task, comment: TaskComment) -> bool:
+    del session, task
+    if user.is_superuser:
+        return True
+    return comment.author_id == user.id
+
+
+async def _notify_mentions(session: AsyncSession, task: Task, actor: User, text: str) -> None:
+    mentioned_emails = {m.lower() for m in _MENTION_RE.findall(text)}
+    mentioned_names = {m.strip().lower() for m in re.findall(r"@\[([^\]]{1,255})\]", text) if m.strip()}
+    users_by_id: dict[uuid.UUID, User] = {}
+    if mentioned_emails:
+        users_by_email = (
+            await session.execute(
+                select(User).where(User.is_active.is_(True)).where(User.email.in_(mentioned_emails))
+            )
+        ).scalars().all()
+        for u in users_by_email:
+            users_by_id[u.id] = u
+    if mentioned_names:
+        users_by_name = (await session.execute(select(User).where(User.is_active.is_(True)))).scalars().all()
+        for u in users_by_name:
+            if u.full_name.strip().lower() in mentioned_names:
+                users_by_id[u.id] = u
+    for mentioned in users_by_id.values():
+        if mentioned.id == actor.id:
+            continue
+        if not await can_read_task(session, mentioned, task):
+            continue
+        already = await session.scalar(
+            select(Notification.id)
+            .where(Notification.user_id == mentioned.id)
+            .where(Notification.type == NotificationType.task_mention)
+            .where(Notification.task_id == task.id)
+        )
+        if already:
+            continue
+        session.add(
+            Notification(
+                user_id=mentioned.id,
+                type=NotificationType.task_mention,
+                title=f"Вас упомянули в задаче: {task.title}",
+                body=f"{actor.full_name}: {text[:220]}",
+                task_id=task.id,
+            )
+        )
 
 
 @router.get("", response_model=list[TaskOut])
@@ -269,3 +342,113 @@ async def delete_task(
     if not await can_delete_task(session, user, task):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
     await session.delete(task)
+
+
+@router.get("/{task_id}/comments", response_model=list[TaskCommentOut])
+async def list_task_comments(
+    task_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> list[TaskCommentOut]:
+    task = (await session.execute(select(Task).where(Task.id == task_id).options(*_TASK_LOAD))).scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    if not await can_read_task(session, user, task):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
+    stmt = (
+        select(TaskComment)
+        .where(TaskComment.task_id == task_id)
+        .order_by(TaskComment.created_at.asc())
+        .options(selectinload(TaskComment.author))
+    )
+    rows = (await session.execute(stmt)).scalars().all()
+    return [_comment_to_out(c) for c in rows]
+
+
+@router.post("/{task_id}/comments", response_model=TaskCommentOut, status_code=status.HTTP_201_CREATED)
+async def create_task_comment(
+    task_id: uuid.UUID,
+    body: TaskCommentCreate,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> TaskCommentOut:
+    task = (await session.execute(select(Task).where(Task.id == task_id).options(*_TASK_LOAD))).scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    if not await can_read_task(session, user, task):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
+
+    comment = TaskComment(task_id=task.id, author_id=user.id, body=body.body.strip())
+    session.add(comment)
+    await session.flush()
+
+    await _notify_mentions(session, task, user, comment.body)
+
+    await session.commit()
+    created = (
+        await session.execute(
+            select(TaskComment).where(TaskComment.id == comment.id).options(selectinload(TaskComment.author))
+        )
+    ).scalar_one()
+    return _comment_to_out(created)
+
+
+@router.patch("/{task_id}/comments/{comment_id}", response_model=TaskCommentOut)
+async def update_task_comment(
+    task_id: uuid.UUID,
+    comment_id: uuid.UUID,
+    body: TaskCommentUpdate,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> TaskCommentOut:
+    task = (await session.execute(select(Task).where(Task.id == task_id).options(*_TASK_LOAD))).scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    if not await can_read_task(session, user, task):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
+    comment = (
+        await session.execute(
+            select(TaskComment)
+            .where(TaskComment.id == comment_id)
+            .where(TaskComment.task_id == task_id)
+            .options(selectinload(TaskComment.author))
+        )
+    ).scalar_one_or_none()
+    if not comment:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Comment not found")
+    if not await _can_manage_comment(session, user, task, comment):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
+    comment.body = body.body.strip()
+    await _notify_mentions(session, task, user, comment.body)
+    await session.commit()
+    updated = (
+        await session.execute(select(TaskComment).where(TaskComment.id == comment_id).options(selectinload(TaskComment.author)))
+    ).scalar_one()
+    return _comment_to_out(updated)
+
+
+@router.delete("/{task_id}/comments/{comment_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_task_comment(
+    task_id: uuid.UUID,
+    comment_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> None:
+    task = (await session.execute(select(Task).where(Task.id == task_id).options(*_TASK_LOAD))).scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    if not await can_read_task(session, user, task):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
+    comment = (
+        await session.execute(
+            select(TaskComment)
+            .where(TaskComment.id == comment_id)
+            .where(TaskComment.task_id == task_id)
+        )
+    ).scalar_one_or_none()
+    if not comment:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Comment not found")
+    if not await _can_manage_comment(session, user, task, comment):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
+    await session.delete(comment)
+    await session.commit()

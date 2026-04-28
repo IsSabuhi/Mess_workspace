@@ -746,6 +746,7 @@ function UserFormModal({
     initial?.birth_date ? initial.birth_date.slice(0, 10) : "",
   );
   const [password, setPassword] = useState("");
+  const [passwordConfirm, setPasswordConfirm] = useState("");
   const [isSuperuser, setIsSuperuser] = useState(initial?.is_superuser ?? false);
   const [isActive, setIsActive] = useState(initial?.is_active ?? true);
   const [roleIds, setRoleIds] = useState<Set<string>>(
@@ -792,6 +793,7 @@ function UserFormModal({
     setRoleIds(new Set(initial.roles.map((r) => r.id)));
     setSystemIds(new Set(initial.systems?.map((s) => s.id) ?? []));
     setPassword("");
+    setPasswordConfirm("");
   }, [initial]);
 
   async function submit(e: React.FormEvent) {
@@ -803,6 +805,12 @@ function UserFormModal({
         if (password.length < 8) {
           setErr("Пароль минимум 8 символов");
           toastError("Пароль минимум 8 символов");
+          setSaving(false);
+          return;
+        }
+        if (password !== passwordConfirm) {
+          setErr("Пароли не совпадают");
+          toastError("Пароли не совпадают");
           setSaving(false);
           return;
         }
@@ -827,7 +835,21 @@ function UserFormModal({
           position_id: positionId || null,
           birth_date: birthDate.trim() || null,
         };
-        if (password.length >= 8) payload.password = password;
+        if (password.length > 0) {
+          if (password.length < 8) {
+            setErr("Новый пароль: минимум 8 символов");
+            toastError("Новый пароль: минимум 8 символов");
+            setSaving(false);
+            return;
+          }
+          if (password !== passwordConfirm) {
+            setErr("Пароли не совпадают");
+            toastError("Пароли не совпадают");
+            setSaving(false);
+            return;
+          }
+          payload.password = password;
+        }
         await onUpdate?.(payload);
       }
       toastSuccess(initial ? "Пользователь сохранён" : "Пользователь создан");
@@ -944,6 +966,17 @@ function UserFormModal({
               required={!initial}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium">Повтор пароля</label>
+            <input
+              type="password"
+              minLength={initial ? 0 : 8}
+              required={!initial}
+              value={passwordConfirm}
+              onChange={(e) => setPasswordConfirm(e.target.value)}
               className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800"
             />
           </div>

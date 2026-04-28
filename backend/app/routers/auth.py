@@ -185,6 +185,24 @@ async def patch_me(
     session: Annotated[AsyncSession, Depends(get_db)],
 ) -> UserMeOut:
     data = body.model_dump(exclude_unset=True)
+    new_pw_raw = data.pop("new_password", None)
+    cur_pw_raw = data.pop("current_password", None)
+    if new_pw_raw is not None:
+        new_pw = str(new_pw_raw).strip()
+        if new_pw:
+            cur_pw = str(cur_pw_raw or "").strip()
+            if len(new_pw) < 8:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Новый пароль: минимум 8 символов",
+                )
+            if not cur_pw or not verify_password(cur_pw, current.hashed_password):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Неверный текущий пароль",
+                )
+            current.hashed_password = hash_password(new_pw)
+
     if "full_name" in data:
         current.full_name = data["full_name"]
     if "birth_date" in data:

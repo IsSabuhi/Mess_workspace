@@ -23,6 +23,16 @@ export type TaskOut = {
   tags: { id: string; name: string; color: string }[];
 };
 
+export type TaskCommentOut = {
+  id: string;
+  task_id: string;
+  author_id: string | null;
+  body: string;
+  created_at: string;
+  updated_at: string;
+  author: { id: string; email: string; full_name: string } | null;
+};
+
 export type TaskCreate = {
   title: string;
   description?: string | null;
@@ -84,4 +94,28 @@ export async function updateTask(taskId: string, body: TaskUpdate): Promise<Task
 
 export async function deleteTask(taskId: string): Promise<void> {
   await apiFetch<void>(`/api/v1/tasks/${taskId}`, { method: "DELETE" });
+}
+
+export async function listTaskComments(taskId: string): Promise<TaskCommentOut[]> {
+  return apiFetch<TaskCommentOut[]>(`/api/v1/tasks/${taskId}/comments`);
+}
+
+export async function createTaskComment(taskId: string, body: { body: string }): Promise<TaskCommentOut> {
+  return apiFetch<TaskCommentOut>(`/api/v1/tasks/${taskId}/comments`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function updateTaskComment(taskId: string, commentId: string, body: { body: string }): Promise<TaskCommentOut> {
+  return apiFetch<TaskCommentOut>(`/api/v1/tasks/${taskId}/comments/${commentId}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function deleteTaskComment(taskId: string, commentId: string): Promise<void> {
+  await apiFetch<void>(`/api/v1/tasks/${taskId}/comments/${commentId}`, {
+    method: "DELETE",
+  });
 }

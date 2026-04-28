@@ -15,6 +15,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { GripVertical, Pencil, Tags, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import { ApiError } from "../api/client";
 import {
@@ -26,8 +27,18 @@ import {
 import type { BoardOut, KanbanColumnOut } from "../api/boards";
 import { listSystems } from "../api/systems";
 import { createTaskTag, deleteTaskTag, listTaskTags, updateTaskTag } from "../api/taskTags";
-import { createTask, deleteTask, getTask, listTasks, updateTask } from "../api/tasks";
-import type { TaskCreate, TaskOut, TaskUpdate } from "../api/tasks";
+import {
+  createTask,
+  createTaskComment,
+  deleteTask,
+  deleteTaskComment,
+  getTask,
+  listTaskComments,
+  listTasks,
+  updateTask,
+  updateTaskComment,
+} from "../api/tasks";
+import type { TaskCommentOut, TaskCreate, TaskOut, TaskUpdate } from "../api/tasks";
 import { listAssigneeCandidates } from "../api/users";
 import { MultiAssigneePicker } from "../components/MultiAssigneePicker";
 import { AppShell } from "../components/AppShell";
@@ -99,6 +110,18 @@ function queryErr(e: unknown): string | null {
   if (e instanceof ApiError) return e.detail;
   if (e) return "Ошибка загрузки";
   return null;
+}
+
+function activeMentionToken(text: string): { query: string; start: number; end: number } | null {
+  const m = text.match(/(^|\s)@([^\s@]*)$/u);
+  if (!m) return null;
+  const query = m[2] ?? "";
+  const start = text.length - query.length - 1;
+  return { query, start, end: text.length };
+}
+
+function applyMention(text: string, token: { start: number; end: number }, mentionValue: string): string {
+  return `${text.slice(0, token.start)}${mentionValue} ${text.slice(token.end)}`;
 }
 
 /** Slug для API колонки: ^[a-z0-9_]+$ */
@@ -287,6 +310,7 @@ function SortableColumnShell({
 export function TasksPage() {
   const { state } = useAuth();
   const user = state.status === "authenticated" ? state.user : null;
+  const [searchParams, setSearchParams] = useSearchParams();
   const qc = useQueryClient();
 
   const [filterSystem, setFilterSystem] = useState<string>("");
@@ -314,6 +338,9 @@ export function TasksPage() {
   const [drawerTaskId, setDrawerTaskId] = useState<string | null>(null);
   const [drawerTask, setDrawerTask] = useState<TaskOut | null>(null);
   const [drawerLoading, setDrawerLoading] = useState(false);
+  const [commentBody, setCommentBody] = useState("");
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const [editingCommentBody, setEditingCommentBody] = useState("");
 
   const [editTitle, setEditTitle] = useState("");
   const [editDescription, setEditDescription] = useState("");
@@ -372,6 +399,11 @@ export function TasksPage() {
     queryFn: listTaskTags,
     enabled: !!user,
   });
+  const commentsQuery = useQuery({
+    queryKey: ["task-comments", drawerTaskId],
+    queryFn: () => listTaskComments(drawerTaskId ?? ""),
+    enabled: !!(user && drawerTaskId && drawerTask),
+  });
 
   const board = boardQuery.data ?? null;
   const tasks = tasksQuery.data ?? [];
@@ -382,9 +414,13 @@ export function TasksPage() {
   }, [user, canViewAllSystems, systemsQuery.data]);
 
   /** Исполнитель: с бэкенда — все сотрудники (руководитель) или участники тех же систем; иначе только «я» */
+  const mentionChoices = useMemo(
+    () => (assigneeCandidatesQuery.data ?? []).map((u) => ({ id: u.id, full_name: u.full_name, email: u.email })),
+    [assigneeCandidatesQuery.data],
+  );
   const assigneeChoices = useMemo((): { id: string; full_name: string }[] => {
     if (!user) return [];
-    const fromApi = (assigneeCandidatesQuery.data ?? []).map((x) => ({
+    const fromApi = mentionChoices.map((x) => ({
       id: x.id,
       full_name: x.full_name,
     }));
@@ -393,7 +429,7 @@ export function TasksPage() {
       return hasSelf ? fromApi : [{ id: user.id, full_name: `${user.full_name} (я)` }, ...fromApi];
     }
     return [{ id: user.id, full_name: `Я (${user.full_name})` }];
-  }, [user, assigneeCandidatesQuery.data]);
+  }, [user, mentionChoices]);
 
   const loading =
     boardQuery.isPending ||
@@ -605,6 +641,40 @@ export function TasksPage() {
       toastApiError(e, "Не удалось сохранить задачу");
     },
   });
+  const addCommentMut = useMutation({
+    mutationFn: ({ taskId, body }: { taskId: string; body: string }) =>
+      createTaskComment(taskId, { body }),
+    onSuccess: (created) => {
+      qc.setQueryData<TaskCommentOut[]>(["task-comments", created.task_id], (old) => [...(old ?? []), created]);
+      setCommentBody("");
+      toastSuccess("Комментарий добавлен");
+      void qc.invalidateQueries({ queryKey: ["notifications", "unread-count"], refetchType: "none" });
+    },
+    onError: (e: unknown) => toastApiError(e, "Не удалось добавить комментарий"),
+  });
+  const editCommentMut = useMutation({
+    mutationFn: ({ taskId, commentId, body }: { taskId: string; commentId: string; body: string }) =>
+      updateTaskComment(taskId, commentId, { body }),
+    onSuccess: (updated) => {
+      qc.setQueryData<TaskCommentOut[]>(["task-comments", updated.task_id], (old) =>
+        (old ?? []).map((c) => (c.id === updated.id ? updated : c)),
+      );
+      setEditingCommentId(null);
+      setEditingCommentBody("");
+      toastSuccess("Комментарий обновлён");
+    },
+    onError: (e: unknown) => toastApiError(e, "Не удалось обновить комментарий"),
+  });
+  const deleteCommentMut = useMutation({
+    mutationFn: ({ taskId, commentId }: { taskId: string; commentId: string }) => deleteTaskComment(taskId, commentId),
+    onSuccess: (_, vars) => {
+      qc.setQueryData<TaskCommentOut[]>(["task-comments", vars.taskId], (old) =>
+        (old ?? []).filter((c) => c.id !== vars.commentId),
+      );
+      toastSuccess("Комментарий удалён");
+    },
+    onError: (e: unknown) => toastApiError(e, "Не удалось удалить комментарий"),
+  });
   const archiveMut = useMutation({
     mutationFn: ({ id, archived }: { id: string; archived: boolean }) =>
       updateTask(id, { archived_at: archived ? new Date().toISOString() : null }),
@@ -622,6 +692,9 @@ export function TasksPage() {
   const closeDrawer = useCallback(() => {
     setDrawerTaskId(null);
     setDrawerTask(null);
+    setCommentBody("");
+    setEditingCommentId(null);
+    setEditingCommentBody("");
   }, []);
 
   const { backdropProps: drawerBackdropProps, stopPanelPointer: drawerPanelStop } = useModalLayer(
@@ -718,6 +791,35 @@ export function TasksPage() {
     return s;
   }, [tasks, archiveFilter]);
 
+  useEffect(() => {
+    const taskIdFromUrl = searchParams.get("taskId");
+    if (!user || !taskIdFromUrl) return;
+    const taskFromList = tasks.find((t) => t.id === taskIdFromUrl);
+    if (taskFromList) {
+      void openDrawer(taskFromList);
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("taskId");
+        return next;
+      });
+      return;
+    }
+    void (async () => {
+      try {
+        const task = await getTask(taskIdFromUrl);
+        await openDrawer(task);
+      } catch {
+        toastError("Не удалось открыть задачу из уведомления");
+      } finally {
+        setSearchParams((prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete("taskId");
+          return next;
+        });
+      }
+    })();
+  }, [searchParams, setSearchParams, user, tasks]);
+
   async function openDrawer(task: TaskOut) {
     setDrawerTaskId(task.id);
     setDrawerTask(task);
@@ -729,6 +831,9 @@ export function TasksPage() {
     setEditColumnId(task.column_id);
     setEditAssigneeIds(task.assignees?.map((a) => a.id) ?? []);
     setEditTagIds(task.tags.map((t) => t.id));
+    setCommentBody("");
+    setEditingCommentId(null);
+    setEditingCommentBody("");
     setDrawerLoading(true);
     try {
       const fresh = await getTask(task.id);
@@ -764,6 +869,40 @@ export function TasksPage() {
         tag_ids: editTagIds,
       },
     });
+  }
+
+  function submitComment() {
+    if (!drawerTaskId) return;
+    const body = commentBody.trim();
+    if (!body) return;
+    addCommentMut.mutate({ taskId: drawerTaskId, body });
+  }
+
+  function beginEditComment(comment: TaskCommentOut) {
+    setEditingCommentId(comment.id);
+    setEditingCommentBody(comment.body);
+  }
+
+  function saveEditedComment() {
+    if (!drawerTaskId || !editingCommentId) return;
+    const body = editingCommentBody.trim();
+    if (!body) return;
+    editCommentMut.mutate({ taskId: drawerTaskId, commentId: editingCommentId, body });
+  }
+
+  function removeComment(comment: TaskCommentOut) {
+    if (!drawerTaskId) return;
+    if (!window.confirm("Удалить комментарий?")) return;
+    deleteCommentMut.mutate({ taskId: drawerTaskId, commentId: comment.id });
+  }
+
+  function insertMention(userPick: { email: string; full_name: string }, target: "new" | "edit") {
+    const source = target === "new" ? commentBody : editingCommentBody;
+    const token = activeMentionToken(source);
+    if (!token) return;
+    const next = applyMention(source, token, `@[${userPick.full_name}]`);
+    if (target === "new") setCommentBody(next);
+    else setEditingCommentBody(next);
   }
 
   function toggleArchiveTask(task: TaskOut) {
@@ -984,6 +1123,26 @@ export function TasksPage() {
 
   const drawerCanEdit = user && drawerTask ? canUpdateTask(user, drawerTask) : false;
   const drawerCanDelete = !!(user && drawerTask && canDeleteTask(user));
+  const newCommentMentionToken = activeMentionToken(commentBody);
+  const newCommentMentionList = newCommentMentionToken
+    ? mentionChoices
+        .filter((u) => {
+          const q = newCommentMentionToken.query.toLowerCase();
+          if (!q) return true;
+          return u.email.toLowerCase().includes(q) || u.full_name.toLowerCase().includes(q);
+        })
+        .slice(0, 6)
+    : [];
+  const editCommentMentionToken = activeMentionToken(editingCommentBody);
+  const editCommentMentionList = editCommentMentionToken
+    ? mentionChoices
+        .filter((u) => {
+          const q = editCommentMentionToken.query.toLowerCase();
+          if (!q) return true;
+          return u.email.toLowerCase().includes(q) || u.full_name.toLowerCase().includes(q);
+        })
+        .slice(0, 6)
+    : [];
   const displayError = formError ?? loadError;
 
   return (
@@ -1437,6 +1596,129 @@ export function TasksPage() {
                   </div>
                 </div>
               )}
+              <div className="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900/40">
+                <div className="mb-2 flex items-center justify-between">
+                  <label className="block text-xs font-medium text-slate-500">Комментарии</label>
+                  <span className="text-xs text-slate-400">
+                    {commentsQuery.data?.length ?? 0}
+                  </span>
+                </div>
+                <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
+                  {commentsQuery.isPending && <p className="text-xs text-slate-500">Загрузка…</p>}
+                  {!commentsQuery.isPending && (commentsQuery.data?.length ?? 0) === 0 && (
+                    <p className="text-xs text-slate-500">Пока нет комментариев.</p>
+                  )}
+                  {(commentsQuery.data ?? []).map((comment) => (
+                    <div
+                      key={comment.id}
+                      className="rounded-lg border border-slate-100 bg-slate-50/80 px-2.5 py-2 text-xs dark:border-slate-700 dark:bg-slate-800/70"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="font-medium text-slate-700 dark:text-slate-200">
+                          {comment.author?.full_name ?? "Пользователь"} · {formatDt(comment.created_at)}
+                        </p>
+                        {user && (drawerCanEdit || comment.author_id === user.id) && (
+                          <div className="flex gap-1">
+                            <button
+                              type="button"
+                              onClick={() => beginEditComment(comment)}
+                              className="rounded border border-slate-200 px-1.5 py-0.5 text-[11px] text-slate-600 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700"
+                            >
+                              Изменить
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => removeComment(comment)}
+                              className="rounded border border-red-200 px-1.5 py-0.5 text-[11px] text-red-600 hover:bg-red-50 dark:border-red-900/40 dark:text-red-300 dark:hover:bg-red-950/30"
+                            >
+                              Удалить
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                      {editingCommentId === comment.id ? (
+                        <div className="mt-2 space-y-2">
+                          <textarea
+                            value={editingCommentBody}
+                            onChange={(e) => setEditingCommentBody(e.target.value)}
+                            rows={3}
+                            className="w-full rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-900"
+                          />
+                          {editCommentMentionToken && editCommentMentionList.length > 0 && (
+                            <div className="rounded-lg border border-slate-200 bg-white p-1 dark:border-slate-600 dark:bg-slate-900">
+                              {editCommentMentionList.map((u) => (
+                                <button
+                                  key={u.id}
+                                  type="button"
+                                  onClick={() => insertMention(u, "edit")}
+                                  className="block w-full rounded px-2 py-1 text-left text-xs hover:bg-slate-100 dark:hover:bg-slate-700"
+                                >
+                                  {u.full_name} · {u.email}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                          <div className="flex justify-end gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingCommentId(null);
+                                setEditingCommentBody("");
+                              }}
+                              className="rounded border border-slate-300 px-2 py-1 text-[11px] dark:border-slate-600"
+                            >
+                              Отмена
+                            </button>
+                            <button
+                              type="button"
+                              disabled={editCommentMut.isPending || !editingCommentBody.trim()}
+                              onClick={saveEditedComment}
+                              className="rounded bg-sky-500 px-2 py-1 text-[11px] font-medium text-white disabled:opacity-60"
+                            >
+                              {editCommentMut.isPending ? "Сохранение…" : "Сохранить"}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="mt-1 whitespace-pre-wrap text-sm text-slate-800 dark:text-slate-100">{comment.body}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-3 space-y-2">
+                  <textarea
+                    value={commentBody}
+                    onChange={(e) => setCommentBody(e.target.value)}
+                    rows={3}
+                    placeholder="Напишите комментарий. Для упоминания введите @ и выберите человека по ФИО или email"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+                  />
+                  {newCommentMentionToken && newCommentMentionList.length > 0 && (
+                    <div className="rounded-lg border border-slate-200 bg-white p-1 dark:border-slate-600 dark:bg-slate-900">
+                      {newCommentMentionList.map((u) => (
+                        <button
+                          key={u.id}
+                          type="button"
+                          onClick={() => insertMention(u, "new")}
+                          className="block w-full rounded px-2 py-1 text-left text-xs hover:bg-slate-100 dark:hover:bg-slate-700"
+                        >
+                          {u.full_name} · {u.email}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      disabled={addCommentMut.isPending || !commentBody.trim()}
+                      onClick={submitComment}
+                      className="rounded-lg bg-sky-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-600 disabled:opacity-60"
+                    >
+                      {addCommentMut.isPending ? "Отправка…" : "Добавить комментарий"}
+                    </button>
+                  </div>
+                </div>
+              </div>
               <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-400">
                 <p>
                   <span className="font-medium text-slate-700 dark:text-slate-300">Статус колонки: </span>

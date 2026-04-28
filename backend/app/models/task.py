@@ -73,3 +73,8 @@ class Task(Base):
         secondary="task_tag_links",
         back_populates="tasks",
     )
+    comments: Mapped[list["TaskComment"]] = relationship(
+        "TaskComment",
+        back_populates="task",
+        cascade="all, delete-orphan",
+    )

@@ -76,3 +76,21 @@ class TaskOut(ORMModel):
     system: SystemMini | None = None
     column: ColumnMini | None = None
     tags: list[TagMini] = Field(default_factory=list)
+
+
+class TaskCommentCreate(BaseModel):
+    body: str = Field(..., min_length=1, max_length=4000)
+
+
+class TaskCommentUpdate(BaseModel):
+    body: str = Field(..., min_length=1, max_length=4000)
+
+
+class TaskCommentOut(ORMModel):
+    id: uuid.UUID
+    task_id: uuid.UUID
+    author_id: uuid.UUID | None
+    body: str
+    created_at: datetime
+    updated_at: datetime
+    author: UserMini | None = None

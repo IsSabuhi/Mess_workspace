@@ -28,6 +28,7 @@ function formatDate(iso: string): string {
 function notificationTypeLabel(type: NotificationOut["type"]): string {
   if (type === "release_note") return "Обновление системы";
   if (type === "task_overdue") return "Просрочено";
+  if (type === "task_mention") return "Упоминание";
   return "До 3 дней";
 }
 
@@ -107,7 +108,7 @@ export function NotificationsPage() {
                   <div className="flex items-center gap-2">
                     {n.task_id && (
                       <Link
-                        to="/tasks"
+                        to={`/tasks?taskId=${n.task_id}`}
                         className="text-sm font-medium text-sky-600 hover:underline dark:text-sky-400"
                       >
                         К задаче

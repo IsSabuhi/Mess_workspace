@@ -14,6 +14,7 @@ from app.database import Base
 class NotificationType(str, enum.Enum):
     task_due_3_days = "task_due_3_days"
     task_overdue = "task_overdue"
+    task_mention = "task_mention"
     release_note = "release_note"
 
 

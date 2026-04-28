@@ -61,6 +61,9 @@ export type ProfilePatch = {
   birth_date?: string | null;
   position_id?: string | null;
   dashboard_preferences?: DashboardPreferences;
+  /** Обязателен вместе с new_password */
+  current_password?: string;
+  new_password?: string;
 };
 
 export async function patchProfile(body: ProfilePatch): Promise<UserMe> {

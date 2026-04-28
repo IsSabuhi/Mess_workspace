@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { History, LayoutDashboard, Moon, Palette, Sun, Monitor, UserRound } from "lucide-react";
+import { History, LayoutDashboard, Lock, Moon, Palette, Sun, Monitor, UserRound } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { fetchLoginHistory, patchProfile } from "../api/auth";
@@ -81,6 +81,12 @@ export function SettingsPage() {
   const [homeBlockVisible, setHomeBlockVisible] = useState<Record<string, boolean>>({});
   const homeBlockVisibleRef = useRef(homeBlockVisible);
   homeBlockVisibleRef.current = homeBlockVisible;
+
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [newPasswordConfirm, setNewPasswordConfirm] = useState("");
+  const [pwdErr, setPwdErr] = useState<string | null>(null);
+  const [pwdMsg, setPwdMsg] = useState<string | null>(null);
 
   const isManager = useMemo(
     () =>
@@ -174,6 +180,29 @@ export function SettingsPage() {
     patchDashboardMut.mutate(home);
   }
 
+  const changePwdMut = useMutation({
+    mutationFn: () =>
+      patchProfile({
+        current_password: currentPassword,
+        new_password: newPassword,
+      }),
+    onSuccess: async (updated) => {
+      setPwdMsg("Пароль изменён");
+      setPwdErr(null);
+      setCurrentPassword("");
+      setNewPassword("");
+      setNewPasswordConfirm("");
+      toastSuccess("Пароль изменён");
+      setAuthenticatedUser(updated);
+    },
+    onError: (e: unknown) => {
+      setPwdMsg(null);
+      if (e instanceof ApiError) setPwdErr(e.detail);
+      else setPwdErr("Не удалось сменить пароль");
+      toastApiError(e, "Не удалось сменить пароль");
+    },
+  });
+
   const saveMut = useMutation({
     mutationFn: () =>
       patchProfile({
@@ -202,6 +231,25 @@ export function SettingsPage() {
     setMsg(null);
     setErr(null);
     saveMut.mutate();
+  }
+
+  function onSubmitPassword(e: React.FormEvent) {
+    e.preventDefault();
+    setPwdErr(null);
+    setPwdMsg(null);
+    if (newPassword.length < 8) {
+      setPwdErr("Новый пароль: минимум 8 символов");
+      return;
+    }
+    if (newPassword !== newPasswordConfirm) {
+      setPwdErr("Новый пароль и подтверждение не совпадают");
+      return;
+    }
+    if (!currentPassword.trim()) {
+      setPwdErr("Введите текущий пароль");
+      return;
+    }
+    changePwdMut.mutate();
   }
 
   const themeDescription =
@@ -317,6 +365,85 @@ export function SettingsPage() {
                     className="rounded-xl bg-gradient-to-r from-sky-500 to-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-sky-500/25 transition hover:from-sky-600 hover:to-indigo-700 disabled:opacity-60"
                   >
                     {saveMut.isPending ? "Сохранение…" : "Сохранить профиль"}
+                  </button>
+                </form>
+              )}
+            </div>
+          </section>
+
+          {/* Пароль */}
+          <section className={cardClass}>
+            <div className="border-b border-slate-100 bg-gradient-to-r from-amber-50/80 via-white to-slate-50/50 px-6 py-5 dark:border-slate-700/80 dark:from-amber-950/25 dark:via-slate-900/80 dark:to-slate-900/60 sm:px-8">
+              <div className="flex items-start gap-4">
+                <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 text-white shadow-lg shadow-amber-500/20">
+                  <Lock className="h-6 w-6" strokeWidth={1.75} />
+                </span>
+                <div>
+                  <h2 className="text-lg font-semibold tracking-tight text-slate-900 dark:text-white">Смена пароля</h2>
+                  <p className="mt-1 text-sm leading-relaxed text-slate-600 dark:text-slate-400">
+                    Для смены пароля введите текущий пароль и новый пароль.
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="p-6 sm:p-8">
+              {user && (
+                <form onSubmit={onSubmitPassword} className="space-y-5">
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-200">
+                      Текущий пароль
+                    </label>
+                    <input
+                      type="password"
+                      autoComplete="current-password"
+                      value={currentPassword}
+                      onChange={(e) => setCurrentPassword(e.target.value)}
+                      className={inputClass}
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-200">
+                      Новый пароль
+                    </label>
+                    <input
+                      type="password"
+                      autoComplete="new-password"
+                      minLength={8}
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      className={inputClass}
+                    />
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Не менее 8 символов.</p>
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-200">
+                      Повтор нового пароля
+                    </label>
+                    <input
+                      type="password"
+                      autoComplete="new-password"
+                      minLength={8}
+                      value={newPasswordConfirm}
+                      onChange={(e) => setNewPasswordConfirm(e.target.value)}
+                      className={inputClass}
+                    />
+                  </div>
+                  {pwdErr && (
+                    <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
+                      {pwdErr}
+                    </p>
+                  )}
+                  {pwdMsg && (
+                    <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
+                      {pwdMsg}
+                    </p>
+                  )}
+                  <button
+                    type="submit"
+                    disabled={changePwdMut.isPending}
+                    className="rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-amber-500/20 transition hover:from-amber-600 hover:to-orange-700 disabled:opacity-60"
+                  >
+                    {changePwdMut.isPending ? "Сохранение…" : "Сменить пароль"}
                   </button>
                 </form>
               )}
