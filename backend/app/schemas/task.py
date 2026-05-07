@@ -10,6 +10,7 @@ from app.schemas.common import ORMModel
 class TaskCreate(BaseModel):
     title: str = Field(..., max_length=512)
     description: str | None = None
+    board_id: uuid.UUID | None = None
     column_id: uuid.UUID
     system_id: uuid.UUID | None = None
     assignee_ids: list[uuid.UUID] = Field(default_factory=list)

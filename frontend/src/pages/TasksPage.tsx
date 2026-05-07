@@ -19,11 +19,19 @@ import { useSearchParams } from "react-router-dom";
 
 import { ApiError } from "../api/client";
 import {
+  createBoard,
   createBoardColumn,
+  deleteBoard,
   deleteBoardColumn,
   getDefaultBoard,
+  listBoardAudit,
+  listBoardMembers,
+  listBoards,
+  replaceBoardMembers,
+  updateBoard,
   updateBoardColumn,
 } from "../api/boards";
+import { getAuditSettings, patchAuditSettings } from "../api/audit";
 import type { BoardOut, KanbanColumnOut } from "../api/boards";
 import { listSystems } from "../api/systems";
 import { createTaskTag, deleteTaskTag, listTaskTags, updateTaskTag } from "../api/taskTags";
@@ -70,6 +78,24 @@ const PRIORITY_BADGE_CLASS: Record<TaskOut["priority"], string> = {
   high: "bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300",
   urgent: "bg-rose-100 text-rose-800 dark:bg-rose-950/50 dark:text-rose-300",
 };
+
+const BOARD_MEMBER_ROLE_LABEL: Record<"viewer" | "editor" | "manager", string> = {
+  viewer: "Наблюдатель",
+  editor: "Редактор",
+  manager: "Менеджер",
+};
+
+function makeBoardSlug(name: string): string {
+  const raw = name
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_")
+    .replace(/[^a-z0-9_]/g, "")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "");
+  if (raw.length >= 1) return raw.slice(0, 128);
+  return `board_${Date.now().toString(36)}`;
+}
 
 type TaskTagView = { id: string; name: string; color: string };
 
@@ -314,6 +340,7 @@ export function TasksPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const qc = useQueryClient();
 
+  const [selectedBoardId, setSelectedBoardId] = useState<string>("");
   const [filterSystem, setFilterSystem] = useState<string>("");
   const [showOverdueOnly, setShowOverdueOnly] = useState(false);
   const [showUnassignedOnly, setShowUnassignedOnly] = useState(false);
@@ -327,9 +354,16 @@ export function TasksPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [tagModalOpen, setTagModalOpen] = useState(false);
   const [columnModalOpen, setColumnModalOpen] = useState(false);
+  const [boardCreateModalOpen, setBoardCreateModalOpen] = useState(false);
+  const [boardSettingsModalOpen, setBoardSettingsModalOpen] = useState(false);
+  const [boardSettingsTab, setBoardSettingsTab] = useState<"access" | "edit" | "delete" | "audit">("access");
   const [newColumnName, setNewColumnName] = useState("");
   const [newColumnSlug, setNewColumnSlug] = useState("");
   const [newColumnIsDone, setNewColumnIsDone] = useState(false);
+  const [newBoardName, setNewBoardName] = useState("");
+  const [newBoardSystemId, setNewBoardSystemId] = useState("");
+  const [editBoardName, setEditBoardName] = useState("");
+  const [auditRetentionDraft, setAuditRetentionDraft] = useState("180");
   const [columnEdit, setColumnEdit] = useState<KanbanColumnOut | null>(null);
   const [editColumnName, setEditColumnName] = useState("");
   const [editColumnIsDone, setEditColumnIsDone] = useState(false);
@@ -363,6 +397,8 @@ export function TasksPage() {
   const [activeDragColumn, setActiveDragColumn] = useState<KanbanColumnOut | null>(null);
   const [quickCreateColumnId, setQuickCreateColumnId] = useState<string | null>(null);
   const [quickCreateDraftByColumn, setQuickCreateDraftByColumn] = useState<Record<string, string>>({});
+  const [boardMembersDraft, setBoardMembersDraft] = useState<Array<{ user_id: string; role: "viewer" | "editor" | "manager" }>>([]);
+  const [boardMemberSearch, setBoardMemberSearch] = useState("");
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -371,7 +407,8 @@ export function TasksPage() {
   );
 
   const canCreate = user && hasPermission(user, PERM.TASKS_CREATE);
-  const canManageCols = !!user && canManageBoardColumns(user);
+  const canManageColsByPermission = !!user && canManageBoardColumns(user);
+  const canCreateBoards = !!user?.is_superuser;
   /** Руководитель / полный доступ к задачам: все системы и явный выбор при создании */
   const canViewAllSystems = !!(
     user &&
@@ -381,14 +418,20 @@ export function TasksPage() {
   );
 
   const tasksQueryKey = useMemo(
-    () => ["tasks", user?.id ?? "", archiveFilter] as const,
-    [user?.id, archiveFilter],
+    () => ["tasks", user?.id ?? "", archiveFilter, selectedBoardId] as const,
+    [user?.id, archiveFilter, selectedBoardId],
   );
 
   const boardQuery = useQuery({ queryKey: ["board", "default"], queryFn: getDefaultBoard });
+  const boardsQuery = useQuery({ queryKey: ["boards"], queryFn: listBoards, enabled: !!user });
   const tasksQuery = useQuery({
     queryKey: tasksQueryKey,
-    queryFn: () => listTasks({ include_archived: archiveFilter !== "active" }),
+    queryFn: () =>
+      listTasks({
+        board_id: selectedBoardId || undefined,
+        include_archived: archiveFilter !== "active",
+      }),
+    enabled: !!selectedBoardId,
   });
   const systemsQuery = useQuery({
     queryKey: ["systems"],
@@ -410,8 +453,44 @@ export function TasksPage() {
     queryFn: () => listTaskComments(drawerTaskId ?? ""),
     enabled: !!(user && drawerTaskId && drawerTask),
   });
+  const boardMembersQuery = useQuery({
+    queryKey: ["board-members", selectedBoardId],
+    queryFn: () => listBoardMembers(selectedBoardId),
+    enabled: !!(selectedBoardId && boardSettingsModalOpen),
+  });
+  const boardAuditQuery = useQuery({
+    queryKey: ["board-audit", selectedBoardId],
+    queryFn: () => listBoardAudit(selectedBoardId),
+    enabled: !!(selectedBoardId && boardSettingsModalOpen && boardSettingsTab === "audit"),
+  });
+  const auditSettingsQuery = useQuery({
+    queryKey: ["audit-settings"],
+    queryFn: getAuditSettings,
+    enabled: !!(boardSettingsModalOpen && boardSettingsTab === "audit" && canManageColsByPermission),
+  });
 
-  const board = boardQuery.data ?? null;
+  const board = useMemo(() => {
+    const all = boardsQuery.data ?? [];
+    if (!all.length) return boardQuery.data ?? null;
+    return all.find((b) => b.id === selectedBoardId) ?? all[0] ?? null;
+  }, [boardsQuery.data, boardQuery.data, selectedBoardId]);
+  const currentBoardMemberRole = useMemo(() => {
+    if (!user) return null;
+    const rows = boardMembersQuery.data ?? [];
+    return rows.find((m) => m.user_id === user.id)?.role ?? null;
+  }, [boardMembersQuery.data, user]);
+  const canManageCols = !!(
+    user &&
+    (canManageColsByPermission ||
+      (board?.scope === "system" &&
+        (currentBoardMemberRole === "editor" || currentBoardMemberRole === "manager")))
+  );
+  const canDeleteCurrentBoard = !!(
+    user &&
+    board?.scope === "system" &&
+    (canManageColsByPermission || currentBoardMemberRole === "manager")
+  );
+  const canManageBoardSettings = canDeleteCurrentBoard;
   const tasks = tasksQuery.data ?? [];
   const boardSystems = useMemo(() => {
     if (!user) return [];
@@ -439,14 +518,41 @@ export function TasksPage() {
 
   const loading =
     boardQuery.isPending ||
+    boardsQuery.isPending ||
     tasksQuery.isPending ||
     (canViewAllSystems && systemsQuery.isPending);
   const loadError =
     queryErr(boardQuery.error) ??
+    queryErr(boardsQuery.error) ??
+    queryErr(boardMembersQuery.error) ??
     queryErr(tasksQuery.error) ??
     (canViewAllSystems ? queryErr(systemsQuery.error) : null) ??
     queryErr(assigneeCandidatesQuery.error) ??
     queryErr(tagsQuery.error);
+
+  useEffect(() => {
+    const list = boardsQuery.data ?? [];
+    if (list.length === 0) return;
+    const fromUrl = searchParams.get("board");
+    if (fromUrl && list.some((b) => b.id === fromUrl) && selectedBoardId !== fromUrl) {
+      setSelectedBoardId(fromUrl);
+      return;
+    }
+    if (selectedBoardId && list.some((b) => b.id === selectedBoardId)) return;
+    const preferred = boardQuery.data ? list.find((b) => b.id === boardQuery.data?.id) : null;
+    setSelectedBoardId(preferred?.id ?? list[0]!.id);
+  }, [boardsQuery.data, boardQuery.data, selectedBoardId, searchParams]);
+
+  useEffect(() => {
+    if (!canCreateBoards) return;
+    if (searchParams.get("createBoard") !== "1") return;
+    setBoardCreateModalOpen(true);
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete("createBoard");
+      return next;
+    });
+  }, [canCreateBoards, searchParams, setSearchParams]);
 
   useEffect(() => {
     if (boardSystems.length && !systemId) setSystemId(boardSystems[0].id);
@@ -467,6 +573,42 @@ export function TasksPage() {
     const sorted = [...cols].sort((a, b) => a.sort_order - b.sort_order);
     if (sorted.length && !columnId) setColumnId(sorted[0].id);
   }, [board, columnId]);
+  useEffect(() => {
+    if (!boardSettingsModalOpen || boardSettingsTab !== "access") return;
+    const rows = boardMembersQuery.data ?? [];
+    setBoardMembersDraft(rows.map((m) => ({ user_id: m.user_id, role: m.role })));
+    setBoardMemberSearch("");
+  }, [boardSettingsModalOpen, boardSettingsTab, boardMembersQuery.data]);
+  useEffect(() => {
+    if (!boardSettingsModalOpen || !board) return;
+    setEditBoardName(board.name);
+  }, [boardSettingsModalOpen, board]);
+  useEffect(() => {
+    if (!boardSettingsModalOpen || boardSettingsTab !== "audit") return;
+    const v = auditSettingsQuery.data?.retention_days;
+    if (typeof v === "number") setAuditRetentionDraft(String(v));
+  }, [boardSettingsModalOpen, boardSettingsTab, auditSettingsQuery.data]);
+  const boardUserById = useMemo(
+    () => new Map(assigneeChoices.map((u) => [u.id, u])),
+    [assigneeChoices],
+  );
+  const visibleExistingBoardMembers = useMemo(() => {
+    const q = boardMemberSearch.trim().toLowerCase();
+    if (!q) return boardMembersDraft;
+    return boardMembersDraft.filter((m) => {
+      const name = boardUserById.get(m.user_id)?.full_name ?? m.user_id;
+      return name.toLowerCase().includes(q);
+    });
+  }, [boardMembersDraft, boardMemberSearch, boardUserById]);
+  const candidatesToAddBoardMembers = useMemo(() => {
+    const selected = new Set(boardMembersDraft.map((m) => m.user_id));
+    const q = boardMemberSearch.trim().toLowerCase();
+    return assigneeChoices.filter((u) => {
+      if (selected.has(u.id)) return false;
+      if (!q) return true;
+      return u.full_name.toLowerCase().includes(q);
+    });
+  }, [assigneeChoices, boardMembersDraft, boardMemberSearch]);
 
   const deleteMut = useMutation({
     mutationFn: (taskId: string) => deleteTask(taskId),
@@ -490,15 +632,21 @@ export function TasksPage() {
     },
     onSuccess: (created) => {
       qc.setQueryData<BoardOut>(["board", "default"], (old) => {
-        if (!old) return old;
-        let cols = [...old.columns, created];
-        if (created.is_done_column) {
-          cols = cols.map((c) => (c.id === created.id ? c : { ...c, is_done_column: false }));
-        }
-        cols.sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name));
-        return { ...old, columns: cols };
+        return old;
       });
-      void qc.invalidateQueries({ queryKey: ["board", "default"], refetchType: "none" });
+      qc.setQueryData<BoardOut[]>(["boards"], (old) => {
+        if (!old) return old;
+        return old.map((b) => {
+          if (b.id !== board?.id) return b;
+          let cols = [...b.columns, created];
+          if (created.is_done_column) {
+            cols = cols.map((c) => (c.id === created.id ? c : { ...c, is_done_column: false }));
+          }
+          cols.sort((a, b2) => a.sort_order - b2.sort_order || a.name.localeCompare(b2.name));
+          return { ...b, columns: cols };
+        });
+      });
+      void qc.invalidateQueries({ queryKey: ["boards"], refetchType: "none" });
       setColumnModalOpen(false);
       setNewColumnName("");
       setNewColumnSlug("");
@@ -518,9 +666,12 @@ export function TasksPage() {
     },
     onSuccess: (_, columnId) => {
       qc.setQueryData<BoardOut>(["board", "default"], (old) =>
-        old ? { ...old, columns: old.columns.filter((c) => c.id !== columnId) } : old,
+        old,
       );
-      void qc.invalidateQueries({ queryKey: ["board", "default"], refetchType: "none" });
+      qc.setQueryData<BoardOut[]>(["boards"], (old) =>
+        old?.map((b) => (b.id === board?.id ? { ...b, columns: b.columns.filter((c) => c.id !== columnId) } : b)) ?? old,
+      );
+      void qc.invalidateQueries({ queryKey: ["boards"], refetchType: "none" });
       void qc.invalidateQueries({ queryKey: tasksQueryKey, refetchType: "none" });
       toastSuccess("Колонка удалена");
     },
@@ -540,13 +691,19 @@ export function TasksPage() {
     },
     onSuccess: (updated) => {
       qc.setQueryData<BoardOut>(["board", "default"], (old) => {
+        return old;
+      });
+      qc.setQueryData<BoardOut[]>(["boards"], (old) => {
         if (!old) return old;
-        let cols = old.columns.map((c) => (c.id === updated.id ? updated : c));
-        if (updated.is_done_column) {
-          cols = cols.map((c) => (c.id === updated.id ? c : { ...c, is_done_column: false }));
-        }
-        cols = [...cols].sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name));
-        return { ...old, columns: cols };
+        return old.map((b) => {
+          if (b.id !== board?.id) return b;
+          let cols = b.columns.map((c) => (c.id === updated.id ? updated : c));
+          if (updated.is_done_column) {
+            cols = cols.map((c) => (c.id === updated.id ? c : { ...c, is_done_column: false }));
+          }
+          cols = [...cols].sort((a, b2) => a.sort_order - b2.sort_order || a.name.localeCompare(b2.name));
+          return { ...b, columns: cols };
+        });
       });
       qc.setQueriesData<TaskOut[]>({ queryKey: tasksQueryKey }, (old) =>
         old?.map((t) => {
@@ -562,7 +719,7 @@ export function TasksPage() {
           };
         }) ?? old,
       );
-      void qc.invalidateQueries({ queryKey: ["board", "default"], refetchType: "none" });
+      void qc.invalidateQueries({ queryKey: ["boards"], refetchType: "none" });
       void qc.invalidateQueries({ queryKey: tasksQueryKey, refetchType: "none" });
       setColumnEdit(null);
       toastSuccess("Колонка обновлена");
@@ -580,10 +737,66 @@ export function TasksPage() {
     },
     onSuccess: (withOrder) => {
       qc.setQueryData<BoardOut>(["board", "default"], (old) => (old ? { ...old, columns: withOrder } : old));
-      void qc.invalidateQueries({ queryKey: ["board", "default"], refetchType: "none" });
+      qc.setQueryData<BoardOut[]>(["boards"], (old) =>
+        old?.map((b) => (b.id === board?.id ? { ...b, columns: withOrder } : b)) ?? old,
+      );
+      void qc.invalidateQueries({ queryKey: ["boards"], refetchType: "none" });
       toastSuccess("Порядок колонок сохранён");
     },
     onError: (e: unknown) => toastApiError(e, "Не удалось изменить порядок колонок"),
+  });
+  const saveBoardMembersMut = useMutation({
+    mutationFn: (members: Array<{ user_id: string; role: "viewer" | "editor" | "manager" }>) => {
+      if (!selectedBoardId) throw new Error("Доска не выбрана");
+      return replaceBoardMembers(selectedBoardId, members);
+    },
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["board-members", selectedBoardId] });
+      toastSuccess("Участники доски обновлены");
+    },
+    onError: (e: unknown) => toastApiError(e, "Не удалось обновить участников доски"),
+  });
+  const createBoardMut = useMutation({
+    mutationFn: (body: { name: string; slug: string; scope: "system"; system_id: string }) => createBoard(body),
+    onSuccess: async (created) => {
+      await qc.invalidateQueries({ queryKey: ["boards"] });
+      setSelectedBoardId(created.id);
+      setBoardCreateModalOpen(false);
+      setNewBoardName("");
+      setNewBoardSystemId("");
+      toastSuccess("Доска создана");
+    },
+    onError: (e: unknown) => toastApiError(e, "Не удалось создать доску"),
+  });
+  const deleteBoardMut = useMutation({
+    mutationFn: (boardId: string) => deleteBoard(boardId),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["boards"] });
+      setSelectedBoardId("");
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("board");
+        return next;
+      });
+      toastSuccess("Доска удалена");
+    },
+    onError: (e: unknown) => toastApiError(e, "Не удалось удалить доску"),
+  });
+  const updateBoardMut = useMutation({
+    mutationFn: ({ boardId, name }: { boardId: string; name: string }) => updateBoard(boardId, { name }),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["boards"] });
+      toastSuccess("Настройки доски сохранены");
+    },
+    onError: (e: unknown) => toastApiError(e, "Не удалось обновить доску"),
+  });
+  const patchAuditSettingsMut = useMutation({
+    mutationFn: (body: { enabled?: boolean; retention_days?: number }) => patchAuditSettings(body),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["audit-settings"] });
+      toastSuccess("Настройки аудита сохранены");
+    },
+    onError: (e: unknown) => toastApiError(e, "Не удалось сохранить настройки аудита"),
   });
 
   const moveMut = useMutation({
@@ -954,6 +1167,7 @@ export function TasksPage() {
     }
 
     const body: TaskCreate = {
+      board_id: board?.id,
       title: title.trim(),
       column_id: columnId,
       assignee_ids: assigneeIds,
@@ -1010,6 +1224,10 @@ export function TasksPage() {
     }
     if (!window.confirm(`Удалить колонку «${col.name}»? Это нельзя отменить.`)) return;
     deleteColumnMut.mutate(col.id);
+  }
+  function openBoardSettings(tab: "access" | "edit" | "delete" | "audit") {
+    setBoardSettingsTab(tab);
+    setBoardSettingsModalOpen(true);
   }
 
   function resolveColumnIdFromOver(overId: string): string | undefined {
@@ -1260,6 +1478,15 @@ export function TasksPage() {
             className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
           >
             + Колонка
+          </button>
+        )}
+        {canManageBoardSettings && board?.scope === "system" && (
+          <button
+            type="button"
+            onClick={() => openBoardSettings("access")}
+            className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
+          >
+            Настройки доски
           </button>
         )}
       </div>
@@ -1635,7 +1862,22 @@ export function TasksPage() {
       )}
 
       {!loading && !sortedCols.length && (
-        <p className="text-slate-500">Нет колонок на доске. Проверьте миграции и сид.</p>
+        <div className="w-72 rounded-2xl border border-dashed border-slate-300 bg-white/60 p-5 dark:border-slate-600 dark:bg-slate-900/40">
+          <p className="text-sm text-slate-500 dark:text-slate-400">На доске пока нет колонок.</p>
+          {canManageCols && (
+            <button
+              type="button"
+              onClick={() => {
+                setNewColumnIsDone(false);
+                setColumnModalOpen(true);
+              }}
+              className="mt-3 inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
+            >
+              <Plus className="h-4 w-4" />
+              Создать первую колонку
+            </button>
+          )}
+        </div>
       )}
 
       {drawerTaskId && drawerTask && user && (
@@ -2224,6 +2466,286 @@ export function TasksPage() {
         </div>
       )}
 
+      {boardSettingsModalOpen && board?.scope === "system" && canManageBoardSettings && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
+          <div
+            className="glass w-full max-w-2xl rounded-2xl p-6 shadow-soft-lg"
+            role="dialog"
+            aria-modal="true"
+          >
+            <h2 className="mb-1 text-lg font-semibold text-slate-900 dark:text-white">Настройки доски</h2>
+            <p className="mb-4 text-sm text-slate-600 dark:text-slate-400">{board.name}</p>
+            <div className="mb-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setBoardSettingsTab("access")}
+                className={`rounded-lg px-3 py-1.5 text-xs font-medium ${
+                  boardSettingsTab === "access"
+                    ? "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200"
+                    : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                }`}
+              >
+                Доступ
+              </button>
+              <button
+                type="button"
+                onClick={() => setBoardSettingsTab("edit")}
+                className={`rounded-lg px-3 py-1.5 text-xs font-medium ${
+                  boardSettingsTab === "edit"
+                    ? "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200"
+                    : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                }`}
+              >
+                Редактирование
+              </button>
+              <button
+                type="button"
+                onClick={() => setBoardSettingsTab("delete")}
+                className={`rounded-lg px-3 py-1.5 text-xs font-medium ${
+                  boardSettingsTab === "delete"
+                    ? "bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300"
+                    : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                }`}
+              >
+                Удаление
+              </button>
+              <button
+                type="button"
+                onClick={() => setBoardSettingsTab("audit")}
+                className={`rounded-lg px-3 py-1.5 text-xs font-medium ${
+                  boardSettingsTab === "audit"
+                    ? "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200"
+                    : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                }`}
+              >
+                Аудит
+              </button>
+            </div>
+            {boardSettingsTab === "access" && (
+              <>
+                <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50/80 p-3 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-300">
+                  <p className="font-semibold text-slate-700 dark:text-slate-200">Права ролей на доске</p>
+                  <p className="mt-1"><span className="font-medium">Наблюдатель</span>: только просмотр задач.</p>
+                  <p><span className="font-medium">Редактор</span>: просмотр + редактирование задач, перенос, управление колонками.</p>
+                  <p><span className="font-medium">Менеджер</span>: все права редактора + удаление задач и управление участниками.</p>
+                </div>
+                <div className="mb-3">
+                  <input
+                    value={boardMemberSearch}
+                    onChange={(e) => setBoardMemberSearch(e.target.value)}
+                    placeholder="Поиск по ФИО (участники и кандидаты)"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+                  />
+                </div>
+                <p className="mb-2 text-xs font-medium text-slate-500 dark:text-slate-400">Текущие участники</p>
+                <div className="max-h-[26vh] overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-700">
+                  {visibleExistingBoardMembers.map((row) => {
+                    const userView = boardUserById.get(row.user_id);
+                    return (
+                      <div key={row.user_id} className="flex items-center gap-3 border-b border-slate-100 px-3 py-2 text-sm last:border-b-0 dark:border-slate-800">
+                        <button type="button" onClick={() => setBoardMembersDraft((prev) => prev.filter((x) => x.user_id !== row.user_id))} className="rounded-md px-2 py-0.5 text-xs text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40">Удалить</button>
+                        <span className="min-w-0 flex-1 truncate text-slate-800 dark:text-slate-100">{userView?.full_name ?? row.user_id}</span>
+                        <select
+                          value={row.role}
+                          onChange={(e) => {
+                            const role = e.target.value as "viewer" | "editor" | "manager";
+                            setBoardMembersDraft((prev) => prev.map((x) => (x.user_id === row.user_id ? { ...x, role } : x)));
+                          }}
+                          className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs dark:border-slate-600 dark:bg-slate-800"
+                        >
+                          <option value="viewer">{BOARD_MEMBER_ROLE_LABEL.viewer}</option>
+                          <option value="editor">{BOARD_MEMBER_ROLE_LABEL.editor}</option>
+                          <option value="manager">{BOARD_MEMBER_ROLE_LABEL.manager}</option>
+                        </select>
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="mb-2 mt-3 text-xs font-medium text-slate-500 dark:text-slate-400">Добавить в доску</p>
+                <div className="max-h-[14vh] overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-700">
+                  {candidatesToAddBoardMembers.map((u) => (
+                    <div key={u.id} className="flex items-center gap-3 border-b border-slate-100 px-3 py-2 text-sm last:border-b-0 dark:border-slate-800">
+                      <button type="button" onClick={() => setBoardMembersDraft((prev) => [...prev, { user_id: u.id, role: "viewer" }])} className="rounded-md px-2 py-0.5 text-xs text-sky-700 hover:bg-sky-50 dark:text-sky-300 dark:hover:bg-sky-950/30">Добавить</button>
+                      <span className="min-w-0 flex-1 truncate text-slate-800 dark:text-slate-100">{u.full_name}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-4 flex justify-end">
+                  <button type="button" disabled={saveBoardMembersMut.isPending} onClick={() => saveBoardMembersMut.mutate(boardMembersDraft)} className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600 disabled:opacity-60">
+                    {saveBoardMembersMut.isPending ? "Сохранение…" : "Сохранить доступ"}
+                  </button>
+                </div>
+              </>
+            )}
+            {boardSettingsTab === "edit" && (
+              <div className="space-y-3">
+                <div>
+                  <label className="mb-1 block text-sm text-slate-600 dark:text-slate-300">Название доски</label>
+                  <input
+                    value={editBoardName}
+                    onChange={(e) => setEditBoardName(e.target.value)}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+                  />
+                </div>
+                <button
+                  type="button"
+                  disabled={updateBoardMut.isPending || !editBoardName.trim()}
+                  onClick={() => updateBoardMut.mutate({ boardId: board.id, name: editBoardName.trim() })}
+                  className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600 disabled:opacity-60"
+                >
+                  {updateBoardMut.isPending ? "Сохранение…" : "Сохранить изменения"}
+                </button>
+              </div>
+            )}
+            {boardSettingsTab === "delete" && (
+              <div className="rounded-xl border border-red-200 bg-red-50/80 p-4 dark:border-red-900/60 dark:bg-red-950/20">
+                <p className="text-sm text-red-800 dark:text-red-300">
+                  Удаление доски удалит все ее колонки и задачи без возможности восстановления.
+                </p>
+                <button
+                  type="button"
+                  disabled={deleteBoardMut.isPending}
+                  onClick={() => deleteBoardMut.mutate(board.id)}
+                  className="mt-3 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-100 disabled:opacity-60 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300 dark:hover:bg-red-950/50"
+                >
+                  {deleteBoardMut.isPending ? "Удаление…" : "Удалить доску"}
+                </button>
+              </div>
+            )}
+            {boardSettingsTab === "audit" && (
+              <div className="space-y-3">
+                {canManageColsByPermission && (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3 dark:border-slate-700 dark:bg-slate-800/50">
+                    <p className="mb-2 text-sm font-medium text-slate-700 dark:text-slate-200">Глобальные настройки аудита</p>
+                    <label className="mb-2 flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
+                      <input
+                        type="checkbox"
+                        checked={auditSettingsQuery.data?.enabled ?? true}
+                        onChange={(e) => patchAuditSettingsMut.mutate({ enabled: e.target.checked })}
+                      />
+                      Включить аудит
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min={7}
+                        max={3650}
+                        value={auditRetentionDraft}
+                        onChange={(e) => setAuditRetentionDraft(e.target.value)}
+                        className="w-28 rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm dark:border-slate-600 dark:bg-slate-800"
+                      />
+                      <span className="text-sm text-slate-600 dark:text-slate-300">дней хранения</span>
+                      <button
+                        type="button"
+                        disabled={patchAuditSettingsMut.isPending}
+                        onClick={() => {
+                          const n = Number.parseInt(auditRetentionDraft, 10);
+                          if (!Number.isFinite(n)) return;
+                          patchAuditSettingsMut.mutate({ retention_days: n });
+                        }}
+                        className="rounded-lg bg-sky-500 px-3 py-1 text-xs font-semibold text-white hover:bg-sky-600 disabled:opacity-60"
+                      >
+                        Сохранить
+                      </button>
+                    </div>
+                  </div>
+                )}
+                <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3 dark:border-slate-700 dark:bg-slate-800/50">
+                  <p className="mb-2 text-sm font-medium text-slate-700 dark:text-slate-200">События доски</p>
+                  <div className="max-h-[34vh] space-y-2 overflow-y-auto pr-1">
+                    {(boardAuditQuery.data ?? []).map((ev) => (
+                      <div key={ev.id} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-900/50">
+                        <p className="font-medium text-slate-700 dark:text-slate-200">{ev.action}</p>
+                        <p className="text-slate-500 dark:text-slate-400">
+                          {ev.actor_name ?? "Система"} • {formatDt(ev.created_at)}
+                        </p>
+                      </div>
+                    ))}
+                    {!boardAuditQuery.isPending && (boardAuditQuery.data ?? []).length === 0 && (
+                      <p className="text-xs text-slate-500 dark:text-slate-400">Событий пока нет.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+            <div className="mt-4 flex justify-end gap-2">
+              <button type="button" onClick={() => setBoardSettingsModalOpen(false)} className="rounded-xl bg-slate-200 px-4 py-2 text-sm dark:bg-slate-700">
+                Закрыть
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {boardCreateModalOpen && canCreateBoards && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
+          <div className="glass w-full max-w-md rounded-2xl p-6 shadow-soft-lg" role="dialog" aria-modal="true">
+            <h2 className="mb-1 text-lg font-semibold text-slate-900 dark:text-white">Новая системная доска</h2>
+            <p className="mb-4 text-sm text-slate-600 dark:text-slate-400">Создание доступно только администратору.</p>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const name = newBoardName.trim();
+                if (!name) return;
+                if (!newBoardSystemId) {
+                  toastError("Выберите систему");
+                  return;
+                }
+                createBoardMut.mutate({
+                  name,
+                  slug: makeBoardSlug(name),
+                  scope: "system",
+                  system_id: newBoardSystemId,
+                });
+              }}
+              className="space-y-3"
+            >
+              <div>
+                <label className="mb-1 block text-sm">Название доски</label>
+                <input
+                  required
+                  autoFocus
+                  value={newBoardName}
+                  onChange={(e) => setNewBoardName(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm">Система</label>
+                <select
+                  value={newBoardSystemId}
+                  onChange={(e) => setNewBoardSystemId(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800"
+                >
+                  <option value="">— выберите —</option>
+                  {(systemsQuery.data ?? []).map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setBoardCreateModalOpen(false)}
+                  className="rounded-xl bg-slate-200 px-4 py-2 text-sm dark:bg-slate-700"
+                >
+                  Отмена
+                </button>
+                <button
+                  type="submit"
+                  disabled={createBoardMut.isPending}
+                  className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600 disabled:opacity-60"
+                >
+                  {createBoardMut.isPending ? "Создание…" : "Создать"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {columnModalOpen && canManageCols && (
         <div
           {...colCreateBackdrop}
@@ -2236,9 +2758,9 @@ export function TasksPage() {
             onClick={colCreatePanelStop}
           >
             <h2 className="mb-1 text-lg font-semibold text-slate-900 dark:text-white">Новая колонка</h2>
-            <p className="mb-4 text-sm text-slate-600 dark:text-slate-400">
+            {/* <p className="mb-4 text-sm text-slate-600 dark:text-slate-400">
               Доступно при праве «управление колонками доски» (например, роль «Руководитель направления»).
-            </p>
+            </p> */}
             <form onSubmit={handleAddColumn} className="space-y-3">
               <div>
                 <label className="mb-1 block text-sm">Название</label>

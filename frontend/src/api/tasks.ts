@@ -65,6 +65,7 @@ export type TaskAnalyticsOut = {
 export type TaskCreate = {
   title: string;
   description?: string | null;
+  board_id?: string;
   column_id: string;
   /** Для руководителя (tasks.read.all) обязателен; иначе можно не передавать при одной системе */
   system_id?: string;
@@ -93,12 +94,14 @@ export async function getTask(taskId: string): Promise<TaskOut> {
 }
 
 export async function listTasks(params?: {
+  board_id?: string;
   system_id?: string;
   assignee_id?: string;
   column_id?: string;
   include_archived?: boolean;
 }): Promise<TaskOut[]> {
   const sp = new URLSearchParams();
+  if (params?.board_id) sp.set("board_id", params.board_id);
   if (params?.system_id) sp.set("system_id", params.system_id);
   if (params?.assignee_id) sp.set("assignee_id", params.assignee_id);
   if (params?.column_id) sp.set("column_id", params.column_id);

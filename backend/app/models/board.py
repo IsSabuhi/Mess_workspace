@@ -7,16 +7,28 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
+BOARD_SCOPE_GLOBAL = "global"
+BOARD_SCOPE_SYSTEM = "system"
+
+BOARD_MEMBER_ROLE_VIEWER = "viewer"
+BOARD_MEMBER_ROLE_EDITOR = "editor"
+BOARD_MEMBER_ROLE_MANAGER = "manager"
+
 
 class Board(Base):
-    """Одна основная доска отдела; колонки Kanban привязаны к доске."""
+    """Доска Kanban: общая или привязанная к системе."""
 
     __tablename__ = "boards"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     slug: Mapped[str] = mapped_column(String(128), unique=True, index=True, nullable=False)
+    scope: Mapped[str] = mapped_column(String(16), default=BOARD_SCOPE_GLOBAL, nullable=False)
+    system_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("systems.id", ondelete="SET NULL"), nullable=True
+    )
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_archived: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -25,6 +37,27 @@ class Board(Base):
         back_populates="board", order_by="KanbanColumn.sort_order", cascade="all, delete-orphan"
     )
     tasks: Mapped[list["Task"]] = relationship(back_populates="board")
+    members: Mapped[list["BoardMember"]] = relationship(
+        "BoardMember", back_populates="board", cascade="all, delete-orphan"
+    )
+
+
+class BoardMember(Base):
+    __tablename__ = "board_members"
+    __table_args__ = (UniqueConstraint("board_id", "user_id", name="uq_board_member"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    board_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("boards.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    role: Mapped[str] = mapped_column(String(16), default=BOARD_MEMBER_ROLE_VIEWER, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    board: Mapped["Board"] = relationship("Board", back_populates="members")
+    user: Mapped["User"] = relationship("User")
 
 
 class KanbanColumn(Base):

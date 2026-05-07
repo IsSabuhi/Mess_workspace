@@ -1,4 +1,5 @@
-from app.models.board import Board, KanbanColumn
+from app.models.board import Board, BoardMember, KanbanColumn
+from app.models.audit_event import AuditEvent
 from app.models.employee_profile import EmployeeProfile
 from app.models.login_audit import LoginAudit
 from app.models.notification import Notification, NotificationType
@@ -34,6 +35,8 @@ __all__ = [
     "ArticleStatus",
     "EmployeeProfile",
     "Board",
+    "AuditEvent",
+    "BoardMember",
     "KanbanColumn",
     "KnowledgeArticle",
     "KnowledgeArticleRevision",

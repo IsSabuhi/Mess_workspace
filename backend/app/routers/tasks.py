@@ -18,7 +18,20 @@ from app.http_errors import (
     UNKNOWN_SYSTEM,
 )
 from app.deps import get_current_user, require_permission
-from app.models import Board, KanbanColumn, Notification, NotificationType, System, Task, TaskComment, TaskTag, User, UserSystem
+from app.models import (
+    Board,
+    BoardMember,
+    KanbanColumn,
+    Notification,
+    NotificationType,
+    System,
+    Task,
+    TaskComment,
+    TaskTag,
+    User,
+    UserSystem,
+)
+from app.models.board import BOARD_MEMBER_ROLE_EDITOR, BOARD_MEMBER_ROLE_MANAGER, BOARD_SCOPE_SYSTEM
 from app.models.task import task_assignees_table
 from app.permissions import TASKS_CREATE, TASKS_READ_ASSIGNED
 from app.schemas.task import (
@@ -78,6 +91,7 @@ _TASK_LOAD = (
     selectinload(Task.creator),
     selectinload(Task.system),
     selectinload(Task.column),
+    selectinload(Task.board),
     selectinload(Task.tags),
 )
 
@@ -209,6 +223,7 @@ async def list_tasks(
     system_id: uuid.UUID | None = None,
     assignee_id: uuid.UUID | None = None,
     column_id: uuid.UUID | None = None,
+    board_id: uuid.UUID | None = None,
     include_archived: bool = False,
 ) -> list[TaskOut]:
     await auto_archive_done_tasks(session)
@@ -226,6 +241,8 @@ async def list_tasks(
         stmt = stmt.where(sub)
     if column_id:
         stmt = stmt.where(Task.column_id == column_id)
+    if board_id:
+        stmt = stmt.where(Task.board_id == board_id)
 
     result = await session.execute(stmt)
     tasks = result.scalars().unique().all()
@@ -367,9 +384,23 @@ async def create_task(
     session: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(require_permission(TASKS_CREATE))],
 ) -> TaskOut:
-    board_id = await session.scalar(select(Board.id).where(Board.is_default.is_(True)))
+    board_id = body.board_id
+    if board_id is None:
+        board_id = await session.scalar(select(Board.id).where(Board.is_default.is_(True)))
     if not board_id:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Default board missing")
+
+    board = await session.get(Board, board_id)
+    if not board or board.is_archived:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid board")
+    if board.scope == BOARD_SCOPE_SYSTEM and not user.is_superuser:
+        role = await session.scalar(
+            select(BoardMember.role)
+            .where(BoardMember.board_id == board.id, BoardMember.user_id == user.id)
+            .limit(1)
+        )
+        if role not in {BOARD_MEMBER_ROLE_EDITOR, BOARD_MEMBER_ROLE_MANAGER}:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
 
     col = await session.get(KanbanColumn, body.column_id)
     if not col or col.board_id != board_id:

@@ -2,6 +2,7 @@ import {
   BarChart3,
   BookOpen,
   Briefcase,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Cpu,
@@ -13,9 +14,13 @@ import {
   Shield,
   Kanban,
   CalendarDays,
+  PlusCircle,
 } from "lucide-react";
-import { NavLink } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+import { NavLink, useLocation } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
 
+import { listBoards } from "../api/boards";
 import { useAuth } from "../context/AuthContext";
 import {
   canAdminAccess,
@@ -39,8 +44,17 @@ type Props = {
   onToggleCollapse: () => void;
 };
 
+const TASK_BOARDS_OPEN_KEY = "mess-sidebar-task-boards-open";
+
 export function Sidebar({ collapsed, onToggleCollapse }: Props) {
   const { state } = useAuth();
+  const location = useLocation();
+  const [taskBoardsOpen, setTaskBoardsOpen] = useState(() => localStorage.getItem(TASK_BOARDS_OPEN_KEY) !== "0");
+  const boardsQuery = useQuery({
+    queryKey: ["boards", "sidebar"],
+    queryFn: listBoards,
+    enabled: state.status === "authenticated",
+  });
   const showAdmin = state.status === "authenticated" && canAdminAccess(state.user);
   const showSchedule = state.status === "authenticated" && canViewSchedule(state.user);
   const showEmployeeDirectory =
@@ -51,6 +65,18 @@ export function Sidebar({ collapsed, onToggleCollapse }: Props) {
       hasPermission(state.user, PERM.EMPLOYEE_DIRECTORY_PROFILE_MANAGE));
   const showManagerTeamDashboard =
     state.status === "authenticated" && canViewManagerTeamDashboard(state.user);
+  const visibleTaskBoards = boardsQuery.data ?? [];
+  const activeTaskBoardId = useMemo(() => {
+    if (location.pathname !== "/tasks") return null;
+    return new URLSearchParams(location.search).get("board");
+  }, [location.pathname, location.search]);
+  const isCreateBoardActionActive = useMemo(() => {
+    if (location.pathname !== "/tasks") return false;
+    return new URLSearchParams(location.search).get("createBoard") === "1";
+  }, [location.pathname, location.search]);
+  useEffect(() => {
+    localStorage.setItem(TASK_BOARDS_OPEN_KEY, taskBoardsOpen ? "1" : "0");
+  }, [taskBoardsOpen]);
 
   return (
     <aside
@@ -108,24 +134,74 @@ export function Sidebar({ collapsed, onToggleCollapse }: Props) {
           Меню
         </p>
         {nav.map(({ to, label, icon: Icon, end }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={end}
-            title={collapsed ? label : undefined}
-            className={({ isActive }) =>
-              [
-                "group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition",
-                collapsed ? "justify-center" : "",
-                isActive
-                  ? "bg-sky-500/15 text-sky-700 shadow-sm dark:bg-sky-400/10 dark:text-sky-300"
-                  : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800",
-              ].join(" ")
-            }
-          >
-            <Icon className="h-5 w-5 shrink-0 opacity-90" aria-hidden />
-            {!collapsed && <span>{label}</span>}
-          </NavLink>
+          <div key={to}>
+            <NavLink
+              to={to}
+              end={end}
+              title={collapsed ? label : undefined}
+              className={({ isActive }) =>
+                [
+                  "group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition",
+                  collapsed ? "justify-center" : "",
+                  isActive
+                    ? "bg-sky-500/15 text-sky-700 shadow-sm dark:bg-sky-400/10 dark:text-sky-300"
+                    : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800",
+                ].join(" ")
+              }
+            >
+              <Icon className="h-5 w-5 shrink-0 opacity-90" aria-hidden />
+              {!collapsed && <span>{label}</span>}
+            </NavLink>
+            {to === "/tasks" && !collapsed && state.status === "authenticated" && (
+              <div className="-mt-1 mb-1 ml-11 space-y-1">
+                <button
+                  type="button"
+                  onClick={() => setTaskBoardsOpen((v) => !v)}
+                  className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+                >
+                  <span>Доски</span>
+                  <ChevronDown className={`h-3.5 w-3.5 transition ${taskBoardsOpen ? "" : "-rotate-90"}`} />
+                </button>
+                {taskBoardsOpen && (
+                  <>
+                    {state.user.is_superuser && (
+                      <NavLink
+                        to={{ pathname: "/tasks", search: "?createBoard=1" }}
+                        className={[
+                          "flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs font-medium transition",
+                          isCreateBoardActionActive
+                            ? "bg-sky-500/10 text-sky-700 dark:bg-sky-400/10 dark:text-sky-300"
+                            : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800",
+                        ].join(" ")}
+                      >
+                        <PlusCircle className="h-3.5 w-3.5 shrink-0" />
+                        <span>Новая доска</span>
+                      </NavLink>
+                    )}
+                    {visibleTaskBoards.map((b) => (
+                      <NavLink
+                        key={b.id}
+                        to={{ pathname: "/tasks", search: `?board=${b.id}` }}
+                        className={() =>
+                          [
+                            "flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-xs transition-all",
+                            activeTaskBoardId === b.id
+                              ? "bg-sky-500/15 text-sky-700 shadow-sm ring-1 ring-sky-200 dark:bg-sky-400/15 dark:text-sky-300 dark:ring-sky-800"
+                              : "text-slate-600 hover:bg-slate-100 hover:text-slate-800 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100",
+                          ].join(" ")
+                        }
+                      >
+                        <span className="min-w-0 flex-1 truncate">{b.name}</span>
+                        <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-700 dark:bg-slate-700 dark:text-slate-200">
+                          {b.scope === "system" ? (b.system_name ?? "Системная") : "Общая"}
+                        </span>
+                      </NavLink>
+                    ))}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
         ))}
         {showManagerTeamDashboard && (
           <NavLink

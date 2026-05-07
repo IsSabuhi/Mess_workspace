@@ -1,4 +1,5 @@
 import { apiFetch } from "./client";
+import type { AuditEventOut } from "./audit";
 
 export type KanbanColumnOut = {
   id: string;
@@ -16,13 +17,70 @@ export type BoardOut = {
   id: string;
   name: string;
   slug: string;
+  scope: "global" | "system";
+  system_id: string | null;
+  system_name: string | null;
   is_default: boolean;
+  is_archived: boolean;
   created_at: string;
   columns: KanbanColumnOut[];
 };
 
 export async function getDefaultBoard(): Promise<BoardOut> {
   return apiFetch<BoardOut>("/api/v1/boards/default");
+}
+
+export type BoardMemberOut = {
+  id: string;
+  board_id: string;
+  user_id: string;
+  role: "viewer" | "editor" | "manager";
+  created_at: string;
+};
+
+export async function listBoards(): Promise<BoardOut[]> {
+  return apiFetch<BoardOut[]>("/api/v1/boards");
+}
+
+export async function createBoard(body: {
+  name: string;
+  slug: string;
+  scope: "global" | "system";
+  system_id?: string | null;
+}): Promise<BoardOut> {
+  return apiFetch<BoardOut>("/api/v1/boards", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function deleteBoard(boardId: string): Promise<void> {
+  await apiFetch<void>(`/api/v1/boards/${boardId}`, { method: "DELETE" });
+}
+
+export async function updateBoard(boardId: string, body: { name?: string }): Promise<BoardOut> {
+  return apiFetch<BoardOut>(`/api/v1/boards/${boardId}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function listBoardAudit(boardId: string): Promise<AuditEventOut[]> {
+  return apiFetch<AuditEventOut[]>(`/api/v1/boards/${boardId}/audit`);
+}
+
+export async function listBoardMembers(boardId: string): Promise<BoardMemberOut[]> {
+  return apiFetch<BoardMemberOut[]>(`/api/v1/boards/${boardId}/members`);
+}
+
+export async function replaceBoardMembers(
+  boardId: string,
+  members: Array<{ user_id: string; role: "viewer" | "editor" | "manager" }>,
+): Promise<BoardMemberOut[]> {
+  return apiFetch<BoardMemberOut[]>(`/api/v1/boards/${boardId}/members`, {
+    method: "PUT",
+    body: JSON.stringify({ members }),
+  });
 }
 
 export type KanbanColumnCreate = {
