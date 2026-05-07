@@ -1,19 +1,22 @@
-"""Сумма часов по строке расписания (только чисто числовые ячейки, как в График_смен.xlsx)."""
+"""Сумма часов по строке расписания."""
 
 from __future__ import annotations
 
 import re
 
-# Только целое или десятичное число; «о», «у», «11д» и т.п. не учитываются.
+# Только целое или десятичное число.
 _HOURS_NUMERIC = re.compile(r"^\s*(-?\d+(?:[.,]\d+)?)\s*$")
 
 
 def hours_from_schedule_cell(raw: str | None) -> float:
     if raw is None:
         return 0.0
-    s = str(raw).strip().replace(",", ".")
+    s = str(raw).strip().lower().replace(",", ".")
     if not s:
         return 0.0
+    # Для графика 2/2 оба кода считаем как 11 часов.
+    if s in {"11д", "11в"}:
+        return 11.0
     if not _HOURS_NUMERIC.fullmatch(s):
         return 0.0
     return float(s)

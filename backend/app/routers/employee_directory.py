@@ -78,7 +78,9 @@ def _vacation_periods_out(raw) -> list[VacationPeriodOut]:
         e = _parse_iso(x.get("end"))
         if s is None or e is None or e < s:
             continue
-        out.append(VacationPeriodOut(start=s, end=e))
+        kind_raw = str(x.get("kind") or "vacation").strip().lower()
+        kind = "study" if kind_raw == "study" else "vacation"
+        out.append(VacationPeriodOut(start=s, end=e, kind=kind))
     return out
 
 
@@ -128,7 +130,14 @@ async def _apply_directory_patch_core(session: AsyncSession, user: User, body: E
         if vps is None:
             profile.vacation_periods = []
         else:
-            profile.vacation_periods = [{"start": p.start.isoformat(), "end": p.end.isoformat()} for p in vps]
+            profile.vacation_periods = [
+                {
+                    "start": p.start.isoformat(),
+                    "end": p.end.isoformat(),
+                    "kind": (p.kind or "vacation"),
+                }
+                for p in vps
+            ]
         patch.pop("vacation_periods", None)
 
     if "birth_date" in patch:

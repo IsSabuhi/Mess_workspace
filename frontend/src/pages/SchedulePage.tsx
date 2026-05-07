@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, FileSpreadsheet } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, FileSpreadsheet } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 function scheduleRowTitle(row: {
@@ -8,13 +8,18 @@ function scheduleRowTitle(row: {
   systems_label: string;
   work_schedule_kind: string;
   gender: string;
+  vacation_periods?: Array<{ start: string; end: string; kind?: "vacation" | "study" }>;
 }): string {
   const graph = isShiftKind(row.work_schedule_kind)
     ? row.work_schedule_kind === "two_two"
       ? "2/2"
       : "Сменный"
     : `5/2 · ${row.gender === "female" ? "7.2 ч" : "8 ч"} (будни)`;
-  return `${row.full_name}\n${row.email}\nСистемы: ${row.systems_label}\nГрафик: ${graph}`;
+  const periods = (row.vacation_periods ?? [])
+    .filter((p) => p?.start && p?.end)
+    .map((p) => `${p.start} — ${p.end}${p.kind === "study" ? " (учебный)" : ""}`);
+  const vacationLine = periods.length > 0 ? `Отпуск: ${periods.join("; ")}` : "Отпуск: не задан";
+  return `${row.full_name}\n${row.email}\nСистемы: ${row.systems_label}\nГрафик: ${graph}\n${vacationLine}`;
 }
 
 import {
@@ -30,6 +35,7 @@ import {
 import { AppShell } from "../components/AppShell";
 import { useAuth } from "../context/AuthContext";
 import { PERM, canViewSchedule, hasPermission } from "../lib/permissions";
+import { downloadScheduleExcel } from "../lib/exportScheduleExcel";
 import { toastApiError, toastSuccess } from "../lib/toast";
 import { useModalLayer } from "../lib/useModalLayer";
 
@@ -144,6 +150,14 @@ export function SchedulePage() {
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [importSheetName, setImportSheetName] = useState("");
   const [importFile, setImportFile] = useState<File | null>(null);
+  const [exportModalOpen, setExportModalOpen] = useState(false);
+  const [exportPending, setExportPending] = useState(false);
+  const [coverageTooltip, setCoverageTooltip] = useState<{
+    day: number;
+    text: string;
+    x: number;
+    y: number;
+  } | null>(null);
   /** Сотрудник, для чьей строки вызывается «Перегенерировать» (последняя сохранённая ячейка в этом месяце). */
   const [regenerateTargetUserId, setRegenerateTargetUserId] = useState<string | null>(null);
 
@@ -152,6 +166,9 @@ export function SchedulePage() {
     setImportSheetName("");
     setImportFile(null);
   }, []);
+  const closeExportModal = useCallback(() => {
+    if (!exportPending) setExportModalOpen(false);
+  }, [exportPending]);
   const closeRowColorPicker = useCallback(() => {
     setRowColorPickerOpen(false);
     setRowColorPickerTarget(null);
@@ -180,7 +197,20 @@ export function SchedulePage() {
     const ws = scheduleQuery.data?.shift_coverage_warnings ?? [];
     return new Set(ws.map((w) => w.day));
   }, [scheduleQuery.data?.shift_coverage_warnings]);
-
+  const coverageGapTitleByDay = useMemo(() => {
+    const ws = scheduleQuery.data?.shift_coverage_warnings ?? [];
+    const byDay = new Map<number, string[]>();
+    for (const w of ws) {
+      const arr = byDay.get(w.day) ?? [];
+      arr.push(w.message);
+      byDay.set(w.day, arr);
+    }
+    const out = new Map<number, string>();
+    for (const [day, messages] of byDay.entries()) {
+      out.set(day, `Почему день подсвечен красным:\n${messages.join("\n")}`);
+    }
+    return out;
+  }, [scheduleQuery.data?.shift_coverage_warnings]);
   const systemFilterOptions = useMemo(() => {
     const groups = scheduleQuery.data?.groups ?? [];
     const seen = new Set<string>();
@@ -319,6 +349,14 @@ export function SchedulePage() {
       closeOnEscape: !importExcelMut.isPending,
     },
   );
+  const { backdropProps: exportBackdropProps, stopPanelPointer: exportStopPanelPointer } = useModalLayer(
+    !!exportModalOpen,
+    closeExportModal,
+    {
+      closeOnBackdrop: !exportPending,
+      closeOnEscape: !exportPending,
+    },
+  );
   const { backdropProps: rowColorBackdropProps, stopPanelPointer: rowColorStopPanelPointer } = useModalLayer(
     !!(canManage && rowColorPickerOpen),
     closeRowColorPicker,
@@ -329,6 +367,108 @@ export function SchedulePage() {
   );
   const daysInMonth = scheduleQuery.data?.days_in_month ?? new Date(year, month, 0).getDate();
   const dayNumbers = useMemo(() => Array.from({ length: daysInMonth }, (_, i) => i + 1), [daysInMonth]);
+  const dayColorReasonByDay = useMemo(() => {
+    const out = new Map<number, string>();
+    for (const d of dayNumbers) {
+      const di = dayByNum.get(d);
+      const coverageReason = coverageGapTitleByDay.get(d);
+      const reasons: string[] = [];
+      if (di?.is_ru_holiday) {
+        if (di.holiday_name?.trim()) reasons.push(`Праздник: ${di.holiday_name.trim()}.`);
+        else reasons.push("Праздничный день (по календарю РФ).");
+      }
+      else if (di?.is_weekend) reasons.push("Выходной день (суббота/воскресенье).");
+      if (coverageReason) {
+        reasons.push("Недостаточное покрытие сменщиками:");
+        reasons.push(coverageReason.replace(/^Почему день подсвечен красным:\n?/, ""));
+      }
+      if (reasons.length > 0) out.set(d, reasons.join("\n"));
+    }
+    return out;
+  }, [coverageGapTitleByDay, dayByNum, dayNumbers]);
+  const openCoverageTooltip = useCallback(
+    (day: number, ev: { clientX: number; clientY: number }) => {
+      const text = dayColorReasonByDay.get(day);
+      if (!text) return;
+      setCoverageTooltip({
+        day,
+        text,
+        x: ev.clientX + 14,
+        y: ev.clientY + 14,
+      });
+    },
+    [dayColorReasonByDay],
+  );
+  const moveCoverageTooltip = useCallback((ev: { clientX: number; clientY: number }) => {
+    setCoverageTooltip((prev) => (prev ? { ...prev, x: ev.clientX + 14, y: ev.clientY + 14 } : prev));
+  }, []);
+  const closeCoverageTooltip = useCallback(() => setCoverageTooltip(null), []);
+
+  const applyCurrentFiltersToGroups = useCallback(
+    (groups: typeof filteredGroups) =>
+      groups
+        .map((g) => ({
+          ...g,
+          users: g.users.filter((row) => {
+            if (filterGraphKinds.length > 0 && !filterGraphKinds.includes(row.work_schedule_kind)) return false;
+            return true;
+          }),
+        }))
+        .filter((g) => {
+          if (filterSystemIds.length > 0) {
+            const sid = g.system_id ?? "__none__";
+            if (!filterSystemIds.includes(sid)) return false;
+          }
+          return g.users.length > 0;
+        }),
+    [filterGraphKinds, filterSystemIds],
+  );
+
+  const runScheduleExport = useCallback(
+    async (mode: "month" | "year") => {
+      if (!scheduleQuery.data) return;
+      setExportPending(true);
+      try {
+        if (mode === "month") {
+          await downloadScheduleExcel({
+            fileBaseName: `raspisanie_${String(month).padStart(2, "0")}_${year}`,
+            sheets: [
+              {
+                year,
+                month,
+                dayNumbers,
+                groups: filteredGroups,
+              },
+            ],
+          });
+        } else {
+          const sheets: Parameters<typeof downloadScheduleExcel>[0]["sheets"] = [];
+          for (let m = 1; m <= 12; m += 1) {
+            const data = await getScheduleMonth(year, m);
+            const groups = applyCurrentFiltersToGroups(data.groups);
+            const numbers = Array.from({ length: data.days_in_month }, (_, i) => i + 1);
+            sheets.push({
+              year,
+              month: m,
+              dayNumbers: numbers,
+              groups,
+            });
+          }
+          await downloadScheduleExcel({
+            fileBaseName: `raspisanie_${year}_all_months`,
+            sheets,
+          });
+        }
+        setExportModalOpen(false);
+        toastSuccess(mode === "month" ? "Расписание за месяц выгружено в Excel" : "Расписание за год выгружено в Excel");
+      } catch (e) {
+        toastApiError(e, "Не удалось выгрузить расписание");
+      } finally {
+        setExportPending(false);
+      }
+    },
+    [scheduleQuery.data, month, year, dayNumbers, filteredGroups, applyCurrentFiltersToGroups],
+  );
 
   const saveCell = useCallback(
     (userId: string, day: number, raw: string) => {
@@ -521,6 +661,16 @@ export function SchedulePage() {
                 <FileSpreadsheet className="h-4 w-4 shrink-0 opacity-95 group-hover:scale-105" aria-hidden />
                 Из Excel
               </button>
+              <button
+                type="button"
+                disabled={exportPending || !scheduleQuery.data}
+                onClick={() => setExportModalOpen(true)}
+                className="group inline-flex items-center gap-2 rounded-xl border border-emerald-200/90 bg-gradient-to-br from-emerald-500 via-teal-500 to-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-md shadow-emerald-900/15 ring-1 ring-white/25 transition hover:from-emerald-400 hover:via-teal-400 hover:to-cyan-500 hover:shadow-lg disabled:opacity-60 dark:border-emerald-400/30 dark:from-emerald-600 dark:via-teal-600 dark:to-cyan-700 dark:ring-white/10 dark:hover:from-emerald-500 dark:hover:via-teal-500 dark:hover:to-cyan-600"
+                title="Выгрузить расписание в Excel"
+              >
+                <Download className="h-4 w-4 shrink-0 opacity-95 group-hover:scale-105" aria-hidden />
+                В Excel
+              </button>
             </>
           )}
           {!canManage && (
@@ -577,6 +727,60 @@ export function SchedulePage() {
           </div>
         )}
       </div>
+
+      {exportModalOpen && (
+        <div
+          {...exportBackdropProps}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 p-4 backdrop-blur-sm"
+        >
+          <div
+            className="w-full max-w-md overflow-hidden rounded-2xl border border-emerald-200/60 bg-white shadow-2xl dark:border-emerald-900/40 dark:bg-slate-900"
+            role="dialog"
+            aria-modal="true"
+            onClick={exportStopPanelPointer}
+          >
+            <div className="border-b border-emerald-100 bg-gradient-to-r from-emerald-50 to-teal-50 px-5 py-4 dark:border-emerald-900/50 dark:from-emerald-950/50 dark:to-teal-950/40">
+              <h2 className="flex items-center gap-2 text-lg font-semibold text-emerald-950 dark:text-emerald-100">
+                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-700 dark:bg-emerald-400/20 dark:text-emerald-200">
+                  <Download className="h-5 w-5" aria-hidden />
+                </span>
+                Выгрузка в Excel
+              </h2>
+              <p className="mt-1 text-sm text-emerald-900/80 dark:text-emerald-200/80">
+                Выберите вариант выгрузки расписания.
+              </p>
+            </div>
+            <div className="space-y-3 px-5 py-4">
+              <button
+                type="button"
+                disabled={exportPending || !scheduleQuery.data}
+                onClick={() => runScheduleExport("month")}
+                className="w-full rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2 text-sm font-semibold text-white shadow-md hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50 dark:from-emerald-500 dark:to-teal-500 dark:hover:from-emerald-400 dark:hover:to-teal-400"
+              >
+                {exportPending ? "Формирование…" : `Текущий месяц (${String(month).padStart(2, "0")}.${year})`}
+              </button>
+              <button
+                type="button"
+                disabled={exportPending || !scheduleQuery.data}
+                onClick={() => runScheduleExport("year")}
+                className="w-full rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2 text-sm font-semibold text-white shadow-md hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50 dark:from-emerald-500 dark:to-teal-500 dark:hover:from-emerald-400 dark:hover:to-teal-400"
+              >
+                {exportPending ? "Формирование…" : `Весь ${year} год (по листам)`}
+              </button>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-slate-100 bg-slate-50/80 px-5 py-3 dark:border-slate-700 dark:bg-slate-800/80">
+              <button
+                type="button"
+                onClick={closeExportModal}
+                disabled={exportPending}
+                className="rounded-xl px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200/80 disabled:opacity-60 dark:text-slate-300 dark:hover:bg-slate-700"
+              >
+                Отмена
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {canManage && importModalOpen && (
         <div
@@ -754,7 +958,7 @@ export function SchedulePage() {
       )}
 
       {scheduleQuery.data && filteredGroups.length > 0 && (
-        <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white/90 shadow-soft dark:border-slate-600/70 dark:bg-slate-950 dark:shadow-[0_0_0_1px_rgba(148,163,184,0.08),inset_0_1px_0_0_rgba(255,255,255,0.04)]">
+        <div className="relative overflow-x-auto rounded-2xl border border-slate-200/80 bg-white/90 shadow-soft dark:border-slate-600/70 dark:bg-slate-950 dark:shadow-[0_0_0_1px_rgba(148,163,184,0.08),inset_0_1px_0_0_rgba(255,255,255,0.04)]">
           <table className="w-max min-w-full border-collapse text-xs">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50/90 dark:border-slate-600/60 dark:bg-slate-800">
@@ -767,6 +971,9 @@ export function SchedulePage() {
                     <th
                       key={d}
                       className={`w-[2.35rem] min-w-[2.35rem] max-w-[2.35rem] px-0 py-0.5 text-center text-[9px] font-medium leading-none ${dayHeaderClass(di, coverageGapDays.has(d))}`}
+                      onMouseEnter={(ev) => openCoverageTooltip(d, ev)}
+                      onMouseMove={moveCoverageTooltip}
+                      onMouseLeave={closeCoverageTooltip}
                     >
                       {weekdayLabel(year, month, d)}
                     </th>
@@ -796,6 +1003,9 @@ export function SchedulePage() {
                     <th
                       key={d}
                       className={`w-[2.35rem] min-w-[2.35rem] px-0 py-0.5 text-center text-[10px] font-semibold leading-none ${dayHeaderClass(di, coverageGapDays.has(d))} ${!di?.is_ru_holiday && !di?.is_weekend ? "text-slate-700 dark:text-slate-300" : ""}`}
+                      onMouseEnter={(ev) => openCoverageTooltip(d, ev)}
+                      onMouseMove={moveCoverageTooltip}
+                      onMouseLeave={closeCoverageTooltip}
                     >
                       {d}
                     </th>
@@ -891,6 +1101,15 @@ export function SchedulePage() {
               )}
             </tbody>
           </table>
+          {coverageTooltip && (
+            <div
+              className="pointer-events-none fixed z-[70] max-w-[26rem] rounded-xl border border-rose-200/90 bg-white/95 px-3 py-2 text-xs text-rose-900 shadow-lg dark:border-rose-900/70 dark:bg-slate-900/95 dark:text-rose-100"
+              style={{ left: coverageTooltip.x, top: coverageTooltip.y }}
+            >
+              <p className="font-semibold">Информация по дню</p>
+              <p className="mt-1 whitespace-pre-line">{coverageTooltip.text}</p>
+            </div>
+          )}
         </div>
       )}
     </AppShell>

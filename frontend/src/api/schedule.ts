@@ -4,6 +4,7 @@ export type ScheduleDayInfo = {
   day: number;
   is_weekend: boolean;
   is_ru_holiday: boolean;
+  holiday_name?: string | null;
 };
 
 export type ScheduleUserRow = {
@@ -22,6 +23,8 @@ export type ScheduleUserRow = {
   manual_row_color?: string | null;
   /** Автоцвет по совпадению смен (только shift), если ручной цвет не задан. */
   auto_row_color?: string | null;
+  /** Периоды отпуска из кадрового справочника. */
+  vacation_periods?: Array<{ start: string; end: string; kind?: "vacation" | "study" }>;
 };
 
 export type ScheduleGroupOut = {

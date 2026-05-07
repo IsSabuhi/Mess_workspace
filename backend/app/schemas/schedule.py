@@ -7,6 +7,7 @@ class ScheduleDayInfo(BaseModel):
     day: int
     is_weekend: bool
     is_ru_holiday: bool
+    holiday_name: str | None = None
 
 
 class ScheduleUserRow(BaseModel):
@@ -34,6 +35,10 @@ class ScheduleUserRow(BaseModel):
     auto_row_color: str | None = Field(
         default=None,
         description="Автоцвет по совпадению смен (только для shift), если ручной не задан",
+    )
+    vacation_periods: list[dict[str, str]] = Field(
+        default_factory=list,
+        description="Периоды отпуска из справочника: [{start,end,kind}], где kind=vacation|study",
     )
 
 

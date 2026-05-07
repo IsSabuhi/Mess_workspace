@@ -132,13 +132,18 @@ def _parse_iso_date(v) -> date | None:
         return None
 
 
-def vacation_days_in_month(year: int, month: int, periods: list | None) -> set[int]:
+def _vacation_code_for_period_kind(kind_raw: object) -> str:
+    kind = str(kind_raw or "").strip().lower()
+    return "у" if kind == "study" else "о"
+
+
+def vacation_codes_in_month(year: int, month: int, periods: list | None) -> dict[int, str]:
     if not periods:
-        return set()
+        return {}
     dim = calendar.monthrange(year, month)[1]
     month_start = date(year, month, 1)
     month_end = date(year, month, dim)
-    out: set[int] = set()
+    out: dict[int, str] = {}
     for p in periods:
         if not isinstance(p, dict):
             continue
@@ -146,11 +151,15 @@ def vacation_days_in_month(year: int, month: int, periods: list | None) -> set[i
         e = _parse_iso_date(p.get("end"))
         if s is None or e is None:
             continue
+        code = _vacation_code_for_period_kind(p.get("kind"))
         cur = max(s, month_start)
         end = min(e, month_end)
         while cur <= end:
             if cur.year == year and cur.month == month:
-                out.add(cur.day)
+                day = cur.day
+                # Учебный отпуск приоритетнее обычного при пересечении периодов.
+                if code == "у" or day not in out:
+                    out[day] = code
             cur += timedelta(days=1)
     return out
 
@@ -160,18 +169,18 @@ def _apply_profile_vacation_to_existing(
     month: int,
     dim: int,
     existing: dict[int, str | None],
-    vacation_days: set[int],
+    vacation_codes: dict[int, str],
     *,
     only_empty: bool,
 ) -> set[int]:
     marked: set[int] = set()
-    for d in vacation_days:
+    for d, code in vacation_codes.items():
         if d < 1 or d > dim:
             continue
         cur = existing.get(d)
         if only_empty and _norm_code(cur) is not None:
             continue
-        existing[d] = "о"
+        existing[d] = code
         marked.add(d)
     return marked
 
@@ -221,18 +230,15 @@ def _shift_cycle_for_kind(kind: str) -> tuple[str | None, ...]:
 
 def _two_two_cycle_by_phase(phase_offset: int) -> tuple[str | None, ...]:
     """
-    2/2 с чередованием дневной/вечерней внутри системы:
-    - часть сотрудников работает блоком в первые 2 дня, часть — в следующие 2 дня,
-    - в рабочий день одновременно есть и 11д, и 11в (при >=2 сотрудниках в блоке).
+    2/2: строгая последовательность 11д -> 11в -> off -> off.
+    Допускается только циклический сдвиг этой последовательности, чтобы
+    никогда не возникал переход 11в -> 11д в соседние календарные дни.
     """
-    phase = phase_offset % 4
-    if phase == 0:
-        return ("11д", "11в", None, None)
-    if phase == 1:
-        return ("11в", "11д", None, None)
-    if phase == 2:
-        return (None, None, "11д", "11в")
-    return (None, None, "11в", "11д")
+    base: tuple[str | None, ...] = ("11д", "11в", None, None)
+    shift = phase_offset % len(base)
+    if shift == 0:
+        return base
+    return tuple(base[(i + shift) % len(base)] for i in range(len(base)))
 
 
 def _autofill_shift(
@@ -390,6 +396,47 @@ def _infer_phase_from_days(
     return best_phase
 
 
+def _month_tail_work_sample_days(
+    dim: int,
+    existing: dict[int, str | None],
+    *,
+    max_len: int = 4,
+) -> list[int]:
+    """Последние до max_len непустых не-отпускных дней месяца (от конца к началу), по возрастанию дня."""
+    tail_days: list[int] = []
+    for d in range(dim, 0, -1):
+        v = _norm_code(existing.get(d))
+        if not v or _is_vacation(v):
+            continue
+        tail_days.append(d)
+        if len(tail_days) >= max_len:
+            break
+    tail_days.reverse()
+    return tail_days
+
+
+def _month_tail_non_vacation_sample_days(
+    dim: int,
+    existing: dict[int, str | None],
+    *,
+    max_len: int = 4,
+) -> list[int]:
+    """
+    Последние до max_len календарных дней, исключая только отпуск (о/у).
+    Пустые дни сохраняем как сигнал «выходной» для точной стыковки 2/2.
+    """
+    tail_days: list[int] = []
+    for d in range(dim, 0, -1):
+        v = _norm_code(existing.get(d))
+        if _is_vacation(v):
+            continue
+        tail_days.append(d)
+        if len(tail_days) >= max_len:
+            break
+    tail_days.reverse()
+    return tail_days
+
+
 def _infer_phase_from_month_tail(
     *,
     kind: str,
@@ -398,24 +445,49 @@ def _infer_phase_from_month_tail(
     default_phase: int,
 ) -> int:
     """
-    Фаза по «хвосту» прошлого месяца: берем последние 1-4 непустые не-отпускные дни.
-    Это дает корректный переход на 1-е число следующего месяца.
+    Фаза по «хвосту» месяца: последние непустые не-отпускные дни (до 4 шт.).
+    Для 2/2 при старте нового месяца это основной способ продолжить цикл с прошлого месяца.
     """
-    tail_days: list[int] = []
-    for d in range(dim, 0, -1):
-        v = _norm_code(existing.get(d))
-        if not v or _is_vacation(v):
-            continue
-        tail_days.append(d)
-        if len(tail_days) >= 4:
-            break
-    tail_days.reverse()
+    tail_days = _month_tail_work_sample_days(dim, existing)
     return _infer_phase_from_days(
         kind=kind,
         existing=existing,
         sample_days=tail_days,
         default_phase=default_phase,
     )
+
+
+def _infer_phase_from_prev_month_tail_for_two_two(
+    *,
+    prev_dim: int,
+    prev_existing: dict[int, str | None],
+    default_phase: int,
+) -> tuple[int, bool]:
+    """
+    Подбор фазы 2/2 по хвосту прошлого месяца с непрерывным переходом на новый месяц:
+    day 1 нового месяца всегда соответствует cycle[0], а день d прошлого месяца — индексу
+    (d - (prev_dim + 1)) % 4.
+    """
+    # Для 2/2 учитываем и пустые хвостовые дни: они снимают неоднозначность фазы.
+    tail_days = _month_tail_non_vacation_sample_days(prev_dim, prev_existing)
+    if not tail_days:
+        return default_phase, False
+
+    best_phase = default_phase
+    best_score = -1
+    for phase in range(4):
+        cycle = _two_two_cycle_by_phase(phase)
+        score = 0
+        for d in tail_days:
+            idx = (d - (prev_dim + 1)) % len(cycle)
+            exp = _norm_cycle_code(cycle[idx])
+            got = _norm_cycle_code(prev_existing.get(d))
+            if got == exp:
+                score += 1
+        if score > best_score:
+            best_score = score
+            best_phase = phase
+    return best_phase, True
 
 
 def _phase_from_prev_month_edge_for_shift(
@@ -442,6 +514,76 @@ def _phase_from_prev_month_edge_for_shift(
         # 31-го пусто => следующий шаг цикла 11
         return 0, True
     return default_phase, False
+
+
+def _phase_from_prev_month_edge_for_two_two(
+    *,
+    prev_dim: int,
+    prev_existing: dict[int, str | None],
+    default_phase: int,
+) -> tuple[int, bool]:
+    """
+    Запасной край месяца для 2/2, если в прошлом месяце нет рабочих точек в хвосте
+    (подбор по хвосту см. _month_tail_work_sample_days / _phase_default_from_prev_month).
+
+    Последний календарный день: 11в → фаза 2, 11д → фаза 1 (согласовано с cycle[3]).
+    """
+    last_raw = prev_existing.get(prev_dim)
+    if _is_vacation(last_raw):
+        return default_phase, False
+    last = _norm_code(last_raw)
+    if not last:
+        return default_phase, False
+    token = _norm_cycle_code(last)
+    if token == _norm_cycle_code("11в"):
+        return 2, True
+    if token == _norm_cycle_code("11д"):
+        return 1, True
+    return default_phase, False
+
+
+def _phase_default_from_prev_month(
+    *,
+    kind: str,
+    prev_dim: int,
+    prev_existing: dict[int, str | None],
+    chess_default: int,
+) -> int:
+    """Фаза начала месяца из прошлого месяца. Для 2/2 в приоритете хвост (непрерывность цикла)."""
+    if kind == WORK_SCHEDULE_SHIFT:
+        phase, locked = _phase_from_prev_month_edge_for_shift(
+            prev_dim=prev_dim,
+            prev_existing=prev_existing,
+            default_phase=chess_default,
+        )
+        if locked:
+            return phase
+        return _infer_phase_from_month_tail(
+            kind=kind,
+            dim=prev_dim,
+            existing=prev_existing,
+            default_phase=phase,
+        )
+    if kind == WORK_SCHEDULE_TWO_TWO:
+        # Для 2/2 продолжаем последовательность строго с хвоста прошлого месяца.
+        # Если хвоста нет (например, в конце был только отпуск), начинаем новый месяц
+        # с базового старта 11д/11в (phase 0).
+        phase, has_tail = _infer_phase_from_prev_month_tail_for_two_two(
+            prev_dim=prev_dim,
+            prev_existing=prev_existing,
+            default_phase=0,
+        )
+        if has_tail:
+            return phase
+        phase, locked = _phase_from_prev_month_edge_for_two_two(
+            prev_dim=prev_dim,
+            prev_existing=prev_existing,
+            default_phase=0,
+        )
+        if locked:
+            return phase
+        return 0
+    return chess_default
 
 
 async def run_schedule_autofill(
@@ -495,7 +637,7 @@ async def run_schedule_autofill(
     for u in users:
         profile = u.employee_profile
         periods = profile.vacation_periods if profile and profile.vacation_periods else None
-        vac_days = vacation_days_in_month(year, month, periods)
+        vac_codes = vacation_codes_in_month(year, month, periods)
         kind, emp_gender = normalize_profile_schedule(profile)
 
         existing = dict(by_user.get(u.id, {}))
@@ -507,43 +649,30 @@ async def run_schedule_autofill(
             cur = _norm_code(full_existing.get(d))
             if not cur or not _is_vacation(cur):
                 continue
-            if d not in vac_days:
+            if d not in vac_codes:
                 full_existing[d] = None
 
         vac_marked = _apply_profile_vacation_to_existing(
-            year, month, dim, full_existing, vac_days, only_empty=False
+            year, month, dim, full_existing, vac_codes, only_empty=False
         )
 
         if kind in (WORK_SCHEDULE_SHIFT, WORK_SCHEDULE_TWO_TWO):
-            # Приоритет фазы: прошлый месяц -> текущий (если уже есть ручные точки) -> системная шахматка.
+            # Автогенерация: первичная фаза всегда из прошлого месяца (край/хвост).
             prev_existing = {d: prev_by_user.get(u.id, {}).get(d) for d in range(1, prev_dim + 1)}
-            if kind == WORK_SCHEDULE_SHIFT:
-                phase, locked_by_edge = _phase_from_prev_month_edge_for_shift(
-                    prev_dim=prev_dim,
-                    prev_existing=prev_existing,
-                    default_phase=shift_phase_by_user.get(u.id, 0),
-                )
-                # Если край месяца дал однозначный переход, не переопределяем его хвостовым подбором.
-                if not locked_by_edge:
-                    phase = _infer_phase_from_month_tail(
-                        kind=kind,
-                        dim=prev_dim,
-                        existing=prev_existing,
-                        default_phase=phase,
-                    )
-            else:
-                phase = _infer_phase_from_month_tail(
-                    kind=kind,
-                    dim=prev_dim,
-                    existing=prev_existing,
-                    default_phase=shift_phase_by_user.get(u.id, 0),
-                )
-            phase = _infer_phase_from_existing(
+            phase = _phase_default_from_prev_month(
                 kind=kind,
-                dim=dim,
-                existing=full_existing,
-                default_phase=phase,
+                prev_dim=prev_dim,
+                prev_existing=prev_existing,
+                chess_default=shift_phase_by_user.get(u.id, 0),
             )
+            if kind == WORK_SCHEDULE_SHIFT:
+                # Для 11-3-8 сохраняем старое поведение: текущие ручные точки могут уточнить фазу.
+                phase = _infer_phase_from_existing(
+                    kind=kind,
+                    dim=dim,
+                    existing=full_existing,
+                    default_phase=phase,
+                )
             new_cells = _autofill_shift(
                 dim=dim,
                 existing=full_existing,
@@ -558,7 +687,7 @@ async def run_schedule_autofill(
             )
 
         for d in vac_marked:
-            new_cells[d] = "о"
+            new_cells[d] = vac_codes.get(d, "о")
 
         for day, code in new_cells.items():
             stmt = select(ScheduleEntry).where(
@@ -670,17 +799,51 @@ async def run_schedule_regenerate_from_manual(
 
     profile = u.employee_profile
     periods = profile.vacation_periods if profile and profile.vacation_periods else None
-    vac_days = vacation_days_in_month(year, month, periods)
+    vac_codes = vacation_codes_in_month(year, month, periods)
     kind, emp_gender = normalize_profile_schedule(profile)
 
     if kind in (WORK_SCHEDULE_SHIFT, WORK_SCHEDULE_TWO_TWO):
-        phase = _infer_phase_for_regenerate_shift(
+        prev_year, prev_month = _prev_year_month(year, month)
+        prev_dim = calendar.monthrange(prev_year, prev_month)[1]
+        prev_entries_user = (
+            await session.execute(
+                select(ScheduleEntry).where(
+                    ScheduleEntry.year == prev_year,
+                    ScheduleEntry.month == prev_month,
+                    ScheduleEntry.user_id == target_user_id,
+                )
+            )
+        ).scalars().all()
+        prev_existing_full: dict[int, str | None] = {d: None for d in range(1, prev_dim + 1)}
+        for e in prev_entries_user:
+            if 1 <= e.day <= prev_dim:
+                prev_existing_full[e.day] = e.code
+        phase_seed = _phase_default_from_prev_month(
             kind=kind,
-            dim=dim,
-            existing=existing_for_phase,
-            cutoff_day=phase_cutoff,
-            default_phase=base_phase_by_user.get(u.id, 0),
+            prev_dim=prev_dim,
+            prev_existing=prev_existing_full,
+            chess_default=base_phase_by_user.get(u.id, 0),
         )
+        if kind == WORK_SCHEDULE_TWO_TWO:
+            if individual_touched:
+                # Для 2/2 ручные точечные правки — главный источник фазы перегенерации.
+                phase = _infer_phase_from_days(
+                    kind=kind,
+                    existing=existing_for_phase,
+                    sample_days=sorted(individual_touched),
+                    default_phase=phase_seed,
+                )
+            else:
+                # Без ручных правок продолжаем цепочку строго от прошлого месяца.
+                phase = phase_seed
+        else:
+            phase = _infer_phase_for_regenerate_shift(
+                kind=kind,
+                dim=dim,
+                existing=existing_for_phase,
+                cutoff_day=phase_cutoff,
+                default_phase=phase_seed,
+            )
         ideal = _autofill_shift(
             dim=dim,
             existing={},
@@ -695,6 +858,12 @@ async def run_schedule_regenerate_from_manual(
         )
 
     new_cells = dict(ideal)
+    if individual_touched:
+        # Ключевое правило: перегенерация действует только "вперёд" от ручной правки.
+        # Всё до последней ручной точки оставляем как есть.
+        for d in range(1, phase_cutoff + 1):
+            new_cells[d] = full_existing.get(d)
+
     for d in sorted(recent_touched):
         if not (1 <= d <= dim):
             continue
@@ -702,9 +871,9 @@ async def run_schedule_regenerate_from_manual(
             continue
         new_cells[d] = full_existing.get(d)
 
-    for d in vac_days:
+    for d, code in vac_codes.items():
         if 1 <= d <= dim:
-            new_cells[d] = "о"
+            new_cells[d] = code
 
     for d in _legacy_manual_work_mismatch_days(
         dim,

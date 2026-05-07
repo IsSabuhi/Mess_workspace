@@ -3,6 +3,7 @@ import { apiFetch } from "./client";
 export type VacationPeriod = {
   start: string;
   end: string;
+  kind?: "vacation" | "study";
 };
 
 export type WorkScheduleKind = "five_two" | "shift" | "two_two";

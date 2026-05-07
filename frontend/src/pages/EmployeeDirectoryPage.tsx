@@ -355,6 +355,7 @@ export function EmployeeDirectoryPage() {
       vacation_periods: (row.vacation_periods ?? []).map((p) => ({
         start: asInputDate(p.start),
         end: asInputDate(p.end),
+        kind: p.kind ?? "vacation",
       })),
       work_schedule_kind: row.work_schedule_kind ?? "five_two",
       gender: row.gender ?? "unspecified",
@@ -1015,7 +1016,11 @@ export function EmployeeDirectoryPage() {
                 e.preventDefault();
                 const vacation_periods = profileForm.vacation_periods
                   .filter((p) => p.start.trim() && p.end.trim())
-                  .map((p) => ({ start: p.start.trim().slice(0, 10), end: p.end.trim().slice(0, 10) }));
+                  .map((p) => ({
+                    start: p.start.trim().slice(0, 10),
+                    end: p.end.trim().slice(0, 10),
+                    kind: p.kind ?? "vacation",
+                  }));
                 saveProfileMut.mutate({
                   id: editingProfile.id,
                   body: {
@@ -1114,18 +1119,34 @@ export function EmployeeDirectoryPage() {
                 </label>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400">
                   При пятидневке в будни без праздника часы подставляются автоматически: женский — 7.2 ч, мужской или не
-                  указан — 8 ч. Праздники РФ (будни) и сб/вс — пустые ячейки. Буква «о» только для отпуска — из периодов
-                  ниже. Сменный: цикл 11-3-8 с пустыми выходными по смене. 2/2: 11д-11в и пустые дни цикла.
+                  указан — 8 ч. Праздники РФ (будни) и сб/вс — пустые ячейки. Для отпуска в расписании «о» и «у»
+                  считаются равнозначными. Сменный: цикл 11-3-8 с пустыми выходными по смене. 2/2: 11д-11в и пустые дни
+                  цикла.
                 </p>
               </div>
               <div className="rounded-xl border border-slate-200/80 bg-slate-50/80 p-3 dark:border-slate-600 dark:bg-slate-800/40">
                 <p className="text-sm font-medium text-slate-800 dark:text-slate-100">Отпуск для графика</p>
                 <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  Интервалы дат — при автозаполнении расписания подставится «о» (с учётом опции «только пустые»).
+                  Интервалы дат — выберите тип: отпуск («о») или учебный отпуск («у»).
                 </p>
                 <ul className="mt-3 space-y-2">
                   {profileForm.vacation_periods.map((period, idx) => (
                     <li key={idx} className="flex flex-wrap items-center gap-2">
+                      <select
+                        value={period.kind ?? "vacation"}
+                        onChange={(e) =>
+                          setProfileForm((p) => ({
+                            ...p,
+                            vacation_periods: p.vacation_periods.map((x, i) =>
+                              i === idx ? { ...x, kind: e.target.value as "vacation" | "study" } : x,
+                            ),
+                          }))
+                        }
+                        className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-800"
+                      >
+                        <option value="vacation">Отпуск (о)</option>
+                        <option value="study">Учебный отпуск (у)</option>
+                      </select>
                       <input
                         type="date"
                         value={period.start}
@@ -1173,7 +1194,7 @@ export function EmployeeDirectoryPage() {
                   onClick={() =>
                     setProfileForm((p) => ({
                       ...p,
-                      vacation_periods: [...p.vacation_periods, { start: "", end: "" }],
+                      vacation_periods: [...p.vacation_periods, { start: "", end: "", kind: "vacation" }],
                     }))
                   }
                   disabled={profileForm.vacation_periods.length >= 24}

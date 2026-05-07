@@ -34,7 +34,7 @@ from app.schemas.schedule import (
     ShiftCoverageWarningOut,
     ShiftStaffingNoteOut,
 )
-from app.services.ru_calendar import is_weekend, ru_holiday_dates
+from app.services.ru_calendar import is_weekend, ru_holiday_dates, ru_holiday_names
 from app.services.schedule_autofill import (
     _norm_code as schedule_norm_code,
     run_schedule_autofill,
@@ -287,6 +287,16 @@ def _schedule_kind_order_for_system_block(user: User) -> int:
     return 0 if wkind == "five_two" else 1
 
 
+def _gender_order_for_system_block(user: User) -> int:
+    """Порядок пола внутри блока системы: female -> male -> unspecified."""
+    _, gender = normalize_profile_schedule(user.employee_profile)
+    if gender == "female":
+        return 0
+    if gender == "male":
+        return 1
+    return 2
+
+
 def _build_schedule_user_row(
     u: User,
     *,
@@ -302,6 +312,19 @@ def _build_schedule_user_row(
     systems_label = ", ".join(sys_names) if sys_names else "—"
     mode = u.schedule_mode if u.schedule_mode in SCHEDULE_MODE_VALUES else ScheduleMode.manual.value
     wkind, gsch = normalize_profile_schedule(u.employee_profile)
+    raw_periods = u.employee_profile.vacation_periods if u.employee_profile else None
+    vacation_periods: list[dict[str, str]] = []
+    if isinstance(raw_periods, list):
+        for p in raw_periods:
+            if not isinstance(p, dict):
+                continue
+            start = str(p.get("start") or "").strip()[:10]
+            end = str(p.get("end") or "").strip()[:10]
+            if not start or not end:
+                continue
+            kind_raw = str(p.get("kind") or "vacation").strip().lower()
+            kind = "study" if kind_raw == "study" else "vacation"
+            vacation_periods.append({"start": start, "end": end, "kind": kind})
 
     cells: dict[str, str | None] = {}
     ud = by_user.get(u.id, {})
@@ -335,6 +358,7 @@ def _build_schedule_user_row(
         hours_total=sum_month_hours(dim, day_codes),
         manual_row_color=manual_row_color,
         auto_row_color=auto_row_color,
+        vacation_periods=vacation_periods,
     )
 
 
@@ -347,6 +371,7 @@ async def get_schedule_month(
 ) -> ScheduleMonthOut:
     dim = _days_in_month(year, month)
     holiday_days = ru_holiday_dates(year, month)
+    holiday_names = ru_holiday_names(year, month)
 
     day_infos: list[ScheduleDayInfo] = []
     for d in range(1, dim + 1):
@@ -355,6 +380,7 @@ async def get_schedule_month(
                 day=d,
                 is_weekend=is_weekend(year, month, d),
                 is_ru_holiday=d in holiday_days,
+                holiday_name=holiday_names.get(d),
             )
         )
 
@@ -392,6 +418,7 @@ async def get_schedule_month(
         buckets[sid].sort(
             key=lambda x: (
                 _schedule_kind_order_for_system_block(x),
+                _gender_order_for_system_block(x),
                 x.full_name.lower(),
                 x.email.lower(),
             )

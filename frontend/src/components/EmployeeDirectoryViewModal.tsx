@@ -86,7 +86,10 @@ function DirectoryBody({ row }: { row: EmployeeDirectoryRowOut }) {
           <ul className="space-y-1 text-slate-900 dark:text-slate-100">
             {row.vacation_periods.map((vp, i) => (
               <li key={`${vp.start}-${vp.end}-${i}`}>
-                {fmtDate(vp.start)} — {fmtDate(vp.end)}
+                {fmtDate(vp.start)} — {fmtDate(vp.end)}{" "}
+                <span className="text-xs text-slate-500 dark:text-slate-400">
+                  ({(vp.kind ?? "vacation") === "study" ? "учебный отпуск (у)" : "отпуск (о)"})
+                </span>
               </li>
             ))}
           </ul>
