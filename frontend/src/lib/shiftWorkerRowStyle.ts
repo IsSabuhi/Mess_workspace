@@ -1,9 +1,31 @@
-/**
- * Подсветка строк сменщиков — те же оттенки, что в «График_смен.xlsx» (ARGB → #RGB):
- * голубой #00B0F0, жёлтый #FFFF00, зелёный #00B050, розовый #FF66CC.
- * Цвет стабильно привязан к id сотрудника (распределение по 4 «бригадам»).
- */
-const SHIFT_ROW_CLASSES = [
+/** Цвет всей строки для бригад с совпадающим шаблоном месяца. */
+const SHIFT_ROW_CLASSES_BY_PHASE = [
+  "bg-blue-500/24 text-slate-900 dark:bg-blue-500/26 dark:text-slate-100",
+  "bg-yellow-300/45 text-yellow-950 dark:bg-yellow-400/14 dark:text-yellow-50",
+  "bg-emerald-500/24 text-slate-900 dark:bg-emerald-500/26 dark:text-slate-100",
+  "bg-violet-500/24 text-slate-900 dark:bg-violet-500/26 dark:text-slate-100",
+] as const;
+
+/** Только фон (для `<td>` при `border-collapse`: фон на `<tr>` часто не виден). */
+const SHIFT_ROW_BG_BY_PHASE = [
+  "bg-blue-500/24 dark:bg-blue-500/32",
+  "bg-yellow-300/45 dark:bg-yellow-400/20",
+  "bg-emerald-500/24 dark:bg-emerald-500/32",
+  "bg-violet-500/24 dark:bg-violet-500/32",
+] as const;
+
+export function shiftRowClassByPhase(phase: number): string {
+  const i = Math.max(0, Math.min(3, Math.floor(phase)));
+  return SHIFT_ROW_CLASSES_BY_PHASE[i] ?? SHIFT_ROW_CLASSES_BY_PHASE[0];
+}
+
+export function shiftRowBgByPhase(phase: number): string {
+  const i = Math.max(0, Math.min(3, Math.floor(phase)));
+  return SHIFT_ROW_BG_BY_PHASE[i] ?? SHIFT_ROW_BG_BY_PHASE[0];
+}
+
+/** Те же четыре оттенка, что раньше по userId — для 2/2 и справочника. */
+const SHIFT_ROW_CLASSES_BY_HASH = [
   "bg-[#00B0F0]/14 dark:bg-[#00B0F0]/17 dark:text-slate-100",
   "bg-[#FFEA00]/35 dark:bg-[#E6D300]/14 dark:text-slate-100",
   "bg-[#00B050]/13 dark:bg-[#00B050]/16 dark:text-slate-100",
@@ -19,7 +41,7 @@ function hashMod(input: string, mod: number): number {
   return Math.abs(h) % mod;
 }
 
-/** Классы фона строки для сменщика (один из четырёх цветов по id). */
+/** Классы фона строки для сменщика не 11-3-8 по id (2/2 и т.д.). */
 export function shiftWorkerRowClass(userId: string): string {
-  return SHIFT_ROW_CLASSES[hashMod(userId, SHIFT_ROW_CLASSES.length)] ?? SHIFT_ROW_CLASSES[0];
+  return SHIFT_ROW_CLASSES_BY_HASH[hashMod(userId, SHIFT_ROW_CLASSES_BY_HASH.length)] ?? SHIFT_ROW_CLASSES_BY_HASH[0];
 }

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, FileSpreadsheet } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 function scheduleRowTitle(row: {
   full_name: string;
@@ -20,6 +20,7 @@ function scheduleRowTitle(row: {
 import {
   getScheduleMonth,
   patchScheduleCell,
+  patchScheduleRowColor,
   postScheduleAutofill,
   postScheduleImportExcel,
   postScheduleRegenerate,
@@ -28,7 +29,6 @@ import {
 } from "../api/schedule";
 import { AppShell } from "../components/AppShell";
 import { useAuth } from "../context/AuthContext";
-import { shiftWorkerRowClass } from "../lib/shiftWorkerRowStyle";
 import { PERM, canViewSchedule, hasPermission } from "../lib/permissions";
 import { toastApiError, toastSuccess } from "../lib/toast";
 import { useModalLayer } from "../lib/useModalLayer";
@@ -54,29 +54,46 @@ function weekdayLabel(year: number, month: number, day: number): string {
   return WEEKDAY_SHORT[new Date(year, month - 1, day).getDay()] ?? "";
 }
 
-function rowBgClass(kind: string): string {
-  if (kind === "shift") {
-    return "bg-amber-50/95 dark:bg-amber-950/40 dark:text-slate-100";
-  }
-  if (kind === "fixed") {
-    return "bg-sky-50/90 dark:bg-sky-950/45 dark:text-slate-100";
-  }
-  if (kind === "five_two") {
-    return "bg-white dark:bg-slate-900/70 dark:text-slate-100";
-  }
-  return "bg-slate-50/80 dark:bg-slate-900/90 dark:text-slate-100";
+function rowBgClass(_kind: string): string {
+  return "bg-white dark:bg-slate-900/90";
+}
+
+function hexToRgba(hex: string, alpha: number): string | null {
+  const s = String(hex ?? "").trim().toLowerCase();
+  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/.exec(s);
+  if (!m) return null;
+  const p = m[1]!;
+  const full = p.length === 3 ? p.split("").map((c) => c + c).join("") : p;
+  const r = Number.parseInt(full.slice(0, 2), 16);
+  const g = Number.parseInt(full.slice(2, 4), 16);
+  const b = Number.parseInt(full.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 function isShiftKind(kind: string): boolean {
   return kind === "shift" || kind === "two_two";
 }
 
-/** Подсветка строки: сменщики из справочника — палитра как в Excel; остальное — по виду ячеек. */
-function scheduleTableRowClass(row: ScheduleUserRow): string {
-  if (isShiftKind(row.work_schedule_kind)) {
-    return shiftWorkerRowClass(row.user_id);
+function cellForScheduleDay(row: ScheduleUserRow, day: number): unknown {
+  const c: unknown = row.cells;
+  if (c == null) return null;
+  if (Array.isArray(c)) {
+    const i = day - 1;
+    return i >= 0 && i < c.length ? c[i] : null;
   }
-  return rowBgClass(row.row_kind);
+  if (typeof c !== "object") return null;
+  const rec = c as Record<string, unknown>;
+  const s = String(day);
+  if (Object.hasOwn(rec, s)) return rec[s];
+  const pad2 = s.length === 1 ? `0${s}` : s;
+  if (pad2 !== s && Object.hasOwn(rec, pad2)) return rec[pad2];
+  return null;
+}
+
+function scheduleTableRowBgStyle(color: string | null | undefined): { backgroundColor: string } | undefined {
+  if (!color) return undefined;
+  const bg = hexToRgba(color, 0.24);
+  return bg ? { backgroundColor: bg } : undefined;
 }
 
 function formatHoursTotal(v: number): string {
@@ -113,15 +130,31 @@ export function SchedulePage() {
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [onlyEmptyAutofill, setOnlyEmptyAutofill] = useState(true);
+  /** Пустой массив — все системы. Значение `__none__` — блок без производственной системы. */
+  const [filterSystemIds, setFilterSystemIds] = useState<string[]>([]);
+  /** Пустой массив — все графики (work_schedule_kind). */
+  const [filterGraphKinds, setFilterGraphKinds] = useState<string[]>([]);
   const [showScheduleHelp, setShowScheduleHelp] = useState(false);
+  const [rowColorPickerOpen, setRowColorPickerOpen] = useState(false);
+  const [rowColorPickerTarget, setRowColorPickerTarget] = useState<{
+    user_id: string;
+    full_name: string;
+    color: string | null;
+  } | null>(null);
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [importSheetName, setImportSheetName] = useState("");
   const [importFile, setImportFile] = useState<File | null>(null);
+  /** Сотрудник, для чьей строки вызывается «Перегенерировать» (последняя сохранённая ячейка в этом месяце). */
+  const [regenerateTargetUserId, setRegenerateTargetUserId] = useState<string | null>(null);
 
   const closeImportExcelModal = useCallback(() => {
     setImportModalOpen(false);
     setImportSheetName("");
     setImportFile(null);
+  }, []);
+  const closeRowColorPicker = useCallback(() => {
+    setRowColorPickerOpen(false);
+    setRowColorPickerTarget(null);
   }, []);
 
   const qc = useQueryClient();
@@ -131,6 +164,10 @@ export function SchedulePage() {
     queryFn: () => getScheduleMonth(year, month),
     enabled: canView,
   });
+
+  useEffect(() => {
+    setRegenerateTargetUserId(null);
+  }, [year, month]);
 
   const dayByNum = useMemo(() => {
     const days = scheduleQuery.data?.days ?? [];
@@ -144,12 +181,81 @@ export function SchedulePage() {
     return new Set(ws.map((w) => w.day));
   }, [scheduleQuery.data?.shift_coverage_warnings]);
 
+  const systemFilterOptions = useMemo(() => {
+    const groups = scheduleQuery.data?.groups ?? [];
+    const seen = new Set<string>();
+    const out: { id: string; label: string }[] = [];
+    for (const g of groups) {
+      const id = g.system_id ?? "__none__";
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push({ id, label: g.label });
+    }
+    return out;
+  }, [scheduleQuery.data?.groups]);
+
+  const filteredGroups = useMemo(() => {
+    const groups = scheduleQuery.data?.groups ?? [];
+    return groups
+      .map((g) => ({
+        ...g,
+        users: g.users.filter((row) => {
+          if (filterGraphKinds.length > 0 && !filterGraphKinds.includes(row.work_schedule_kind)) return false;
+          return true;
+        }),
+      }))
+      .filter((g) => {
+        if (filterSystemIds.length > 0) {
+          const sid = g.system_id ?? "__none__";
+          if (!filterSystemIds.includes(sid)) return false;
+        }
+        return g.users.length > 0;
+      });
+  }, [scheduleQuery.data?.groups, filterSystemIds, filterGraphKinds]);
+
+  const filtersActive = filterSystemIds.length > 0 || filterGraphKinds.length > 0;
+
+  const toggleSystemFilter = useCallback((id: string) => {
+    setFilterSystemIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }, []);
+
+  const toggleGraphFilter = useCallback((kind: string) => {
+    setFilterGraphKinds((prev) => (prev.includes(kind) ? prev.filter((x) => x !== kind) : [...prev, kind]));
+  }, []);
+
+  const selectAllSystemFilters = useCallback(() => {
+    setFilterSystemIds(systemFilterOptions.map((o) => o.id));
+  }, [systemFilterOptions]);
+
+  const selectAllGraphFilters = useCallback(() => {
+    setFilterGraphKinds(["five_two", "shift", "two_two"]);
+  }, []);
+
+  const totalRowsShown = useMemo(
+    () => filteredGroups.reduce((acc, g) => acc + g.users.length, 0),
+    [filteredGroups],
+  );
+  const totalRowsAll = useMemo(
+    () => (scheduleQuery.data?.groups ?? []).reduce((acc, g) => acc + g.users.length, 0),
+    [scheduleQuery.data?.groups],
+  );
+
   const patchMut = useMutation({
     mutationFn: patchScheduleCell,
-    onSuccess: async () => {
+    onSuccess: async (_data, variables) => {
+      setRegenerateTargetUserId(variables.user_id);
       await qc.invalidateQueries({ queryKey: ["schedule", "month", year, month] });
     },
     onError: (e) => toastApiError(e, "Не удалось сохранить ячейку"),
+  });
+
+  const rowColorMut = useMutation({
+    mutationFn: patchScheduleRowColor,
+    onSuccess: async () => {
+      toastSuccess("Цвет строки сохранён");
+      await qc.invalidateQueries({ queryKey: ["schedule", "month", year, month] });
+    },
+    onError: (e) => toastApiError(e, "Не удалось сохранить цвет строки"),
   });
 
   const autofillMut = useMutation({
@@ -166,13 +272,18 @@ export function SchedulePage() {
     onError: (e) => toastApiError(e, "Автозаполнение не выполнено"),
   });
   const regenerateMut = useMutation({
-    mutationFn: () =>
+    mutationFn: (userId: string) =>
       postScheduleRegenerate({
         year,
         month,
+        user_id: userId,
       }),
     onSuccess: async (data) => {
-      toastSuccess(`Перегенерация выполнена: ${data.cells_written} ячеек`);
+      toastSuccess(
+        data.cells_written > 0
+          ? `Перегенерация выполнена: ${data.cells_written} ячеек`
+          : "Записей в БД не менялось (данные уже совпадали с расчётом)",
+      );
       await qc.invalidateQueries({ queryKey: ["schedule", "month", year, month] });
     },
     onError: (e) => toastApiError(e, "Перегенерация не выполнена"),
@@ -208,7 +319,14 @@ export function SchedulePage() {
       closeOnEscape: !importExcelMut.isPending,
     },
   );
-
+  const { backdropProps: rowColorBackdropProps, stopPanelPointer: rowColorStopPanelPointer } = useModalLayer(
+    !!(canManage && rowColorPickerOpen),
+    closeRowColorPicker,
+    {
+      closeOnBackdrop: !rowColorMut.isPending,
+      closeOnEscape: !rowColorMut.isPending,
+    },
+  );
   const daysInMonth = scheduleQuery.data?.days_in_month ?? new Date(year, month, 0).getDate();
   const dayNumbers = useMemo(() => Array.from({ length: daysInMonth }, (_, i) => i + 1), [daysInMonth]);
 
@@ -262,6 +380,103 @@ export function SchedulePage() {
           </button>
         </div>
         <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <details className="relative">
+              <summary className="marker:content-none list-none cursor-pointer rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm text-slate-800 shadow-sm hover:border-sky-300 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:hover:border-sky-600 [&::-webkit-details-marker]:hidden">
+                Системы
+                {filterSystemIds.length > 0 ? (
+                  <span className="ml-1 font-semibold text-sky-600 dark:text-sky-400">({filterSystemIds.length})</span>
+                ) : (
+                  <span className="ml-1 text-slate-400">· все</span>
+                )}
+              </summary>
+              <div className="absolute left-0 z-50 mt-1 min-w-[16rem] max-h-64 overflow-y-auto rounded-xl border border-slate-200 bg-white p-2 shadow-lg dark:border-slate-600 dark:bg-slate-800">
+                <div className="mb-2 flex flex-wrap gap-1 border-b border-slate-100 pb-2 dark:border-slate-700">
+                  <button
+                    type="button"
+                    className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600"
+                    onClick={() => setFilterSystemIds([])}
+                  >
+                    Сбросить
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-md bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-800 hover:bg-sky-200 dark:bg-sky-950/60 dark:text-sky-200 dark:hover:bg-sky-900/80"
+                    onClick={selectAllSystemFilters}
+                  >
+                    Все системы
+                  </button>
+                </div>
+                {systemFilterOptions.map((o) => (
+                  <label
+                    key={o.id}
+                    className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-700/80"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={filterSystemIds.includes(o.id)}
+                      onChange={() => toggleSystemFilter(o.id)}
+                      className="rounded border-slate-300 dark:border-slate-500"
+                    />
+                    <span className="truncate">{o.label}</span>
+                  </label>
+                ))}
+              </div>
+            </details>
+            <details className="relative">
+              <summary className="marker:content-none list-none cursor-pointer rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm text-slate-800 shadow-sm hover:border-sky-300 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:hover:border-sky-600 [&::-webkit-details-marker]:hidden">
+                Графики
+                {filterGraphKinds.length > 0 ? (
+                  <span className="ml-1 font-semibold text-sky-600 dark:text-sky-400">({filterGraphKinds.length})</span>
+                ) : (
+                  <span className="ml-1 text-slate-400">· все</span>
+                )}
+              </summary>
+              <div className="absolute left-0 z-50 mt-1 min-w-[12rem] rounded-xl border border-slate-200 bg-white p-2 shadow-lg dark:border-slate-600 dark:bg-slate-800">
+                <div className="mb-2 flex flex-wrap gap-1 border-b border-slate-100 pb-2 dark:border-slate-700">
+                  <button
+                    type="button"
+                    className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600"
+                    onClick={() => setFilterGraphKinds([])}
+                  >
+                    Сбросить
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-md bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-800 hover:bg-sky-200 dark:bg-sky-950/60 dark:text-sky-200 dark:hover:bg-sky-900/80"
+                    onClick={selectAllGraphFilters}
+                  >
+                    Все типы
+                  </button>
+                </div>
+                {(
+                  [
+                    { value: "five_two", label: "5/2" },
+                    { value: "shift", label: "Сменный" },
+                    { value: "two_two", label: "2/2" },
+                  ] as const
+                ).map((o) => (
+                  <label
+                    key={o.value}
+                    className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-700/80"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={filterGraphKinds.includes(o.value)}
+                      onChange={() => toggleGraphFilter(o.value)}
+                      className="rounded border-slate-300 dark:border-slate-500"
+                    />
+                    <span>{o.label}</span>
+                  </label>
+                ))}
+              </div>
+            </details>
+            {filtersActive && totalRowsAll > 0 && (
+              <span className="text-xs text-slate-500 dark:text-slate-400">
+                Показано: {totalRowsShown} из {totalRowsAll}
+              </span>
+            )}
+          </div>
           {canManage && (
             <>
               <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
@@ -283,10 +498,16 @@ export function SchedulePage() {
               </button>
               <button
                 type="button"
-                disabled={regenerateMut.isPending}
-                onClick={() => regenerateMut.mutate()}
+                disabled={regenerateMut.isPending || !regenerateTargetUserId}
+                onClick={() => {
+                  if (regenerateTargetUserId) regenerateMut.mutate(regenerateTargetUserId);
+                }}
                 className="rounded-xl bg-violet-600 px-4 py-2 text-sm font-medium text-white shadow hover:bg-violet-700 disabled:opacity-60 dark:bg-violet-500 dark:text-slate-950 dark:hover:bg-violet-400"
-                title="Перегенерировать месяц с учетом уже введенных вручную смен"
+                title={
+                  regenerateTargetUserId
+                    ? "Достроить эту строку месяца по циклу от ваших поштучных правок (не затрагивает других сотрудников)"
+                    : "Сначала сохраните хотя бы одну ячейку в строке сотрудника в этом месяце"
+                }
               >
                 {regenerateMut.isPending ? "Перегенерация…" : "Перегенерировать по ручным"}
               </button>
@@ -329,7 +550,7 @@ export function SchedulePage() {
                 отпуск <span className="font-mono">о</span>, учёба <span className="font-mono">у</span> и пустые ячейки в расчёт не входят — см. блок предупреждений над таблицей и розовую обводку дат.
               </p>
               <p className="mt-1 text-xs">
-                <span className="font-mono">о</span> отпуск / праздник РФ (будни) · <span className="font-mono">у</span> учёба ·{" "}
+                <span className="font-mono">о</span> только отпуск (из справочника) · <span className="font-mono">у</span> учёба ·{" "}
                 <span className="font-mono">8</span>/<span className="font-mono">11</span>/<span className="font-mono">3</span> смены ·{" "}
                 <span className="font-mono">7.2</span> · <span className="font-mono">11д</span>/<span className="font-mono">11в</span>
               </p>
@@ -337,14 +558,17 @@ export function SchedulePage() {
             <div>
               <p className="font-medium text-slate-800 dark:text-slate-100">Автозаполнение</p>
               <p className="mt-1 text-xs">
-                5/2 — часы из пола в кадровом справочнике; праздники РФ — «о»; сб/вс пустые. Отпуск — периоды в справочнике.
-                Сменщики — автозаполнение по режиму: 11-3-8 или 2/2 (11д/11в), отпускные дни — «о». Строки подсвечены
-                цветом (как в «График_смен»). Наведите на ФИО —
-                email, системы и тип графика.
+                5/2 — часы из пола в кадровом справочнике; праздники РФ и сб/вс — пустые ячейки. Отпуск — только «о», периоды в справочнике.
+                Подсветка: автоматически красим только сотрудников с типом графика «Сменный» (shift), если есть связь
+                «одинаковый день+код 11/3/8» или «совпавшая фаза цикла». Ручной цвет по клику на ФИО имеет приоритет.
+                Если ручной цвет в новом месяце не задан, берётся цвет из прошлого месяца.
+                «о»/«у» не смена. Наведите на ФИО — email, системы и тип графика.
               </p>
               <p className="mt-1 text-xs">
-                Кнопка «Перегенерировать по ручным» использует уже введенные в месяце коды как опорные точки и
-                достраивает оставшиеся дни по циклу.
+                «Перегенерировать по ручным» действует только на строку сотрудника, у которого вы последним сохранили
+                ячейку в этом месяце (другие строки не меняются). Поштучные правки задают фрагмент; пустые после очистки
+                сохраняются; «пачки» автозаполнения не мешают достройке хвоста по 11-3-8 / 2/2 или 5/2. Смена месяца
+                сбрасывает выбор — снова сохраните ячейку у нужного человека.
               </p>
               <p className="mt-1 text-xs">
                 «Из Excel» — загрузка листа месяца из .xlsx: строки по ФИО сопоставляются с сотрудниками в системе.
@@ -420,6 +644,81 @@ export function SchedulePage() {
           </div>
         </div>
       )}
+      {canManage && rowColorPickerOpen && rowColorPickerTarget && (
+        <div
+          {...rowColorBackdropProps}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 p-4 backdrop-blur-sm"
+        >
+          <div
+            className="w-full max-w-sm overflow-hidden rounded-2xl border border-sky-200/60 bg-white shadow-2xl dark:border-sky-900/40 dark:bg-slate-900"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="schedule-row-color-title"
+            onClick={rowColorStopPanelPointer}
+          >
+            <div className="border-b border-sky-100 bg-gradient-to-r from-sky-50 to-indigo-50 px-5 py-4 dark:border-sky-900/50 dark:from-sky-950/50 dark:to-indigo-950/40">
+              <h2 id="schedule-row-color-title" className="text-lg font-semibold text-sky-950 dark:text-sky-100">
+                Цвет строки
+              </h2>
+              <p className="mt-1 truncate text-sm text-sky-900/80 dark:text-sky-200/80">{rowColorPickerTarget.full_name}</p>
+            </div>
+            <div className="space-y-3 px-5 py-4">
+              <label className="flex items-center justify-between text-sm text-slate-700 dark:text-slate-200">
+                Выберите цвет
+                <input
+                  type="color"
+                  value={rowColorPickerTarget.color ?? "#ffffff"}
+                  className="h-9 w-12 cursor-pointer rounded border border-slate-300 bg-transparent p-0"
+                  onChange={(e) =>
+                    setRowColorPickerTarget((prev) => (prev ? { ...prev, color: e.target.value } : prev))
+                  }
+                />
+              </label>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-slate-100 bg-slate-50/80 px-5 py-3 dark:border-slate-700 dark:bg-slate-800/80">
+              <button
+                type="button"
+                onClick={closeRowColorPicker}
+                className="rounded-xl px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200/80 dark:text-slate-300 dark:hover:bg-slate-700"
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                disabled={rowColorMut.isPending}
+                className="rounded-xl bg-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-300 disabled:opacity-60 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600"
+                onClick={() => {
+                  rowColorMut.mutate({
+                    year,
+                    month,
+                    user_id: rowColorPickerTarget.user_id,
+                    color: null,
+                  });
+                  closeRowColorPicker();
+                }}
+              >
+                Сбросить
+              </button>
+              <button
+                type="button"
+                disabled={rowColorMut.isPending}
+                className="rounded-xl bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow-md hover:bg-sky-700 disabled:opacity-60"
+                onClick={() => {
+                  rowColorMut.mutate({
+                    year,
+                    month,
+                    user_id: rowColorPickerTarget.user_id,
+                    color: rowColorPickerTarget.color ?? "#ffffff",
+                  });
+                  closeRowColorPicker();
+                }}
+              >
+                {rowColorMut.isPending ? "Сохранение…" : "Сохранить"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {scheduleQuery.isPending && <p className="text-sm text-slate-500">Загрузка…</p>}
       {scheduleQuery.isError && (
@@ -448,7 +747,13 @@ export function SchedulePage() {
           </div>
         )}
 
-      {scheduleQuery.data && (
+      {scheduleQuery.data && filteredGroups.length === 0 && (
+        <p className="mb-3 text-sm text-slate-600 dark:text-slate-400">
+          Нет строк по выбранным фильтрам. Сбросьте фильтры или измените критерии.
+        </p>
+      )}
+
+      {scheduleQuery.data && filteredGroups.length > 0 && (
         <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white/90 shadow-soft dark:border-slate-600/70 dark:bg-slate-950 dark:shadow-[0_0_0_1px_rgba(148,163,184,0.08),inset_0_1px_0_0_rgba(255,255,255,0.04)]">
           <table className="w-max min-w-full border-collapse text-xs">
             <thead>
@@ -499,35 +804,58 @@ export function SchedulePage() {
               </tr>
             </thead>
             <tbody>
-              {scheduleQuery.data.groups.map((group, groupIndex) =>
-                group.users.map((row, rowInGroup) => (
+              {filteredGroups.map((group, groupIndex) =>
+                group.users.map((row, rowInGroup) => {
+                  const effectiveRowColor = row.manual_row_color ?? row.auto_row_color ?? null;
+                  const rowBgStyle = scheduleTableRowBgStyle(effectiveRowColor);
+                  const rowBgClassName = effectiveRowColor ? "" : rowBgClass(row.row_kind);
+                  return (
                   <tr
                     key={row.user_id}
-                    className={`border-b border-slate-100 dark:border-slate-700/80 ${scheduleTableRowClass(row)} ${
+                    className={`border-b border-slate-100 dark:border-slate-700/80 ${
                       groupIndex > 0 && rowInGroup === 0
                         ? "border-t-2 border-t-slate-300 dark:border-t-slate-500/80"
                         : ""
                     }`}
                   >
                     <td
-                      className="sticky left-0 z-10 w-[10.5rem] min-w-[9rem] max-w-[12rem] border-r border-slate-200 bg-inherit px-1.5 py-0.5 shadow-[4px_0_12px_-4px_rgba(15,23,42,0.08)] dark:border-slate-600/70 dark:bg-slate-900/92 dark:shadow-[4px_0_14px_-4px_rgba(0,0,0,0.5)]"
+                      style={rowBgStyle}
+                      className={`sticky left-0 z-10 w-[10.5rem] min-w-[9rem] max-w-[12rem] border-r border-slate-200 px-1.5 py-0.5 shadow-[4px_0_12px_-4px_rgba(15,23,42,0.08)] dark:border-slate-600/70 dark:shadow-[4px_0_14px_-4px_rgba(0,0,0,0.5)] ${rowBgClassName}`}
                       title={scheduleRowTitle(row)}
                     >
-                      <div className="truncate font-medium leading-tight text-slate-900 dark:text-slate-50">
+                      <button
+                        type="button"
+                        disabled={!canManage}
+                        className={`w-full truncate text-left font-medium leading-tight text-slate-900 dark:text-slate-50 ${
+                          canManage ? "hover:underline" : ""
+                        }`}
+                        onClick={() => {
+                          if (!canManage) return;
+                          setRowColorPickerTarget({
+                            user_id: row.user_id,
+                            full_name: row.full_name,
+                            color: row.manual_row_color ?? null,
+                          });
+                          setRowColorPickerOpen(true);
+                        }}
+                      >
                         {row.full_name}
-                      </div>
+                      </button>
                     </td>
                     {dayNumbers.map((d) => {
                       const key = String(d);
-                      const val = row.cells[key] ?? "";
+                      const val = String(cellForScheduleDay(row, d) ?? "");
                       const di = dayByNum.get(d);
-                      const headTint = di?.is_ru_holiday
-                        ? "bg-amber-100/45 dark:bg-amber-950/35"
-                        : di?.is_weekend
-                          ? "bg-slate-100/55 dark:bg-slate-800/70"
-                          : "";
+                      const isColoredRow = !!effectiveRowColor;
+                      const headTint = isColoredRow
+                        ? ""
+                        : di?.is_ru_holiday
+                          ? "bg-amber-100/45 dark:bg-amber-950/35"
+                          : di?.is_weekend
+                            ? "bg-slate-100/55 dark:bg-slate-800/70"
+                            : "";
                       return (
-                        <td key={key} className={`p-0 ${headTint}`}>
+                        <td key={key} style={rowBgStyle} className={`p-0 ${rowBgClassName} ${headTint}`}>
                           {canManage ? (
                             <ScheduleCellInput
                               initialValue={val}
@@ -544,20 +872,22 @@ export function SchedulePage() {
                       );
                     })}
                     <td
-                      className="w-[3.75rem] min-w-[3.75rem] border-l border-slate-200 bg-inherit px-0.5 py-0.5 text-center font-mono text-[11px] font-semibold tabular-nums text-slate-900 dark:border-slate-600/70 dark:text-teal-200/95"
+                      style={rowBgStyle}
+                      className={`w-[3.75rem] min-w-[3.75rem] border-l border-slate-200 px-0.5 py-0.5 text-center font-mono text-[11px] font-semibold tabular-nums text-slate-900 dark:border-slate-600/70 dark:text-teal-200/95 ${rowBgClassName}`}
                     >
                       {formatHoursTotal(row.hours_total)}
                     </td>
                     {rowInGroup === 0 ? (
                       <td
                         rowSpan={Math.max(1, group.users.length)}
-                        className="min-w-[7.5rem] max-w-[10rem] border-l border-slate-200 bg-inherit px-2 py-2 align-middle text-center text-xs font-semibold leading-snug text-slate-800 dark:border-slate-600/70 dark:text-violet-200/95"
+                        className="min-w-[7.5rem] max-w-[10rem] border-l border-slate-200 bg-white px-2 py-2 align-middle text-center text-xs font-semibold leading-snug text-slate-800 dark:border-slate-600/70 dark:bg-slate-900/90 dark:text-violet-200/95"
                       >
                         {group.label}
                       </td>
                     ) : null}
                   </tr>
-                )),
+                  );
+                })
               )}
             </tbody>
           </table>

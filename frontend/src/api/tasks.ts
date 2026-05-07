@@ -33,6 +33,35 @@ export type TaskCommentOut = {
   author: { id: string; email: string; full_name: string } | null;
 };
 
+export type TaskAnalyticsBucketOut = {
+  key: string;
+  label: string;
+  total: number;
+  active: number;
+  overdue: number;
+};
+
+export type TaskDueTrendPointOut = {
+  date: string;
+  due_total: number;
+  overdue_total: number;
+};
+
+export type TaskAnalyticsOut = {
+  kpi: {
+    total: number;
+    active: number;
+    overdue: number;
+    due_soon: number;
+    unassigned: number;
+    high_priority: number;
+  };
+  by_system: TaskAnalyticsBucketOut[];
+  by_column: TaskAnalyticsBucketOut[];
+  by_assignee: TaskAnalyticsBucketOut[];
+  due_trend: TaskDueTrendPointOut[];
+};
+
 export type TaskCreate = {
   title: string;
   description?: string | null;
@@ -76,6 +105,23 @@ export async function listTasks(params?: {
   if (params?.include_archived) sp.set("include_archived", "true");
   const q = sp.toString();
   return apiFetch<TaskOut[]>(`/api/v1/tasks${q ? `?${q}` : ""}`);
+}
+
+export async function getTasksAnalytics(params?: {
+  system_id?: string;
+  assignee_id?: string;
+  column_id?: string;
+  include_archived?: boolean;
+  trend_days?: number;
+}): Promise<TaskAnalyticsOut> {
+  const sp = new URLSearchParams();
+  if (params?.system_id) sp.set("system_id", params.system_id);
+  if (params?.assignee_id) sp.set("assignee_id", params.assignee_id);
+  if (params?.column_id) sp.set("column_id", params.column_id);
+  if (params?.include_archived) sp.set("include_archived", "true");
+  if (typeof params?.trend_days === "number") sp.set("trend_days", String(params.trend_days));
+  const q = sp.toString();
+  return apiFetch<TaskAnalyticsOut>(`/api/v1/tasks/analytics${q ? `?${q}` : ""}`);
 }
 
 export async function createTask(body: TaskCreate): Promise<TaskOut> {

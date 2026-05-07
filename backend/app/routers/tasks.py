@@ -1,5 +1,6 @@
-import uuid
 import re
+import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -22,6 +23,10 @@ from app.models.task import task_assignees_table
 from app.permissions import TASKS_CREATE, TASKS_READ_ASSIGNED
 from app.schemas.task import (
     ColumnMini,
+    TaskAnalyticsBucketOut,
+    TaskAnalyticsKpiOut,
+    TaskAnalyticsOut,
+    TaskDueTrendPointOut,
     SystemMini,
     TagMini,
     TaskCommentCreate,
@@ -38,6 +43,29 @@ from app.services.task_policy import can_delete_task, can_read_task, can_update_
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 _MENTION_RE = re.compile(r"@([a-zA-Z0-9_.+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})")
+
+
+def _task_in_done_column(task: Task) -> bool:
+    c = task.column
+    if not c:
+        return False
+    if c.is_done_column:
+        return True
+    return (c.slug or "") == "done"
+
+
+def _task_is_active(task: Task) -> bool:
+    if task.archived_at is not None:
+        return False
+    return not _task_in_done_column(task)
+
+
+def _task_is_overdue(task: Task, now: datetime) -> bool:
+    if not _task_is_active(task):
+        return False
+    if task.due_at is None:
+        return False
+    return task.due_at < now
 
 
 async def _user_system_ids(session: AsyncSession, user_id: uuid.UUID) -> list[uuid.UUID]:
@@ -206,6 +234,116 @@ async def list_tasks(
         if await can_read_task(session, user, t):
             out.append(_task_to_out(t))
     return out
+
+
+@router.get("/analytics", response_model=TaskAnalyticsOut)
+async def tasks_analytics(
+    session: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+    system_id: uuid.UUID | None = None,
+    assignee_id: uuid.UUID | None = None,
+    column_id: uuid.UUID | None = None,
+    include_archived: bool = False,
+    trend_days: int = 14,
+) -> TaskAnalyticsOut:
+    await auto_archive_done_tasks(session)
+    stmt = select(Task).options(*_TASK_LOAD).order_by(Task.position, Task.created_at)
+    stmt = await _apply_task_list_scope(session, user, stmt)
+    if not include_archived:
+        stmt = stmt.where(Task.archived_at.is_(None))
+    if system_id:
+        stmt = stmt.where(Task.system_id == system_id)
+    if assignee_id:
+        sub = exists().where(
+            task_assignees_table.c.task_id == Task.id,
+            task_assignees_table.c.user_id == assignee_id,
+        )
+        stmt = stmt.where(sub)
+    if column_id:
+        stmt = stmt.where(Task.column_id == column_id)
+
+    result = await session.execute(stmt)
+    rows = [t for t in result.scalars().unique().all() if await can_read_task(session, user, t)]
+    now = datetime.now(timezone.utc)
+    due_soon_limit = now + timedelta(days=3)
+    trend_days = max(1, min(90, trend_days))
+    trend_from = now - timedelta(days=trend_days - 1)
+
+    kpi_total = 0
+    kpi_active = 0
+    kpi_overdue = 0
+    kpi_due_soon = 0
+    kpi_unassigned = 0
+    kpi_high = 0
+
+    by_system: dict[str, TaskAnalyticsBucketOut] = {}
+    by_column: dict[str, TaskAnalyticsBucketOut] = {}
+    by_assignee: dict[str, TaskAnalyticsBucketOut] = {}
+    trend_map: dict[str, TaskDueTrendPointOut] = {}
+    for i in range(trend_days):
+        d = (trend_from + timedelta(days=i)).date().isoformat()
+        trend_map[d] = TaskDueTrendPointOut(date=d, due_total=0, overdue_total=0)
+
+    def _upd_bucket(m: dict[str, TaskAnalyticsBucketOut], key: str, label: str, is_active: bool, is_overdue: bool):
+        if key not in m:
+            m[key] = TaskAnalyticsBucketOut(key=key, label=label, total=0, active=0, overdue=0)
+        b = m[key]
+        b.total += 1
+        if is_active:
+            b.active += 1
+        if is_overdue:
+            b.overdue += 1
+
+    for t in rows:
+        is_active = _task_is_active(t)
+        is_overdue = _task_is_overdue(t, now)
+        kpi_total += 1
+        if is_active:
+            kpi_active += 1
+        if is_overdue:
+            kpi_overdue += 1
+        if is_active and t.due_at is not None and now <= t.due_at <= due_soon_limit:
+            kpi_due_soon += 1
+        if len(t.assignees or []) == 0:
+            kpi_unassigned += 1
+        if t.priority.value in ("high", "urgent"):
+            kpi_high += 1
+
+        sys_key = str(t.system.id) if t.system else "__none__"
+        sys_label = t.system.name if t.system else "Без системы"
+        _upd_bucket(by_system, sys_key, sys_label, is_active, is_overdue)
+
+        col_key = str(t.column.id) if t.column else "__none__"
+        col_label = t.column.name if t.column else "Без колонки"
+        _upd_bucket(by_column, col_key, col_label, is_active, is_overdue)
+
+        if len(t.assignees or []) == 0:
+            _upd_bucket(by_assignee, "__none__", "Не назначен", is_active, is_overdue)
+        else:
+            for a in t.assignees:
+                _upd_bucket(by_assignee, str(a.id), a.full_name, is_active, is_overdue)
+
+        if t.due_at is not None:
+            dd = t.due_at.date().isoformat()
+            if dd in trend_map:
+                trend_map[dd].due_total += 1
+                if is_overdue:
+                    trend_map[dd].overdue_total += 1
+
+    return TaskAnalyticsOut(
+        kpi=TaskAnalyticsKpiOut(
+            total=kpi_total,
+            active=kpi_active,
+            overdue=kpi_overdue,
+            due_soon=kpi_due_soon,
+            unassigned=kpi_unassigned,
+            high_priority=kpi_high,
+        ),
+        by_system=sorted(by_system.values(), key=lambda x: (x.overdue, x.total), reverse=True),
+        by_column=sorted(by_column.values(), key=lambda x: (x.total, x.overdue), reverse=True),
+        by_assignee=sorted(by_assignee.values(), key=lambda x: (x.overdue, x.total), reverse=True),
+        due_trend=list(trend_map.values()),
+    )
 
 
 @router.get("/{task_id}", response_model=TaskOut)

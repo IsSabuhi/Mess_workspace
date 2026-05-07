@@ -94,3 +94,34 @@ class TaskCommentOut(ORMModel):
     created_at: datetime
     updated_at: datetime
     author: UserMini | None = None
+
+
+class TaskAnalyticsKpiOut(BaseModel):
+    total: int
+    active: int
+    overdue: int
+    due_soon: int
+    unassigned: int
+    high_priority: int
+
+
+class TaskAnalyticsBucketOut(BaseModel):
+    key: str
+    label: str
+    total: int
+    active: int
+    overdue: int
+
+
+class TaskDueTrendPointOut(BaseModel):
+    date: str
+    due_total: int
+    overdue_total: int
+
+
+class TaskAnalyticsOut(BaseModel):
+    kpi: TaskAnalyticsKpiOut
+    by_system: list[TaskAnalyticsBucketOut] = Field(default_factory=list)
+    by_column: list[TaskAnalyticsBucketOut] = Field(default_factory=list)
+    by_assignee: list[TaskAnalyticsBucketOut] = Field(default_factory=list)
+    due_trend: list[TaskDueTrendPointOut] = Field(default_factory=list)

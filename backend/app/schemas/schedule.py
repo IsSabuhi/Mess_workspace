@@ -27,6 +27,14 @@ class ScheduleUserRow(BaseModel):
     hours_total: float = Field(
         description="Сумма часов за месяц: только числовые ячейки (8, 7.2, 11, 3…); буквы и коды смен не суммируются",
     )
+    manual_row_color: str | None = Field(
+        default=None,
+        description="Ручной цвет строки сотрудника для выбранного месяца (#RRGGBB)",
+    )
+    auto_row_color: str | None = Field(
+        default=None,
+        description="Автоцвет по совпадению смен (только для shift), если ручной не задан",
+    )
 
 
 class ScheduleGroupOut(BaseModel):
@@ -55,6 +63,20 @@ class ShiftCoverageWarningOut(BaseModel):
     working_count: int
     shift_staff_total: int
     message: str
+
+
+class ScheduleRowColorPatch(BaseModel):
+    year: int = Field(..., ge=2000, le=2100)
+    month: int = Field(..., ge=1, le=12)
+    user_id: uuid.UUID
+    color: str | None = Field(None, max_length=16, description="HEX-цвет #RGB/#RRGGBB; null для сброса")
+
+
+class ScheduleRowColorOut(BaseModel):
+    year: int
+    month: int
+    user_id: uuid.UUID
+    color: str | None = None
 
 
 class ScheduleMonthOut(BaseModel):
@@ -100,6 +122,7 @@ class ScheduleAutofillOut(BaseModel):
 class ScheduleRegenerateIn(BaseModel):
     year: int = Field(..., ge=2000, le=2100)
     month: int = Field(..., ge=1, le=12)
+    user_id: uuid.UUID = Field(..., description="Сотрудник: пересобирается только эта строка месяца")
 
 
 class ScheduleExcelImportOut(BaseModel):

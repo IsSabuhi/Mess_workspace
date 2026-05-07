@@ -18,6 +18,10 @@ export type ScheduleUserRow = {
   cells: Record<string, string | null>;
   /** Сумма числовых ячеек за месяц (8, 7.2, 11…) */
   hours_total: number;
+  /** Ручной цвет строки сотрудника для этого месяца (#RRGGBB). */
+  manual_row_color?: string | null;
+  /** Автоцвет по совпадению смен (только shift), если ручной цвет не задан. */
+  auto_row_color?: string | null;
 };
 
 export type ScheduleGroupOut = {
@@ -82,6 +86,18 @@ export async function patchScheduleUserMode(
   });
 }
 
+export async function patchScheduleRowColor(body: {
+  year: number;
+  month: number;
+  user_id: string;
+  color: string | null;
+}): Promise<{ year: number; month: number; user_id: string; color: string | null }> {
+  return apiFetch("/api/v1/schedule/row-color", {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
 export async function postScheduleAutofill(body: {
   year: number;
   month: number;
@@ -96,6 +112,7 @@ export async function postScheduleAutofill(body: {
 export async function postScheduleRegenerate(body: {
   year: number;
   month: number;
+  user_id: string;
 }): Promise<{ cells_written: number }> {
   return apiFetch("/api/v1/schedule/regenerate", {
     method: "POST",

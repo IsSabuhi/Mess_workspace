@@ -13,7 +13,7 @@ import {
 import { arrayMove, SortableContext, horizontalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { GripVertical, Pencil, Tags, Trash2 } from "lucide-react";
+import { GripVertical, Pencil, Plus, Tags, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
@@ -51,6 +51,7 @@ import {
   canUpdateTask,
   hasPermission,
 } from "../lib/permissions";
+import { computeTaskKpis } from "../lib/taskAnalyticsFilters";
 import { formatAssigneesLabel } from "../lib/taskAssignees";
 import { taskIsOverdueForDashboard } from "../lib/taskStatus";
 import { toastApiError, toastError, toastSuccess } from "../lib/toast";
@@ -315,7 +316,10 @@ export function TasksPage() {
 
   const [filterSystem, setFilterSystem] = useState<string>("");
   const [showOverdueOnly, setShowOverdueOnly] = useState(false);
+  const [showUnassignedOnly, setShowUnassignedOnly] = useState(false);
+  const [showHighPriorityOnly, setShowHighPriorityOnly] = useState(false);
   const [archiveFilter, setArchiveFilter] = useState<"active" | "archived" | "all">("active");
+  const [filterAssigneeId, setFilterAssigneeId] = useState<string>("");
   /** Пусто — все задачи; иначе показываются задачи, у которых есть хотя бы один из выбранных тегов */
   const [filterTagIds, setFilterTagIds] = useState<string[]>([]);
   const [tagFilterExpanded, setTagFilterExpanded] = useState(false);
@@ -357,6 +361,8 @@ export function TasksPage() {
   const [editingTagId, setEditingTagId] = useState<string | null>(null);
   const [activeDragTask, setActiveDragTask] = useState<TaskOut | null>(null);
   const [activeDragColumn, setActiveDragColumn] = useState<KanbanColumnOut | null>(null);
+  const [quickCreateColumnId, setQuickCreateColumnId] = useState<string | null>(null);
+  const [quickCreateDraftByColumn, setQuickCreateDraftByColumn] = useState<Record<string, string>>({});
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -760,36 +766,61 @@ export function TasksPage() {
     [columns],
   );
 
-  const tasksByColumn = useMemo(() => {
-    const m = new Map<string, TaskOut[]>();
-    for (const c of sortedCols) m.set(c.id, []);
-    for (const t of tasks) {
+  const resolveQuickCreateSystemId = useCallback((): string | null => {
+    if (canViewAllSystems) return filterSystem || null;
+    if (filterSystem) return filterSystem;
+    if (systemId) return systemId;
+    if (boardSystems.length === 1) return boardSystems[0].id;
+    return null;
+  }, [canViewAllSystems, filterSystem, systemId, boardSystems]);
+
+  const visibleTasks = useMemo(() => {
+    return tasks.filter((t) => {
       const isArchived = !!t.archived_at;
-      if (archiveFilter === "active" && isArchived) continue;
-      if (archiveFilter === "archived" && !isArchived) continue;
-      if (filterSystem && t.system_id !== filterSystem) continue;
-      if (showOverdueOnly && !taskIsOverdueForDashboard(t)) continue;
+      if (archiveFilter === "active" && isArchived) return false;
+      if (archiveFilter === "archived" && !isArchived) return false;
+      if (filterSystem && t.system_id !== filterSystem) return false;
+      if (showOverdueOnly && !taskIsOverdueForDashboard(t)) return false;
+      if (showUnassignedOnly && (t.assignees ?? []).length > 0) return false;
+      if (showHighPriorityOnly && t.priority !== "high" && t.priority !== "urgent") return false;
+      if (filterAssigneeId && !(t.assignees ?? []).some((a) => a.id === filterAssigneeId)) return false;
       if (filterTagIds.length > 0) {
         const taskTagIds = new Set(t.tags.map((x) => x.id));
         const matches = filterTagIds.some((id) => taskTagIds.has(id));
-        if (!matches) continue;
+        if (!matches) return false;
       }
+      return true;
+    });
+  }, [
+    tasks,
+    archiveFilter,
+    filterSystem,
+    showOverdueOnly,
+    showUnassignedOnly,
+    showHighPriorityOnly,
+    filterAssigneeId,
+    filterTagIds,
+  ]);
+
+  const tasksByColumn = useMemo(() => {
+    const m = new Map<string, TaskOut[]>();
+    for (const c of sortedCols) m.set(c.id, []);
+    for (const t of visibleTasks) {
       const arr = m.get(t.column_id);
       if (arr) arr.push(t);
     }
     return m;
-  }, [tasks, sortedCols, archiveFilter, filterSystem, showOverdueOnly, filterTagIds]);
+  }, [visibleTasks, sortedCols]);
 
   const overdueById = useMemo(() => {
     const s = new Set<string>();
-    for (const t of tasks) {
-      const isArchived = !!t.archived_at;
-      if (archiveFilter === "active" && isArchived) continue;
-      if (archiveFilter === "archived" && !isArchived) continue;
+    for (const t of visibleTasks) {
       if (taskIsOverdueForDashboard(t)) s.add(t.id);
     }
     return s;
-  }, [tasks, archiveFilter]);
+  }, [visibleTasks]);
+
+  const kanbanKpis = useMemo(() => computeTaskKpis(visibleTasks), [visibleTasks]);
 
   useEffect(() => {
     const taskIdFromUrl = searchParams.get("taskId");
@@ -1170,14 +1201,20 @@ export function TasksPage() {
             Система: {boardSystems[0].name}
           </span>
         )}
-        <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-          <input
-            type="checkbox"
-            checked={showOverdueOnly}
-            onChange={(e) => setShowOverdueOnly(e.target.checked)}
-            className="rounded border-slate-300"
-          />
-          Показывать только просроченные
+        <label className="flex items-center gap-2 text-sm">
+          <span className="text-slate-600 dark:text-slate-400">Исполнитель</span>
+          <select
+            value={filterAssigneeId}
+            onChange={(e) => setFilterAssigneeId(e.target.value)}
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+          >
+            <option value="">Все</option>
+            {assigneeChoices.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.full_name}
+              </option>
+            ))}
+          </select>
         </label>
         <label className="flex items-center gap-2 text-sm">
           <span className="text-slate-600 dark:text-slate-400">Показ</span>
@@ -1225,6 +1262,77 @@ export function TasksPage() {
             + Колонка
           </button>
         )}
+      </div>
+      <div className="mb-4 rounded-2xl border border-slate-200/80 bg-white/70 p-3 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="rounded-full bg-slate-100 px-2.5 py-1 font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">
+            Всего: {kanbanKpis.total}
+          </span>
+          <span className="rounded-full bg-sky-100 px-2.5 py-1 font-semibold text-sky-800 dark:bg-sky-950/50 dark:text-sky-300">
+            Активные: {kanbanKpis.active}
+          </span>
+          <span className="rounded-full bg-red-100 px-2.5 py-1 font-semibold text-red-700 dark:bg-red-950/50 dark:text-red-300">
+            Просрочено: {kanbanKpis.overdue}
+          </span>
+          <span className="rounded-full bg-amber-100 px-2.5 py-1 font-semibold text-amber-800 dark:bg-amber-950/50 dark:text-amber-300">
+            Срок до 3 дней: {kanbanKpis.dueSoon}
+          </span>
+          <span className="rounded-full bg-violet-100 px-2.5 py-1 font-semibold text-violet-800 dark:bg-violet-950/50 dark:text-violet-300">
+            Без исполнителя: {kanbanKpis.unassigned}
+          </span>
+          <span className="rounded-full bg-rose-100 px-2.5 py-1 font-semibold text-rose-800 dark:bg-rose-950/50 dark:text-rose-300">
+            Высокий/срочный: {kanbanKpis.highPriority}
+          </span>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => setShowOverdueOnly((v) => !v)}
+            className={`rounded-lg px-3 py-1.5 text-xs font-medium ${
+              showOverdueOnly
+                ? "bg-red-600 text-white"
+                : "bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+            }`}
+          >
+            Только просроченные
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowUnassignedOnly((v) => !v)}
+            className={`rounded-lg px-3 py-1.5 text-xs font-medium ${
+              showUnassignedOnly
+                ? "bg-violet-600 text-white"
+                : "bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+            }`}
+          >
+            Без исполнителя
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowHighPriorityOnly((v) => !v)}
+            className={`rounded-lg px-3 py-1.5 text-xs font-medium ${
+              showHighPriorityOnly
+                ? "bg-rose-600 text-white"
+                : "bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+            }`}
+          >
+            Высокий/срочный
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setShowOverdueOnly(false);
+              setShowUnassignedOnly(false);
+              setShowHighPriorityOnly(false);
+              setFilterAssigneeId("");
+              setFilterSystem("");
+              setFilterTagIds([]);
+            }}
+            className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 shadow-sm transition hover:bg-rose-100 dark:border-rose-800/70 dark:bg-rose-950/35 dark:text-rose-300 dark:hover:bg-rose-900/45"
+          >
+            Сбросить быстрые фильтры
+          </button>
+        </div>
       </div>
       {(tagsQuery.data ?? []).length > 0 && (
         <div className="mb-4 rounded-xl border border-slate-200/80 bg-white/60 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/40">
@@ -1336,6 +1444,24 @@ export function TasksPage() {
                             </div>
                           </div>
                   <div className="flex shrink-0 items-center gap-0.5">
+                    {canCreate && (canViewAllSystems || boardSystems.length > 0) ? (
+                      <button
+                        type="button"
+                        title="Добавить задачу в эту колонку"
+                        onClick={() => {
+                          setColumnId(col.id);
+                          setAssigneeIds([]);
+                          setTagIds([]);
+                          setTitle("");
+                          setFormError(null);
+                          setModalOpen(true);
+                        }}
+                        className="rounded-lg p-1.5 text-slate-400 hover:bg-sky-50 hover:text-sky-700 dark:hover:bg-sky-950/40 dark:hover:text-sky-300"
+                        aria-label={`Добавить задачу в колонку ${col.name}`}
+                      >
+                        <Plus className="h-4 w-4" strokeWidth={2} />
+                      </button>
+                    ) : null}
                     {canManageCols ? (
                       <button
                         type="button"
@@ -1397,6 +1523,92 @@ export function TasksPage() {
                     />
                   ))}
                 </ColumnDropArea>
+                {canCreate && (canViewAllSystems || boardSystems.length > 0) && (
+                  <div className="mt-2 border-t border-slate-100 pt-2 dark:border-slate-700/80">
+                    {quickCreateColumnId === col.id ? (
+                      <div className="space-y-2">
+                        <input
+                          value={quickCreateDraftByColumn[col.id] ?? ""}
+                          onChange={(e) =>
+                            setQuickCreateDraftByColumn((prev) => ({ ...prev, [col.id]: e.target.value }))
+                          }
+                          onKeyDown={(e) => {
+                            if (e.key === "Escape") {
+                              setQuickCreateColumnId(null);
+                              return;
+                            }
+                            if (e.key !== "Enter") return;
+                            const titleQuick = (quickCreateDraftByColumn[col.id] ?? "").trim();
+                            if (!titleQuick) return;
+                            const resolvedSystemId = resolveQuickCreateSystemId();
+                            if (!resolvedSystemId) {
+                              toastError(
+                                "Для добавления задачи выберите систему в фильтре сверху",
+                              );
+                              return;
+                            }
+                            createMut.mutate({
+                              title: titleQuick,
+                              column_id: col.id,
+                              system_id: resolvedSystemId,
+                              assignee_ids: [],
+                              tag_ids: [],
+                            });
+                            setQuickCreateDraftByColumn((prev) => ({ ...prev, [col.id]: "" }));
+                            setQuickCreateColumnId(null);
+                          }}
+                          placeholder="Название задачи..."
+                          className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-800"
+                          autoFocus
+                        />
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const titleQuick = (quickCreateDraftByColumn[col.id] ?? "").trim();
+                              if (!titleQuick) return;
+                              const resolvedSystemId = resolveQuickCreateSystemId();
+                              if (!resolvedSystemId) {
+                                toastError(
+                                  "Для добавления задачи выберите систему в фильтре сверху",
+                                );
+                                return;
+                              }
+                              createMut.mutate({
+                                title: titleQuick,
+                                column_id: col.id,
+                                system_id: resolvedSystemId,
+                                assignee_ids: [],
+                                tag_ids: [],
+                              });
+                              setQuickCreateDraftByColumn((prev) => ({ ...prev, [col.id]: "" }));
+                              setQuickCreateColumnId(null);
+                            }}
+                            disabled={createMut.isPending}
+                            className="rounded-lg bg-sky-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-sky-700 disabled:opacity-50"
+                          >
+                            Создать
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setQuickCreateColumnId(null)}
+                            className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600"
+                          >
+                            Отмена
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setQuickCreateColumnId(col.id)}
+                        className="w-full rounded-lg border border-dashed border-slate-300 px-2 py-1.5 text-left text-xs font-medium text-slate-600 hover:border-sky-400 hover:text-sky-700 dark:border-slate-600 dark:text-slate-300 dark:hover:border-sky-500 dark:hover:text-sky-300"
+                      >
+                        + Новая задача
+                      </button>
+                    )}
+                  </div>
+                )}
                       </>
                     )}
                   </SortableColumnShell>

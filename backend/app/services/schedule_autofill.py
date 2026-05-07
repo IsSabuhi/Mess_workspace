@@ -1,7 +1,7 @@
 """Автозаполнение графика по данным справочника.
 
-5/2: 8 / 7.2, праздники РФ — «о», сб/вс — пусто.
-Сменщики: циклы по schedule_mode (11-3-8 или 2/2: 11д/11в) + отпуск «о».
+5/2: 8 / 7.2, праздники РФ и сб/вс — пусто. Буква «о» — только отпуск из кадрового справочника.
+Сменщики: циклы 11-3-8 или 2/2; выходные по графику — пустая ячейка, не «о»; отпуск — «о».
 """
 
 from __future__ import annotations
@@ -28,6 +28,40 @@ from app.services.ru_calendar import is_weekend, ru_holiday_dates
 
 VACATION_CODES = frozenset({"о", "у"})
 
+# Недавние правки в листе месяца (по updated_at): отбор строк и граница «хвост пересчитать по циклу».
+REGENERATE_EDIT_LOOKBACK = timedelta(days=60)
+# При подборе фазы перегенерации сначала ориентируемся на последние N календарных дней до последнего сохранения,
+# чтобы недавние ручные правки (11-3-8 и пустые выходные) задавали продолжение на следующие даты.
+REGENERATE_PHASE_TAIL_DAYS = 21
+# Столько и больше ячеек у одного сотрудника с тем же updated_at (до секунды) — массовое сохранение
+# (автозаполнение, импорт): такие дни при перегенерации не «приклеиваем» из БД, чтобы достроился цикл вперёд.
+REGENERATE_BULK_SAVE_MIN_DAYS = 6
+
+
+def _bulk_saved_day_set(
+    entries: list,
+    *,
+    user_id: uuid.UUID,
+    touch_threshold: datetime,
+    dim: int,
+) -> set[int]:
+    """Дни из пакетного сохранения (одна секунда, много номеров дней) — не восстанавливать из full_existing при перегенерации."""
+    by_second: dict[datetime, set[int]] = defaultdict(set)
+    for e in entries:
+        if e.user_id != user_id:
+            continue
+        if e.updated_at is None or e.updated_at < touch_threshold:
+            continue
+        if not (1 <= e.day <= dim):
+            continue
+        ts = e.updated_at.replace(microsecond=0)
+        by_second[ts].add(int(e.day))
+    out: set[int] = set()
+    for days in by_second.values():
+        if len(days) >= REGENERATE_BULK_SAVE_MIN_DAYS:
+            out |= days
+    return out
+
 
 def _norm_code(raw: str | None) -> str | None:
     if raw is None:
@@ -41,6 +75,50 @@ def _is_vacation(code: str | None) -> bool:
     if not c:
         return False
     return c.lower() in VACATION_CODES
+
+
+def _schedule_cell_equal(a: str | None, b: str | None) -> bool:
+    """Сравнение кода ячейки с шаблоном при пересборке графика."""
+    na = _norm_code(a)
+    nb = _norm_code(b)
+    if na is None and nb is None:
+        return True
+    if na is None or nb is None:
+        return False
+    return na.lower() == nb.lower()
+
+
+def _legacy_manual_work_mismatch_days(
+    dim: int,
+    full_existing: dict[int, str | None],
+    ideal: dict[int, str | None],
+    *,
+    inference_cutoff_day: int,
+    recent_touched_days: set[int],
+) -> set[int]:
+    """
+    Рабочие ячейки, сохранённые давно (нет в recent_touched_days), но расходящиеся с ideal — не затирать для d<=cutoff.
+    Явные пустые и свежие сохранения обрабатываются отдельно в run_schedule_regenerate_from_manual.
+    """
+    out: set[int] = set()
+    for d in range(1, dim + 1):
+        if d > inference_cutoff_day:
+            continue
+        if d in recent_touched_days:
+            continue
+        cur = _norm_code(full_existing.get(d))
+        if not cur or _is_vacation(cur):
+            continue
+        if not _schedule_cell_equal(cur, ideal.get(d)):
+            out.add(d)
+    return out
+
+
+def _norm_cycle_code(cell: str | None) -> str:
+    """Символ из цикла смен: None = выходной; для сравнения с ячейкой графика."""
+    if cell is None:
+        return ""
+    return str(cell).strip().lower()
 
 
 def _parse_iso_date(v) -> date | None:
@@ -112,7 +190,7 @@ def _autofill_five_two(
     only_empty: bool,
     workday_code: str,
 ) -> dict[int, str | None]:
-    """Пн–пт без праздника: workday_code (8 или 7.2). Праздники РФ (будни) — «о». Сб/вс — пусто (не «о»)."""
+    """Пн–пт без праздника: workday_code (8 или 7.2). Праздники РФ (будни) — пусто. Сб/вс — пусто."""
     out: dict[int, str | None] = {}
     for d in range(1, dim + 1):
         cur = existing.get(d)
@@ -125,22 +203,23 @@ def _autofill_five_two(
                 out[d] = None
             continue
         if d in holiday_days:
-            out[d] = "о"
-        else:
-            out[d] = workday_code
+            if not only_empty:
+                out[d] = None
+            continue
+        out[d] = workday_code
     return out
 
 
-def _shift_cycle_for_kind(kind: str) -> tuple[str, ...]:
+def _shift_cycle_for_kind(kind: str) -> tuple[str | None, ...]:
     """Базовый цикл автозаполнения для сменных графиков по типу сотрудника."""
     if kind == WORK_SCHEDULE_TWO_TWO:
         # Для 2/2 конкретная расстановка берется из _two_two_cycle_by_phase.
-        return ("11д", "11в", "о", "о")
+        return ("11д", "11в", None, None)
     # Базовый сменный график.
-    return ("11", "3", "8", "о")
+    return ("11", "3", "8", None)
 
 
-def _two_two_cycle_by_phase(phase_offset: int) -> tuple[str, ...]:
+def _two_two_cycle_by_phase(phase_offset: int) -> tuple[str | None, ...]:
     """
     2/2 с чередованием дневной/вечерней внутри системы:
     - часть сотрудников работает блоком в первые 2 дня, часть — в следующие 2 дня,
@@ -148,12 +227,12 @@ def _two_two_cycle_by_phase(phase_offset: int) -> tuple[str, ...]:
     """
     phase = phase_offset % 4
     if phase == 0:
-        return ("11д", "11в", "о", "о")
+        return ("11д", "11в", None, None)
     if phase == 1:
-        return ("11в", "11д", "о", "о")
+        return ("11в", "11д", None, None)
     if phase == 2:
-        return ("о", "о", "11д", "11в")
-    return ("о", "о", "11в", "11д")
+        return (None, None, "11д", "11в")
+    return (None, None, "11в", "11д")
 
 
 def _autofill_shift(
@@ -219,6 +298,39 @@ def _prev_year_month(year: int, month: int) -> tuple[int, int]:
     return year - 1, 12
 
 
+def _infer_phase_for_regenerate_shift(
+    *,
+    kind: str,
+    dim: int,
+    existing: dict[int, str | None],
+    cutoff_day: int,
+    default_phase: int,
+) -> int:
+    """
+    Фаза для перегенерации: в приоритете «хвост» до cutoff_day — последние REGENERATE_PHASE_TAIL_DAYS дней,
+    по которым пользователь как раз задаёт актуальную последовательность; иначе весь маскированный existing.
+    """
+    tail_lo = max(1, cutoff_day - REGENERATE_PHASE_TAIL_DAYS + 1)
+    tail_sample_days = [
+        d
+        for d in range(tail_lo, cutoff_day + 1)
+        if _norm_code(existing.get(d)) and not _is_vacation(existing.get(d))
+    ]
+    if tail_sample_days:
+        return _infer_phase_from_days(
+            kind=kind,
+            existing=existing,
+            sample_days=tail_sample_days,
+            default_phase=default_phase,
+        )
+    return _infer_phase_from_existing(
+        kind=kind,
+        dim=dim,
+        existing=existing,
+        default_phase=default_phase,
+    )
+
+
 def _infer_phase_from_existing(
     *,
     kind: str,
@@ -238,9 +350,9 @@ def _infer_phase_from_existing(
         score = 0
         for d in sample_days:
             if kind == WORK_SCHEDULE_TWO_TWO:
-                exp = cycle[(d - 1) % len(cycle)].lower()
+                exp = _norm_cycle_code(cycle[(d - 1) % len(cycle)])
             else:
-                exp = cycle[(d - 1 + phase) % len(cycle)].lower()
+                exp = _norm_cycle_code(cycle[(d - 1 + phase) % len(cycle)])
             got = str(existing.get(d) or "").strip().lower()
             if got == exp:
                 score += 1
@@ -266,9 +378,9 @@ def _infer_phase_from_days(
         score = 0
         for d in sample_days:
             if kind == WORK_SCHEDULE_TWO_TWO:
-                exp = cycle[(d - 1) % len(cycle)].lower()
+                exp = _norm_cycle_code(cycle[(d - 1) % len(cycle)])
             else:
-                exp = cycle[(d - 1 + phase) % len(cycle)].lower()
+                exp = _norm_cycle_code(cycle[(d - 1 + phase) % len(cycle)])
             got = str(existing.get(d) or "").strip().lower()
             if got == exp:
                 score += 1
@@ -487,11 +599,11 @@ async def run_schedule_regenerate_from_manual(
     year: int,
     month: int,
     editor_id: uuid.UUID,
+    target_user_id: uuid.UUID,
 ) -> int:
     """
-    Перегенерация расписания с учетом уже введенных вручную ячеек:
-    - существующие непустые коды используются как «якоря» для подбора фазы цикла;
-    - затем месяц достраивается по циклу, отпускные дни остаются «о».
+    Пересборка одной строки месяца для сотрудника target_user_id.
+    Поштучные правки (не «пачка» автозаполнения) задают границу фазы; дальше по месяцу ячейки достраиваются по циклу.
     """
     dim = calendar.monthrange(year, month)[1]
     holiday_days = ru_holiday_dates(year, month)
@@ -506,6 +618,11 @@ async def run_schedule_regenerate_from_manual(
             )
         )
     ).scalars().unique().all()
+    user_by_id = {u.id: u for u in users}
+    u = user_by_id.get(target_user_id)
+    if u is None:
+        return 0
+
     base_phase_by_user = _build_shift_phase_offsets(list(users))
 
     entries = (
@@ -514,151 +631,127 @@ async def run_schedule_regenerate_from_manual(
         )
     ).scalars().all()
     by_user: dict[uuid.UUID, dict[int, str | None]] = {}
-    by_user_rows: dict[uuid.UUID, list[ScheduleEntry]] = defaultdict(list)
     for e in entries:
         if 1 <= e.day <= dim:
             by_user.setdefault(e.user_id, {})[e.day] = e.code
-            by_user_rows[e.user_id].append(e)
 
-    # Последние ручные правки (короткое окно) — это «якоря» для перегенерации.
-    # Большое окно захватывает прошлое автозаполнение целиком и мешает перестройке.
-    latest_ts: datetime | None = None
+    now = datetime.now(timezone.utc)
+    touch_threshold = now - REGENERATE_EDIT_LOOKBACK
+
+    recent_touched: set[int] = set()
     for e in entries:
-        if e.updated_at is not None and (latest_ts is None or e.updated_at > latest_ts):
-            latest_ts = e.updated_at
-    border = (latest_ts - timedelta(minutes=10)) if latest_ts else None
-
-    recent_anchor_days_by_user: dict[uuid.UUID, set[int]] = defaultdict(set)
-    for e in entries:
-        if not (1 <= e.day <= dim):
+        if e.user_id != target_user_id:
             continue
-        if border is not None and (e.updated_at is None or e.updated_at < border):
+        if not (1 <= e.day <= dim) or e.updated_at is None:
             continue
-        code = _norm_code(e.code)
-        if not code or _is_vacation(code):
+        if e.updated_at < touch_threshold:
             continue
-        recent_anchor_days_by_user[e.user_id].add(int(e.day))
+        recent_touched.add(int(e.day))
 
-    # Фаза для сотрудников сменных систем:
-    # 1) якорный сотрудник (у кого есть свежие правки) задаёт фазу;
-    # 2) остальные в системе получают фазу относительно него.
-    manual_phase_by_user: dict[uuid.UUID, int] = {}
-    system_buckets: dict[uuid.UUID | None, list[User]] = defaultdict(list)
-    for u in users:
-        system_buckets[_primary_active_system_key(u)].append(u)
+    existing = dict(by_user.get(target_user_id, {}))
+    full_existing: dict[int, str | None] = {d: existing.get(d) for d in range(1, dim + 1)}
 
-    for _, staff in system_buckets.items():
-        staff.sort(key=lambda x: (x.full_name.lower(), x.email.lower()))
-        idx_by_uid = {u.id: i for i, u in enumerate(staff)}
-        anchors = [u for u in staff if recent_anchor_days_by_user.get(u.id)]
-        anchor_user = anchors[0] if anchors else None
-        if anchor_user is not None:
-            kind, _ = normalize_profile_schedule(anchor_user.employee_profile)
-            if kind in (WORK_SCHEDULE_SHIFT, WORK_SCHEDULE_TWO_TWO):
-                existing_anchor = {d: by_user.get(anchor_user.id, {}).get(d) for d in range(1, dim + 1)}
-                anchor_days = sorted(recent_anchor_days_by_user[anchor_user.id])
-                anchor_phase = _infer_phase_from_days(
-                    kind=kind,
-                    existing=existing_anchor,
-                    sample_days=anchor_days,
-                    default_phase=base_phase_by_user.get(anchor_user.id, 0),
-                )
-                manual_phase_by_user[anchor_user.id] = anchor_phase
-                anchor_idx = idx_by_uid[anchor_user.id]
-                for u in staff:
-                    k, _ = normalize_profile_schedule(u.employee_profile)
-                    if k not in (WORK_SCHEDULE_SHIFT, WORK_SCHEDULE_TWO_TWO):
-                        continue
-                    if u.id == anchor_user.id:
-                        continue
-                    manual_phase_by_user[u.id] = (anchor_phase + (idx_by_uid[u.id] - anchor_idx)) % 4
+    bulk_saved = _bulk_saved_day_set(
+        entries,
+        user_id=target_user_id,
+        touch_threshold=touch_threshold,
+        dim=dim,
+    )
+    individual_touched = {d for d in recent_touched if d not in bulk_saved}
+
+    if individual_touched:
+        phase_cutoff = max(individual_touched)
+        existing_for_phase: dict[int, str | None] = {
+            d: (full_existing.get(d) if d <= phase_cutoff else None) for d in range(1, dim + 1)
+        }
+    else:
+        phase_cutoff = dim
+        existing_for_phase = {d: full_existing.get(d) for d in range(1, dim + 1)}
+
+    profile = u.employee_profile
+    periods = profile.vacation_periods if profile and profile.vacation_periods else None
+    vac_days = vacation_days_in_month(year, month, periods)
+    kind, emp_gender = normalize_profile_schedule(profile)
+
+    if kind in (WORK_SCHEDULE_SHIFT, WORK_SCHEDULE_TWO_TWO):
+        phase = _infer_phase_for_regenerate_shift(
+            kind=kind,
+            dim=dim,
+            existing=existing_for_phase,
+            cutoff_day=phase_cutoff,
+            default_phase=base_phase_by_user.get(u.id, 0),
+        )
+        ideal = _autofill_shift(
+            dim=dim,
+            existing={},
+            only_empty=False,
+            kind=kind,
+            phase_offset=phase,
+        )
+    else:
+        workday_code = _workday_code_for_gender(emp_gender)
+        ideal = _autofill_five_two(
+            year, month, dim, holiday_days, {}, only_empty=False, workday_code=workday_code
+        )
+
+    new_cells = dict(ideal)
+    for d in sorted(recent_touched):
+        if not (1 <= d <= dim):
             continue
+        if d in bulk_saved:
+            continue
+        new_cells[d] = full_existing.get(d)
 
-        # Если свежих якорей нет — fallback на уже существующую фазу по месяцу/базе.
-        for u in staff:
-            kind, _ = normalize_profile_schedule(u.employee_profile)
-            if kind not in (WORK_SCHEDULE_SHIFT, WORK_SCHEDULE_TWO_TWO):
-                continue
-            existing_u = {d: by_user.get(u.id, {}).get(d) for d in range(1, dim + 1)}
-            manual_phase_by_user[u.id] = _infer_phase_from_existing(
-                kind=kind,
-                dim=dim,
-                existing=existing_u,
-                default_phase=base_phase_by_user.get(u.id, 0),
-            )
+    for d in vac_days:
+        if 1 <= d <= dim:
+            new_cells[d] = "о"
+
+    for d in _legacy_manual_work_mismatch_days(
+        dim,
+        full_existing,
+        ideal,
+        inference_cutoff_day=phase_cutoff,
+        recent_touched_days=recent_touched,
+    ):
+        cur = _norm_code(full_existing.get(d))
+        if cur and not _is_vacation(cur):
+            new_cells[d] = cur
+
+    for d in range(1, dim + 1):
+        cur = _norm_code(full_existing.get(d))
+        if cur and _is_vacation(cur):
+            new_cells[d] = cur
 
     written = 0
-    for u in users:
-        profile = u.employee_profile
-        periods = profile.vacation_periods if profile and profile.vacation_periods else None
-        vac_days = vacation_days_in_month(year, month, periods)
-        kind, emp_gender = normalize_profile_schedule(profile)
-
-        existing = dict(by_user.get(u.id, {}))
-        full_existing: dict[int, str | None] = {d: existing.get(d) for d in range(1, dim + 1)}
-        anchor_days = recent_anchor_days_by_user.get(u.id, set())
-
-        if kind in (WORK_SCHEDULE_SHIFT, WORK_SCHEDULE_TWO_TWO):
-            phase = manual_phase_by_user.get(u.id, base_phase_by_user.get(u.id, 0))
-            new_cells = _autofill_shift(
-                dim=dim,
-                existing={},
-                only_empty=False,
-                kind=kind,
-                phase_offset=phase,
-            )
-        else:
-            workday_code = _workday_code_for_gender(emp_gender)
-            new_cells = _autofill_five_two(
-                year, month, dim, holiday_days, {}, only_empty=False, workday_code=workday_code
-            )
-
-        # Отпуск из профиля имеет приоритет.
-        for d in vac_days:
-            if 1 <= d <= dim:
-                new_cells[d] = "о"
-
-        # Сохраняем только свежие ручные якоря (те, что пользователь менял перед нажатием кнопки).
-        for d in anchor_days:
-            cur = _norm_code(full_existing.get(d))
-            if cur:
-                new_cells[d] = cur
-
-        # Всегда сохраняем отпуск/учебу из текущей таблицы.
-        for d in range(1, dim + 1):
-            cur = _norm_code(full_existing.get(d))
-            if cur and _is_vacation(cur):
-                new_cells[d] = cur
-
-        for day in range(1, dim + 1):
-            code = _norm_code(new_cells.get(day))
-            stmt = select(ScheduleEntry).where(
-                ScheduleEntry.year == year,
-                ScheduleEntry.month == month,
-                ScheduleEntry.user_id == u.id,
-                ScheduleEntry.day == day,
-            )
-            row = (await session.execute(stmt)).scalar_one_or_none()
-            if code is None:
-                if row:
-                    await session.delete(row)
-                    written += 1
-                continue
+    for day in range(1, dim + 1):
+        code = _norm_code(new_cells.get(day))
+        stmt = select(ScheduleEntry).where(
+            ScheduleEntry.year == year,
+            ScheduleEntry.month == month,
+            ScheduleEntry.user_id == u.id,
+            ScheduleEntry.day == day,
+        )
+        row = (await session.execute(stmt)).scalar_one_or_none()
+        if code is None:
             if row:
-                row.code = code
-                row.updated_by_id = editor_id
-            else:
-                session.add(
-                    ScheduleEntry(
-                        year=year,
-                        month=month,
-                        day=day,
-                        user_id=u.id,
-                        code=code,
-                        updated_by_id=editor_id,
-                    )
+                await session.delete(row)
+                written += 1
+            continue
+        if row:
+            row.code = code
+            row.updated_by_id = editor_id
+        else:
+            session.add(
+                ScheduleEntry(
+                    year=year,
+                    month=month,
+                    day=day,
+                    user_id=u.id,
+                    code=code,
+                    updated_by_id=editor_id,
                 )
-            written += 1
+            )
+        written += 1
 
     await session.commit()
     return written

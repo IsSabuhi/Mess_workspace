@@ -21,7 +21,9 @@ from app.models.task_comment import TaskComment
 from app.models.task_tag import TaskTag, TaskTagLink
 from app.models.user import User
 from app.models.user_system import UserSystem
+from app.models.user_schedule_phase_color import UserSchedulePhaseColor
 from app.models.schedule import ScheduleEntry
+from app.models.schedule_row_color import ScheduleRowColor
 
 __all__ = [
     "Position",
@@ -52,5 +54,7 @@ __all__ = [
     "User",
     "UserRole",
     "UserSystem",
+    "UserSchedulePhaseColor",
     "ScheduleEntry",
+    "ScheduleRowColor",
 ]
