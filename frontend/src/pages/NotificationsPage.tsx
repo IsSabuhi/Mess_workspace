@@ -1,4 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import {
@@ -33,6 +34,7 @@ function notificationTypeLabel(type: NotificationOut["type"]): string {
 }
 
 export function NotificationsPage() {
+  const [activeTab, setActiveTab] = useState<"notifications" | "news">("notifications");
   const notificationsQuery = useQuery({
     queryKey: ["notifications"],
     queryFn: () => listNotifications({ limit: 100 }),
@@ -62,11 +64,46 @@ export function NotificationsPage() {
   });
 
   const items = notificationsQuery.data ?? [];
-  const unreadCount = items.filter((n) => !n.read_at).length;
+  const notificationsItems = useMemo(
+    () => items.filter((n) => n.type !== "release_note"),
+    [items],
+  );
+  const newsItems = useMemo(() => items.filter((n) => n.type === "release_note"), [items]);
+  const unreadNotificationsCount = notificationsItems.filter((n) => !n.read_at).length;
+  const unreadNewsCount = newsItems.filter((n) => !n.read_at).length;
+  const unreadCount = unreadNotificationsCount + unreadNewsCount;
+  const visibleItems = activeTab === "notifications" ? notificationsItems : newsItems;
 
   return (
-    <AppShell title="Уведомления" subtitle="События по вашим задачам и срокам">
+    <AppShell title="Уведомления" subtitle="События по задачам и новости релизов">
       <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-6 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-slate-200/80 bg-white/80 p-1 dark:border-slate-700 dark:bg-slate-900/70">
+          <button
+            type="button"
+            onClick={() => setActiveTab("notifications")}
+            className={`rounded-lg px-3 py-2 text-sm font-medium transition ${
+              activeTab === "notifications"
+                ? "bg-slate-900 text-white dark:bg-sky-500 dark:text-slate-950"
+                : "text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+            }`}
+          >
+            Уведомления ({notificationsItems.length})
+            {unreadNotificationsCount > 0 ? ` · ${unreadNotificationsCount} непр.` : ""}
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("news")}
+            className={`rounded-lg px-3 py-2 text-sm font-medium transition ${
+              activeTab === "news"
+                ? "bg-slate-900 text-white dark:bg-sky-500 dark:text-slate-950"
+                : "text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+            }`}
+          >
+            Новости ({newsItems.length})
+            {unreadNewsCount > 0 ? ` · ${unreadNewsCount} непр.` : ""}
+          </button>
+        </div>
+
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <p className="text-sm text-slate-600 dark:text-slate-400">
             Непрочитанных: <span className="font-semibold text-slate-900 dark:text-white">{unreadCount}</span>
@@ -82,13 +119,15 @@ export function NotificationsPage() {
         </div>
 
         {notificationsQuery.isPending && <p className="text-sm text-slate-500">Загрузка…</p>}
-        {!notificationsQuery.isPending && items.length === 0 && (
-          <p className="text-sm text-slate-600 dark:text-slate-400">Пока уведомлений нет.</p>
+        {!notificationsQuery.isPending && visibleItems.length === 0 && (
+          <p className="text-sm text-slate-600 dark:text-slate-400">
+            {activeTab === "notifications" ? "Пока уведомлений нет." : "Пока новостей о релизах нет."}
+          </p>
         )}
 
-        {!notificationsQuery.isPending && items.length > 0 && (
+        {!notificationsQuery.isPending && visibleItems.length > 0 && (
           <ul className="space-y-2">
-            {items.map((n) => (
+            {visibleItems.map((n) => (
               <li
                 key={n.id}
                 className={`rounded-xl border px-4 py-3 ${
@@ -100,7 +139,9 @@ export function NotificationsPage() {
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="min-w-0">
                     <p className="font-medium text-slate-900 dark:text-white">{n.title}</p>
-                    {n.body && <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{n.body}</p>}
+                    {n.body && (
+                      <p className="mt-1 whitespace-pre-line text-sm text-slate-600 dark:text-slate-300">{n.body}</p>
+                    )}
                     <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                       {notificationTypeLabel(n.type)} · {formatDate(n.created_at)}
                     </p>

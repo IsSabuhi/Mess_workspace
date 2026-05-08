@@ -26,6 +26,11 @@ async def publish_release(
         version=body.version,
         title=body.title,
         body=body.body,
+        summary=body.summary,
+        whats_new=body.whats_new,
+        improvements=body.improvements,
+        notes=body.notes,
+        links=body.links,
     )
     if delivered == 0:
         return Message(detail=f"Релиз {note.version} уже опубликован ранее")
