@@ -35,6 +35,7 @@ from app.schemas.schedule import (
     ShiftStaffingNoteOut,
 )
 from app.services.ru_calendar import is_weekend, ru_holiday_dates, ru_holiday_names
+from app.services.audit import record_audit_event
 from app.services.schedule_autofill import (
     _norm_code as schedule_norm_code,
     run_schedule_autofill,
@@ -531,6 +532,14 @@ async def patch_schedule_row_color(
 
     if body.color is None or body.color.strip() == "":
         if existing is not None:
+            await record_audit_event(
+                session,
+                entity_type="schedule",
+                entity_id=body.user_id,
+                action="schedule.row_color.cleared",
+                actor_user_id=editor.id,
+                details={"year": body.year, "month": body.month},
+            )
             await session.delete(existing)
             await session.commit()
         return ScheduleRowColorOut(year=body.year, month=body.month, user_id=body.user_id, color=None)
@@ -549,6 +558,14 @@ async def patch_schedule_row_color(
     else:
         existing.color = color
         existing.updated_by_id = editor.id
+    await record_audit_event(
+        session,
+        entity_type="schedule",
+        entity_id=body.user_id,
+        action="schedule.row_color.updated",
+        actor_user_id=editor.id,
+        details={"year": body.year, "month": body.month, "color": color},
+    )
     await session.commit()
     return ScheduleRowColorOut(year=body.year, month=body.month, user_id=body.user_id, color=color)
 
@@ -596,6 +613,14 @@ async def patch_schedule_cell(
                     updated_by_id=editor.id,
                 )
             )
+        await record_audit_event(
+            session,
+            entity_type="schedule",
+            entity_id=body.user_id,
+            action="schedule.cell.cleared",
+            actor_user_id=editor.id,
+            details={"year": body.year, "month": body.month, "day": body.day},
+        )
         await session.commit()
         return ScheduleCellOut(
             year=body.year,
@@ -619,6 +644,14 @@ async def patch_schedule_cell(
                 updated_by_id=editor.id,
             )
         )
+    await record_audit_event(
+        session,
+        entity_type="schedule",
+        entity_id=body.user_id,
+        action="schedule.cell.updated",
+        actor_user_id=editor.id,
+        details={"year": body.year, "month": body.month, "day": body.day, "code": code},
+    )
     await session.commit()
     return ScheduleCellOut(
         year=body.year,
@@ -641,6 +674,14 @@ async def autofill_schedule(
         month=body.month,
         only_empty=body.only_empty,
         editor_id=editor.id,
+    )
+    await record_audit_event(
+        session,
+        entity_type="schedule",
+        entity_id=None,
+        action="schedule.autofill.ran",
+        actor_user_id=editor.id,
+        details={"year": body.year, "month": body.month, "only_empty": body.only_empty, "cells_written": n},
     )
     return ScheduleAutofillOut(cells_written=n)
 
@@ -672,6 +713,14 @@ async def regenerate_schedule(
         editor_id=editor.id,
         target_user_id=body.user_id,
     )
+    await record_audit_event(
+        session,
+        entity_type="schedule",
+        entity_id=body.user_id,
+        action="schedule.regenerate.ran",
+        actor_user_id=editor.id,
+        details={"year": body.year, "month": body.month, "cells_written": n},
+    )
     return ScheduleAutofillOut(cells_written=n)
 
 
@@ -701,6 +750,20 @@ async def import_schedule_excel(
     )
     if "error" in res:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=res["error"])
+    await record_audit_event(
+        session,
+        entity_type="schedule",
+        entity_id=None,
+        action="schedule.import_excel.ran",
+        actor_user_id=editor.id,
+        details={
+            "year": year,
+            "month": month,
+            "sheet_name": sheet_name,
+            "cells_imported": res.get("cells_imported"),
+            "users_matched": res.get("users_matched"),
+        },
+    )
     return ScheduleExcelImportOut(**res)
 
 
@@ -718,7 +781,16 @@ async def patch_user_schedule_mode(
     if not u or not u.is_active:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
+    old_mode = u.schedule_mode
     u.schedule_mode = body.schedule_mode
+    await record_audit_event(
+        session,
+        entity_type="schedule",
+        entity_id=u.id,
+        action="schedule.user_mode.updated",
+        actor_user_id=_.id,
+        details={"old_mode": old_mode, "new_mode": body.schedule_mode},
+    )
     await session.commit()
     mode = u.schedule_mode
     return ScheduleModePatchOut(

@@ -1,184 +1,195 @@
 # Mess Workspace
 
-Веб-приложение для учёта задач на общей канбан-доске, с ролями и производственными системами, базой знаний и админ-панелью.
+Корпоративный портал отдела **MES** для управления операционной работой: задачи по системам, графики смен, справочник сотрудников, база знаний, роли/права и аудит действий.
 
-## Возможности
+Проект разрабатывался как единая внутренняя платформа для руководителей и сотрудников производственных подразделений.
 
-- **Задачи** — канбан по колонкам, drag-and-drop, приоритеты, сроки, исполнитель, привязка к производственной системе.
-- **Доступ к задачам** — сотрудники видят задачи только своих систем; руководители с правами «все задачи» — по всей организации.
-- **Пользователи и роли** — гибкие права (создание, чтение, редактирование, удаление, доска, база знаний и т.д.), системные и кастомные роли, счётчик пользователей на роль.
-- **Производственные системы** — справочник; назначение систем пользователям в админке влияет на видимость задач и список кандидатов в исполнители.
-- **База знаний** — пространства, статьи, редактор на TipTap.
-- **Профиль** — ФИО, должность, дата рождения; системы отображаются только для просмотра (меняет администратор).
-- **Тема** — светлая / тёмная / как в ОС.
+## Что это за продукт
 
-## Технологии
+`Mess Workspace` объединяет в одном интерфейсе:
 
-| Слой        | Стек |
-|------------|------|
-| Frontend   | React 19, TypeScript, Vite, Tailwind CSS, TanStack Query, React Router, dnd-kit, TipTap |
-| Backend    | Python 3.12, FastAPI, SQLAlchemy 2 (async), Alembic, Pydantic |
-| БД         | PostgreSQL 17 |
-| Хранилище файлов | MinIO (S3-совместимое), локальный fallback |
-| Контейнеры | Docker Compose |
+- Kanban-доски (глобальная + системные доски с доступом по участникам),
+- расписание смен с автогенерацией и ручными правками,
+- справочник сотрудника (профиль, системы, график, отпуска),
+- контроль сроков (экзамены/пропуска),
+- аналитику и отчеты по задачам,
+- базу знаний,
+- ролевую модель доступа и аудит действий.
 
-## Структура репозитория
+### Для кого этот портал
 
-```
-mess-workspace/
-├── backend/          # API (FastAPI), миграции Alembic
-├── frontend/         # SPA (Vite + React)
+- **Руководители отдела MES**: контроль загрузки команд, сроков и рисков.
+- **Сотрудники**: ежедневная работа с задачами, расписанием, комментариями и уведомлениями.
+- **Администраторы**: управление доступами, ролями, системами и настройками аудита.
+
+## Ключевые функции
+
+### 1) Задачи и доски
+
+- Канбан с drag-and-drop, приоритетами, сроками, тегами и комментариями.
+- Глобальная доска и системные доски.
+- Участники доски с ролями `viewer / editor / manager`.
+- Проверка доступа к задачам по системам и членству в доске.
+- Настройки системной доски на отдельной странице: участники, общие настройки, удаление, аудит.
+
+### 2) Аналитика задач
+
+- KPI-блоки (всего, активные, просроченные, high/urgent, без исполнителя).
+- Фильтры по системам, колонкам, исполнителям, тегам, срокам и поиску.
+- Отчеты:
+  - Просроченные задачи,
+  - Нагрузка по сотрудникам,
+  - Риски по срокам,
+  - Топ систем + агрегат "Прочие",
+  - Таблица по всем системам (поиск/сортировка),
+  - "Создано vs закрыто" по неделям,
+  - "Период задач по колонкам (активные)".
+- Экспорт отфильтрованного набора в CSV.
+
+### 3) Расписание смен
+
+- Автогенерация и перегенерация расписания.
+- Поддержка графиков `5/2`, `Сменный`, `2/2`.
+- Ручные правки с сохранением последовательности.
+- Подсветка строк сменщиков + ручной цвет строки.
+- Импорт/экспорт расписания (Excel), включая разбивку по месяцам.
+
+### 4) Справочник сотрудника и контроль сроков
+
+- Две вкладки: "Экзамены и пропуска" и "Справочник сотрудника".
+- Профильные поля: дата рождения, должность, системы, пол, график, отпуска.
+- Массовое обновление кадровых полей.
+- Фильтрация по полу/графику/системам/должностям.
+- Выгрузка в Excel.
+
+### 5) Администрирование и безопасность
+
+- Пользователи, роли, права.
+- Гибкая permission-модель.
+- Глобальные настройки системы (включая аудит и хранение).
+- Лог событий аудита по действиям на досках.
+
+### 6) База знаний и уведомления
+
+- Пространства и статьи (редактор на TipTap).
+- Загрузка файлов/изображений в MinIO или локально.
+- Центр уведомлений + механизм публикации release notes из CI/CD.
+
+## Технологический стек
+
+| Слой | Технологии |
+|---|---|
+| Frontend | React 19, TypeScript, Vite, Tailwind CSS, TanStack Query, React Router, dnd-kit, ECharts, ExcelJS, TipTap |
+| Backend | Python 3.12, FastAPI, SQLAlchemy 2 (async), Alembic, Pydantic Settings |
+| БД | PostgreSQL |
+| Файлы | MinIO (S3), fallback на локальное хранилище |
+| Инфраструктура | Docker Compose, Nginx |
+
+## Архитектура репозитория
+
+```text
+.
+├── backend/
+│   ├── app/
+│   │   ├── routers/          # auth, users, roles, tasks, boards, schedule, employee_directory, knowledge, ...
+│   │   ├── services/         # бизнес-логика (в т.ч. schedule/autofill/audit)
+│   │   ├── models/           # SQLAlchemy модели
+│   │   └── schemas/          # Pydantic схемы
+│   ├── alembic/              # миграции БД
+│   └── scripts/
+├── frontend/
+│   ├── src/pages/            # страницы приложения
+│   ├── src/components/       # UI-компоненты
+│   ├── src/api/              # API-клиенты
+│   └── src/lib/              # утилиты, фильтры, экспорт, permissions
 ├── docker-compose.yml
 └── README.md
 ```
 
-## Быстрый старт (Docker Compose)
+## Быстрый запуск (Docker Compose)
 
-1. Клонируйте репозиторий и перейдите в каталог проекта.
+```bash
+docker compose up --build
+```
 
-2. При необходимости создайте файл `.env` в корне (см. переменные ниже) или используйте значения по умолчанию из `docker-compose.yml`.
+После запуска:
 
-3. Запустите сервисы:
+- Приложение: `http://localhost:8080` (или ваш `WEB_PORT`)
+- Swagger через прокси: `http://localhost:8080/api/docs`
+- MinIO API: `http://localhost:9000`
+- MinIO Console: `http://localhost:9001`
 
-   ```bash
-   docker compose up --build
-   ```
+Что запускается:
 
-4. После запуска фронт и API доступны через один адрес:
-   - Веб-приложение: **http://localhost:${WEB_PORT}** (по умолчанию `8080`)
-   - API docs через прокси: **http://localhost:${WEB_PORT}/api/docs**
+- `web` (frontend + nginx),
+- `api` (FastAPI),
+- `minio`,
+- `minio-init` (создание bucket и права на скачивание).
 
-5. При первом запуске контейнер API выполнит `alembic upgrade head` и поднимет сервер.
+При старте backend выполняет:
 
-6. Первый суперпользователь создаётся автоматически при пустой БД из переменных
-   `INITIAL_ADMIN_EMAIL`, `INITIAL_ADMIN_PASSWORD`, `INITIAL_ADMIN_FULL_NAME`.
-   Дополнительно доступна открытая регистрация `POST /api/v1/auth/register` (новый пользователь создаётся с `is_active=false`).
+1. `alembic upgrade head`
+2. запуск `uvicorn app.main:app --host 0.0.0.0 --port 8000`
+3. авто-создание первого суперпользователя при пустой БД (`INITIAL_ADMIN_*`).
 
-7. В compose поднимаются `web`, `api`, `minio` и `minio-init` (инициализация bucket).
-   - Web (nginx + frontend): **http://localhost:${WEB_PORT}**
-   - MinIO API: **http://localhost:9000**
-   - MinIO Console: **http://localhost:9001**
+## Локальная разработка (без Docker)
 
-## Локальная разработка без Docker (API + БД)
+### Backend
 
-1. Подготовьте доступную PostgreSQL (локально, в контейнере или на отдельном сервере).
+```bash
+cd backend
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+alembic upgrade head
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
 
-2. **Backend**
-
-   ```bash
-   cd backend
-   python -m venv .venv
-   .venv\Scripts\activate          # Windows
-   # source .venv/bin/activate     # Linux / macOS
-   pip install -r requirements.txt
-   copy .env.example .env          # отредактируйте DATABASE_URL и SECRET_KEY
-   alembic upgrade head
-   uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-   ```
-
-3. **Frontend (опционально отдельно для dev)**:
-
-   ```bash
-   cd frontend
-   npm install
-   npm run dev
-   ```
-
-## Переменные окружения
-
-**Backend** (`backend/.env`, пример — `backend/.env.example`):
-
-| Переменная | Описание |
-|------------|----------|
-| `DATABASE_URL` | Строка подключения async SQLAlchemy, например `postgresql+asyncpg://user:pass@localhost:5432/mess_todo` |
-| `SECRET_KEY` | Секрет для JWT (в продакшене — длинная случайная строка) |
-| `CORS_ORIGINS` | Разрешённые origin для браузера (через запятую), например `http://localhost:5173` |
-| `INITIAL_ADMIN_EMAIL` | Email первого суперпользователя (используется только при пустой БД) |
-| `INITIAL_ADMIN_PASSWORD` | Пароль первого суперпользователя (используется только при пустой БД) |
-| `INITIAL_ADMIN_FULL_NAME` | ФИО первого суперпользователя |
-| `STORAGE_BACKEND` | `minio` или `local` (по умолчанию `minio` в compose) |
-| `MINIO_ENDPOINT` | Адрес MinIO для backend, например `http://minio:9000` |
-| `MINIO_ACCESS_KEY` | Логин MinIO |
-| `MINIO_SECRET_KEY` | Пароль MinIO |
-| `MINIO_BUCKET` | Bucket для файлов, например `mess-workspace` |
-| `MINIO_PUBLIC_BASE_URL` | Публичная база URL файлов, например `http://<SERVER_IP>:9000` |
-| `WEB_PORT` | Порт веб-контейнера на хосте, по умолчанию `8080` |
-| `VITE_API_BASE` | База API при сборке frontend-контейнера. Для прокси nginx оставить пустым |
-
-### Файлы и MinIO
-
-- Для загрузки изображений БЗ используется S3-совместимое хранилище.
-- В режиме `STORAGE_BACKEND=minio` файлы пишутся в MinIO bucket `${MINIO_BUCKET}`.
-- В режиме `STORAGE_BACKEND=local` используется локальная папка `backend/uploads/kb` (fallback).
-
-**Frontend** (`frontend/.env`, пример — `frontend/.env.example`):
-
-| Переменная | Описание |
-|------------|----------|
-| `VITE_API_BASE` | В dev обычно пусто (прокси Vite). В продакшене — URL API, например `https://api.example.com` |
-
-## Сборка фронтенда для продакшена
+### Frontend
 
 ```bash
 cd frontend
 npm install
-npm run build
+npm run dev
 ```
 
-Статика окажется в `frontend/dist`. Настройте раздачу через nginx/CDN и проксирование `/api` на бэкенд, либо задайте `VITE_API_BASE` перед сборкой.
+Vite-прокси направляет `/api` и `/uploads` на `http://127.0.0.1:8000`.
 
-## Автопубликация релиз-уведомлений (CI/CD)
+## Конфигурация окружения
 
-После деплоя можно автоматически публиковать «Что нового» в центр уведомлений.
+### Backend (`backend/.env`)
 
-### 1) Подготовьте токен
+Минимально важные переменные:
 
-- Создайте сервисный токен пользователя с правом `users.manage` (или superuser).
-- Сохраните в секрете CI как `RELEASE_NOTES_TOKEN`.
+- `DATABASE_URL`
+- `SECRET_KEY`
+- `CORS_ORIGINS`
+- `INITIAL_ADMIN_EMAIL`
+- `INITIAL_ADMIN_PASSWORD`
+- `INITIAL_ADMIN_FULL_NAME`
 
-### 2) Используйте скрипт
+Для файлов:
 
-В репозитории есть скрипт `backend/scripts/publish-release-note.sh`.
+- `STORAGE_BACKEND=minio|local`
+- `MINIO_ENDPOINT`
+- `MINIO_ACCESS_KEY`
+- `MINIO_SECRET_KEY`
+- `MINIO_BUCKET`
+- `MINIO_PUBLIC_BASE_URL`
 
-Обязательные переменные:
+Смотрите полный пример в `backend/.env.example`.
 
-- `API_BASE_URL` — базовый URL приложения (например `https://app.example.com`)
-- `RELEASE_NOTES_TOKEN` — bearer-токен
+### Frontend (`frontend/.env`)
 
-Опциональные переменные:
+- `VITE_API_BASE` — в dev можно оставить пустым (работает через Vite proxy).
 
-- `RELEASE_VERSION` — версия релиза (по умолчанию tag/sha/date)
-- `RELEASE_TITLE` — заголовок
-- `RELEASE_BODY` — текст уведомления
-- `RELEASE_NOTES_ENABLED` — `1`/`0` (можно отключить шаг без удаления job)
+Смотрите пример в `frontend/.env.example`.
 
-### 3) Пример GitHub Actions шага
+## Релиз-уведомления из CI/CD
 
-```yaml
-- name: Publish release note
-  if: github.ref_type == 'tag'
-  env:
-    API_BASE_URL: ${{ secrets.API_BASE_URL }}
-    RELEASE_NOTES_TOKEN: ${{ secrets.RELEASE_NOTES_TOKEN }}
-    RELEASE_VERSION: ${{ github.ref_name }}
-    RELEASE_TITLE: "Релиз ${{ github.ref_name }}"
-    RELEASE_BODY: "Обновление опубликовано автоматически из CI/CD."
-  run: ./backend/scripts/publish-release-note.sh
-```
+В проекте есть скрипт:
 
-### 4) Пример GitLab CI job
+- `backend/scripts/publish-release-note.sh`
 
-```yaml
-publish_release_note:
-  stage: deploy
-  rules:
-    - if: $CI_COMMIT_TAG
-  script:
-    - export API_BASE_URL="$API_BASE_URL"
-    - export RELEASE_NOTES_TOKEN="$RELEASE_NOTES_TOKEN"
-    - export RELEASE_VERSION="$CI_COMMIT_TAG"
-    - export RELEASE_TITLE="Релиз $CI_COMMIT_TAG"
-    - export RELEASE_BODY="Обновление опубликовано автоматически из CI/CD."
-    - ./backend/scripts/publish-release-note.sh
-```
-
+Он позволяет автоматически публиковать "Что нового" в центр уведомлений после деплоя.

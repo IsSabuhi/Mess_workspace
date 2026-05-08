@@ -206,7 +206,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: Props) {
         {showManagerTeamDashboard && (
           <NavLink
             to="/team-dashboard"
-            title={collapsed ? "Команда" : undefined}
+            title={collapsed ? "Отчеты" : undefined}
             className={({ isActive }) =>
               [
                 "group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition",
@@ -218,7 +218,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: Props) {
             }
           >
             <BarChart3 className="h-5 w-5 shrink-0 opacity-90" aria-hidden />
-            {!collapsed && <span>Команда</span>}
+            {!collapsed && <span>Отчеты</span>}
           </NavLink>
         )}
         {showSchedule && (

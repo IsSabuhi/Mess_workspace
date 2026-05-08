@@ -23,6 +23,7 @@ from app.permissions import (
     EMPLOYEE_DIRECTORY_READ,
 )
 from app.services.authz import user_has_permission
+from app.services.audit import record_audit_event
 from app.schemas.employee_directory import (
     EmployeeDirectoryBulkProfileIn,
     EmployeeDirectoryBulkProfileOut,
@@ -352,6 +353,14 @@ async def bulk_profile_patch(
         await _apply_directory_patch_core(session, user, patch_model)
         updated += 1
 
+    await record_audit_event(
+        session,
+        entity_type="employee_directory",
+        entity_id=None,
+        action="employee_directory.bulk_profile.updated",
+        actor_user_id=editor.id,
+        details={"users_count": updated, "fields": sorted(list(raw_patch.keys()))},
+    )
     await session.commit()
     return EmployeeDirectoryBulkProfileOut(updated=updated)
 
@@ -389,7 +398,16 @@ async def patch_employee_profile(
                 detail="Нет права на кадровый справочник",
             )
 
+    fields_changed = sorted(list(patch.keys()))
     await _apply_directory_patch_core(session, user, body)
+    await record_audit_event(
+        session,
+        entity_type="employee_directory",
+        entity_id=user.id,
+        action="employee_directory.profile.updated",
+        actor_user_id=editor.id,
+        details={"fields": fields_changed},
+    )
 
     await session.flush()
     u = (

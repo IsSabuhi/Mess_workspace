@@ -91,7 +91,7 @@ export async function downloadEmployeeDirectoryComplianceExcel(rows: EmployeeDir
 export async function downloadEmployeeDirectoryProfileExcel(rows: EmployeeDirectoryRowOut[]): Promise<void> {
   const wb = new ExcelJS.Workbook();
   wb.created = new Date();
-  const ws = wb.addWorksheet("Кадровый справочник", {
+  const ws = wb.addWorksheet("Справочник сотрудника", {
     views: [{ state: "frozen", ySplit: 1 }],
   });
 

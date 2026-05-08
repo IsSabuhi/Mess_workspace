@@ -11,6 +11,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { SystemsPage } from "./pages/SystemsPage";
 import { TasksPage } from "./pages/TasksPage";
+import { BoardSettingsPage } from "./pages/BoardSettingsPage";
 import { UsersRedirectPage } from "./pages/UsersRedirectPage";
 import { NotificationsPage } from "./pages/NotificationsPage";
 import { SchedulePage } from "./pages/SchedulePage";
@@ -74,6 +75,14 @@ export default function App() {
         element={
           <ProtectedRoute>
             <TasksPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/tasks/boards/:boardId/settings"
+        element={
+          <ProtectedRoute>
+            <BoardSettingsPage />
           </ProtectedRoute>
         }
       />

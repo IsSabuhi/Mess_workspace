@@ -20,6 +20,7 @@ from app.permissions import ALL_PERMISSION_CODES
 from app.schemas.user import UserMeOut
 from app.config import get_settings
 from app.security import create_access_token, create_refresh_token, decode_token_payload, hash_password, verify_password
+from app.services.audit import record_audit_event
 from app.services.authz import get_user_by_email, get_user_by_id, get_user_permission_codes
 from app.services.request_client import client_ip
 from app.services.users_display import user_to_out
@@ -67,6 +68,17 @@ async def _record_login(session: AsyncSession, user_id: uuid.UUID, request: Requ
         )
     )
     await session.flush()
+    await record_audit_event(
+        session,
+        entity_type="auth",
+        entity_id=user_id,
+        action="auth.login",
+        actor_user_id=user_id,
+        details={
+            "ip": client_ip(request),
+            "user_agent": request.headers.get("user-agent"),
+        },
+    )
 
 
 @router.post("/login", response_model=Token)
@@ -132,7 +144,32 @@ async def refresh_auth(
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-async def logout_auth(response: Response) -> None:
+async def logout_auth(
+    request: Request,
+    response: Response,
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    uid: uuid.UUID | None = None
+    raw_access = request.cookies.get("access_token")
+    if raw_access:
+        payload = decode_token_payload(raw_access)
+        sub = payload.get("sub") if payload else None
+        if isinstance(sub, str):
+            try:
+                uid = uuid.UUID(sub)
+            except ValueError:
+                uid = None
+    await record_audit_event(
+        session,
+        entity_type="auth",
+        entity_id=uid,
+        action="auth.logout",
+        actor_user_id=uid,
+        details={
+            "ip": client_ip(request),
+            "user_agent": request.headers.get("user-agent"),
+        },
+    )
     _clear_auth_cookies(response)
 
 

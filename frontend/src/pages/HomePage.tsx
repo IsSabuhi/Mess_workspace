@@ -151,7 +151,7 @@ export function HomePage() {
   }[] = [
     { to: "/tasks", label: "Задачи", icon: LayoutGrid, description: "Канбан-доска" },
     ...(isManager
-      ? [{ to: "/team-dashboard", label: "Команда", icon: BarChart3, description: "Сводки и графики" }]
+      ? [{ to: "/team-dashboard", label: "Отчеты", icon: BarChart3, description: "Сводки и графики" }]
       : []),
     ...(showScheduleQuick
       ? [{ to: "/schedule", label: "Расписание", icon: CalendarDays, description: "График смен" }]

@@ -51,6 +51,7 @@ from app.schemas.task import (
     UserMini,
 )
 from app.services.authz import user_has_permission, user_sees_all_tasks
+from app.services.audit import record_audit_event
 from app.services.task_archive import auto_archive_done_tasks
 from app.services.task_policy import can_delete_task, can_read_task, can_update_task
 
@@ -382,7 +383,7 @@ async def get_task(
 async def create_task(
     body: TaskCreate,
     session: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(require_permission(TASKS_CREATE))],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> TaskOut:
     board_id = body.board_id
     if board_id is None:
@@ -393,6 +394,9 @@ async def create_task(
     board = await session.get(Board, board_id)
     if not board or board.is_archived:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid board")
+    can_create_by_permission = await user_has_permission(session, user, TASKS_CREATE)
+    if board.scope != BOARD_SCOPE_SYSTEM and not (user.is_superuser or can_create_by_permission):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
     if board.scope == BOARD_SCOPE_SYSTEM and not user.is_superuser:
         role = await session.scalar(
             select(BoardMember.role)
@@ -442,6 +446,21 @@ async def create_task(
     task.tags = await _resolve_tags(session, body.tag_ids)
     task.assignees = assignees
     session.add(task)
+    await session.flush()
+    await record_audit_event(
+        session,
+        entity_type="task",
+        entity_id=task.id,
+        action="task.created",
+        actor_user_id=user.id,
+        details={
+            "title": task.title,
+            "board_id": str(task.board_id),
+            "column_id": str(task.column_id),
+            "system_id": str(task.system_id),
+            "assignees_count": len(task.assignees or []),
+        },
+    )
     await session.commit()
 
     t = (await session.execute(select(Task).where(Task.id == task.id).options(*_TASK_LOAD))).scalar_one()
@@ -462,6 +481,9 @@ async def update_task(
     if not await can_update_task(session, user, task):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
 
+    changed_fields = sorted(list(body.model_fields_set))
+    old_column_id = task.column_id
+    old_system_id = task.system_id
     if body.title is not None:
         task.title = body.title
     if body.description is not None:
@@ -494,6 +516,20 @@ async def update_task(
         task.tags = await _resolve_tags(session, body.tag_ids)
 
     await session.flush()
+    await record_audit_event(
+        session,
+        entity_type="task",
+        entity_id=task.id,
+        action="task.updated",
+        actor_user_id=user.id,
+        details={
+            "changed_fields": changed_fields,
+            "old_column_id": str(old_column_id) if old_column_id != task.column_id else None,
+            "new_column_id": str(task.column_id) if old_column_id != task.column_id else None,
+            "old_system_id": str(old_system_id) if old_system_id != task.system_id else None,
+            "new_system_id": str(task.system_id) if old_system_id != task.system_id else None,
+        },
+    )
     t = (await session.execute(select(Task).where(Task.id == task_id).options(*_TASK_LOAD))).scalar_one()
     return _task_to_out(t)
 
@@ -504,12 +540,20 @@ async def delete_task(
     session: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
 ) -> None:
-    stmt = select(Task).where(Task.id == task_id)
+    stmt = select(Task).where(Task.id == task_id).options(*_TASK_LOAD)
     task = (await session.execute(stmt)).scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
     if not await can_delete_task(session, user, task):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
+    await record_audit_event(
+        session,
+        entity_type="task",
+        entity_id=task.id,
+        action="task.deleted",
+        actor_user_id=user.id,
+        details={"title": task.title},
+    )
     await session.delete(task)
 
 
@@ -550,6 +594,14 @@ async def create_task_comment(
     comment = TaskComment(task_id=task.id, author_id=user.id, body=body.body.strip())
     session.add(comment)
     await session.flush()
+    await record_audit_event(
+        session,
+        entity_type="task",
+        entity_id=task.id,
+        action="task.comment.created",
+        actor_user_id=user.id,
+        details={"comment_id": str(comment.id)},
+    )
 
     await _notify_mentions(session, task, user, comment.body)
 
@@ -588,6 +640,14 @@ async def update_task_comment(
     if not await _can_manage_comment(session, user, task, comment):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
     comment.body = body.body.strip()
+    await record_audit_event(
+        session,
+        entity_type="task",
+        entity_id=task.id,
+        action="task.comment.updated",
+        actor_user_id=user.id,
+        details={"comment_id": str(comment.id)},
+    )
     await _notify_mentions(session, task, user, comment.body)
     await session.commit()
     updated = (
@@ -619,5 +679,13 @@ async def delete_task_comment(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Comment not found")
     if not await _can_manage_comment(session, user, task, comment):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
+    await record_audit_event(
+        session,
+        entity_type="task",
+        entity_id=task.id,
+        action="task.comment.deleted",
+        actor_user_id=user.id,
+        details={"comment_id": str(comment.id)},
+    )
     await session.delete(comment)
     await session.commit()

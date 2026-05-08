@@ -24,7 +24,6 @@ import {
   PERM,
   hasPermission,
 } from "../lib/permissions";
-import { shiftWorkerRowClass } from "../lib/shiftWorkerRowStyle";
 import { toastApiError, toastError, toastSuccess } from "../lib/toast";
 import { useModalLayer } from "../lib/useModalLayer";
 import { useAuth } from "../context/AuthContext";
@@ -37,11 +36,6 @@ function formatGenderCell(g: string | undefined): string {
   if (g === "female") return "Женский";
   if (g === "male") return "Мужской";
   return "Не указан";
-}
-
-function employeeDirectoryShiftRowClass(row: EmployeeDirectoryRowOut): string | undefined {
-  if (row.work_schedule_kind === "shift" || row.work_schedule_kind === "two_two") return shiftWorkerRowClass(row.id);
-  return undefined;
 }
 
 function formatScheduleSummary(row: EmployeeDirectoryRowOut): string {
@@ -372,7 +366,7 @@ export function EmployeeDirectoryPage() {
   return (
     <AppShell
       title="Сотрудники"
-      subtitle="Две вкладки: контроль экзамена по ЭБ и пропусков; кадровый справочник (график, отпуск, система, должность, дата рождения). Права на вкладки задаются отдельно в роли."
+      subtitle="Две вкладки: контроль экзамена по ЭБ и пропусков; справочник сотрудника (график, отпуск, система, должность, дата рождения). Права на вкладки задаются отдельно в роли."
     >
       <div className="mb-4 flex flex-wrap gap-2 border-b border-slate-200 pb-2 dark:border-slate-700">
         <button
@@ -396,7 +390,7 @@ export function EmployeeDirectoryPage() {
                 : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
             }`}
           >
-            Кадровый справочник
+            Справочник сотрудника
           </button>
         )}
       </div>
@@ -442,7 +436,7 @@ export function EmployeeDirectoryPage() {
                   {showProfileTab && (
                     <>
                       {" "}
-                      Пол и график — на вкладке «Кадровый справочник»; экзамен, пропуск и сроки — на «Экзамены и
+                      Пол и график — на вкладке «Справочник сотрудника»; экзамен, пропуск и сроки — на «Экзамены и
                       пропуска».
                     </>
                   )}
@@ -776,7 +770,7 @@ export function EmployeeDirectoryPage() {
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
                   {displayRows.map((r) => (
-                    <tr key={r.id} className={employeeDirectoryShiftRowClass(r)}>
+                    <tr key={r.id}>
                       <td className="px-3 py-2">
                         <p className="font-medium text-slate-900 dark:text-white">{r.full_name}</p>
                         <p className="text-xs text-slate-500">{r.email}</p>
@@ -836,7 +830,7 @@ export function EmployeeDirectoryPage() {
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
                   {displayRows.map((r) => (
-                    <tr key={r.id} className={employeeDirectoryShiftRowClass(r)}>
+                    <tr key={r.id}>
                       <td className="px-3 py-2">
                         <p className="font-medium text-slate-900 dark:text-white">{r.full_name}</p>
                         <p className="text-xs text-slate-500">{r.email}</p>

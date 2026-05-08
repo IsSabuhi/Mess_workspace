@@ -115,3 +115,28 @@ async def list_audit_events_for_entity(
         .limit(lim)
     )
     return rows.scalars().all()
+
+
+async def list_audit_events(
+    session: AsyncSession,
+    *,
+    limit: int = 100,
+    offset: int = 0,
+    entity_type: str | None = None,
+    action: str | None = None,
+    q: str | None = None,
+) -> list[AuditEvent]:
+    lim = max(1, min(limit, 500))
+    off = max(0, offset)
+    stmt = select(AuditEvent)
+    if entity_type:
+        stmt = stmt.where(AuditEvent.entity_type == entity_type[:64])
+    if action:
+        stmt = stmt.where(AuditEvent.action.ilike(f"%{action[:128]}%"))
+    if q:
+        needle = f"%{q[:128]}%"
+        stmt = stmt.where(AuditEvent.action.ilike(needle) | AuditEvent.details_json.ilike(needle))
+    rows = await session.execute(
+        stmt.order_by(AuditEvent.created_at.desc()).offset(off).limit(lim)
+    )
+    return rows.scalars().all()

@@ -27,8 +27,8 @@ def _user_in_task_assignees(task: Task, user_id) -> bool:
 
 
 async def _board_for_task(session: AsyncSession, task: Task) -> Board | None:
-    if getattr(task, "board", None) is not None:
-        return task.board
+    # Avoid touching task.board relationship directly here:
+    # in async mode it can trigger lazy-load outside greenlet context.
     return await session.get(Board, task.board_id)
 
 

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Navigate, useSearchParams } from "react-router-dom";
 
 import type { UserOut } from "../api/auth";
+import { getAuditSettings, listAuditEvents, patchAuditSettings } from "../api/audit";
 import { ApiError } from "../api/client";
 import type { PermissionOut, RoleCreate, RoleOut, RoleUpdate } from "../api/roles";
 import {
@@ -25,7 +26,7 @@ import { PERM, canAdminAccess, hasPermission } from "../lib/permissions";
 import { toastApiError, toastError, toastSuccess } from "../lib/toast";
 import { useModalLayer } from "../lib/useModalLayer";
 
-type Tab = "users" | "roles" | "system-settings";
+type Tab = "users" | "roles" | "system-settings" | "audit-log";
 
 function groupPermissions(perms: PermissionOut[]): Map<string, PermissionOut[]> {
   const m = new Map<string, PermissionOut[]>();
@@ -363,6 +364,8 @@ export function AdminPage() {
       ? "roles"
       : tabParam === "system-settings"
         ? "system-settings"
+        : tabParam === "audit-log"
+          ? "audit-log"
         : "users";
 
   const setTab = useCallback(
@@ -390,6 +393,7 @@ export function AdminPage() {
     if (showUsers) visibleTabs.push("users");
     if (showRoles) visibleTabs.push("roles");
     if (canManageTaskArchive) visibleTabs.push("system-settings");
+    if (canManageTaskArchive) visibleTabs.push("audit-log");
     if (!visibleTabs.length) return;
     if (!visibleTabs.includes(tab)) {
       setTab(visibleTabs[0]);
@@ -442,12 +446,26 @@ export function AdminPage() {
               Настройки системы
             </button>
           )}
+          {canManageTaskArchive && (
+            <button
+              type="button"
+              onClick={() => setTab("audit-log")}
+              className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
+                tab === "audit-log"
+                  ? "bg-sky-500 text-white shadow-md"
+                  : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+              }`}
+            >
+              Журнал аудита
+            </button>
+          )}
         </div>
       )}
 
       {tab === "users" && showUsers && <UsersSection />}
       {tab === "roles" && showRoles && <RolesSection />}
       {tab === "system-settings" && canManageTaskArchive && <SystemSettingsSection />}
+      {tab === "audit-log" && canManageTaskArchive && <AuditLogSection />}
     </AppShell>
   );
 }
@@ -455,14 +473,23 @@ export function AdminPage() {
 function SystemSettingsSection() {
   const qc = useQueryClient();
   const [autoArchiveDays, setAutoArchiveDays] = useState("60");
+  const [auditRetentionDays, setAuditRetentionDays] = useState("180");
   const taskArchiveQuery = useQuery({
     queryKey: ["admin", "task-archive-settings"],
     queryFn: getTaskArchiveSettings,
+  });
+  const auditSettingsQuery = useQuery({
+    queryKey: ["admin", "audit-settings"],
+    queryFn: getAuditSettings,
   });
   useEffect(() => {
     if (!taskArchiveQuery.data) return;
     setAutoArchiveDays(String(taskArchiveQuery.data.auto_archive_done_days));
   }, [taskArchiveQuery.data]);
+  useEffect(() => {
+    if (!auditSettingsQuery.data) return;
+    setAuditRetentionDays(String(auditSettingsQuery.data.retention_days));
+  }, [auditSettingsQuery.data]);
   const taskArchiveMut = useMutation({
     mutationFn: (days: number) => updateTaskArchiveSettings(days),
     onSuccess: async (saved) => {
@@ -471,6 +498,15 @@ function SystemSettingsSection() {
       await qc.invalidateQueries({ queryKey: ["admin", "task-archive-settings"] });
     },
     onError: (e: unknown) => toastApiError(e, "Не удалось сохранить период автоархивации"),
+  });
+  const auditSettingsMut = useMutation({
+    mutationFn: (body: { enabled?: boolean; retention_days?: number }) => patchAuditSettings(body),
+    onSuccess: async (saved) => {
+      setAuditRetentionDays(String(saved.retention_days));
+      toastSuccess("Настройки аудита сохранены");
+      await qc.invalidateQueries({ queryKey: ["admin", "audit-settings"] });
+    },
+    onError: (e: unknown) => toastApiError(e, "Не удалось сохранить настройки аудита"),
   });
 
   return (
@@ -512,6 +548,137 @@ function SystemSettingsSection() {
             {taskArchiveMut.isPending ? "Сохранение…" : "Сохранить"}
           </button>
         </form>
+      </div>
+      <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-5 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
+        <h3 className="text-base font-semibold text-slate-900 dark:text-white">Аудит действий</h3>
+        <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+          Управление настройками аудита по системе: можно отключить запись и настроить срок хранения.
+        </p>
+        <div className="mt-4 space-y-3">
+          <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+            <input
+              type="checkbox"
+              checked={auditSettingsQuery.data?.enabled ?? true}
+              disabled={auditSettingsQuery.isPending || auditSettingsMut.isPending}
+              onChange={(e) => auditSettingsMut.mutate({ enabled: e.target.checked })}
+            />
+            Включить аудит
+          </label>
+          <form
+            className="flex flex-wrap items-end gap-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const parsed = Number(auditRetentionDays);
+              if (!Number.isFinite(parsed) || parsed < 7) {
+                toastError("Введите число дней от 7");
+                return;
+              }
+              auditSettingsMut.mutate({ retention_days: Math.floor(parsed) });
+            }}
+          >
+            <label className="text-sm text-slate-700 dark:text-slate-300">
+              Срок хранения (дней)
+              <input
+                type="number"
+                min={7}
+                max={3650}
+                value={auditRetentionDays}
+                onChange={(e) => setAuditRetentionDays(e.target.value)}
+                disabled={auditSettingsQuery.isPending || auditSettingsMut.isPending}
+                className="ml-2 w-28 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+              />
+            </label>
+            <button
+              type="submit"
+              disabled={auditSettingsQuery.isPending || auditSettingsMut.isPending}
+              className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-md hover:bg-sky-600 disabled:opacity-60"
+            >
+              {auditSettingsMut.isPending ? "Сохранение…" : "Сохранить"}
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AuditLogSection() {
+  const [auditFilterEntityType, setAuditFilterEntityType] = useState("");
+  const [auditFilterAction, setAuditFilterAction] = useState("");
+  const [auditFilterQuery, setAuditFilterQuery] = useState("");
+  const auditEventsQuery = useQuery({
+    queryKey: ["admin", "audit-events", auditFilterEntityType, auditFilterAction, auditFilterQuery],
+    queryFn: () =>
+      listAuditEvents({
+        limit: 200,
+        entity_type: auditFilterEntityType || undefined,
+        action: auditFilterAction || undefined,
+        q: auditFilterQuery || undefined,
+      }),
+  });
+
+  return (
+    <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-5 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
+      <h3 className="text-base font-semibold text-slate-900 dark:text-white">Журнал аудита</h3>
+      <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+        Общий журнал событий по системе. Используйте фильтры для поиска нужных действий.
+      </p>
+      <div className="mt-4 mb-3 flex flex-wrap items-center gap-2">
+        <input
+          value={auditFilterEntityType}
+          onChange={(e) => setAuditFilterEntityType(e.target.value)}
+          placeholder="Тип сущности (например board)"
+          className="w-52 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+        />
+        <input
+          value={auditFilterAction}
+          onChange={(e) => setAuditFilterAction(e.target.value)}
+          placeholder="Действие (например board.updated)"
+          className="w-64 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+        />
+        <input
+          value={auditFilterQuery}
+          onChange={(e) => setAuditFilterQuery(e.target.value)}
+          placeholder="Поиск по действию/деталям"
+          className="min-w-[16rem] flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+        />
+      </div>
+      <div className="max-h-96 overflow-auto rounded-xl border border-slate-200 dark:border-slate-700">
+        <table className="w-full min-w-[860px] text-left text-sm">
+          <thead className="bg-slate-50 text-xs text-slate-500 dark:bg-slate-800/70 dark:text-slate-400">
+            <tr>
+              <th className="px-3 py-2">Время</th>
+              <th className="px-3 py-2">Сущность</th>
+              <th className="px-3 py-2">Действие</th>
+              <th className="px-3 py-2">Кто</th>
+              <th className="px-3 py-2">Детали</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
+            {(auditEventsQuery.data ?? []).map((ev) => (
+              <tr key={ev.id}>
+                <td className="px-3 py-2 whitespace-nowrap text-xs text-slate-500 dark:text-slate-400">
+                  {new Date(ev.created_at).toLocaleString("ru-RU")}
+                </td>
+                <td className="px-3 py-2 text-xs">
+                  {ev.entity_type}
+                  {ev.entity_id ? `:${String(ev.entity_id).slice(0, 8)}` : ""}
+                </td>
+                <td className="px-3 py-2 font-medium text-slate-800 dark:text-slate-100">{ev.action}</td>
+                <td className="px-3 py-2 text-xs text-slate-600 dark:text-slate-300">{ev.actor_name ?? "Система"}</td>
+                <td className="px-3 py-2 text-xs text-slate-500 dark:text-slate-400">
+                  {ev.details_json?.slice(0, 180) ?? "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!auditEventsQuery.isPending && (auditEventsQuery.data ?? []).length === 0 && (
+          <p className="px-3 py-6 text-sm text-slate-500 dark:text-slate-400">Событий аудита по фильтрам не найдено.</p>
+        )}
+        {auditEventsQuery.isPending && (
+          <p className="px-3 py-6 text-sm text-slate-500 dark:text-slate-400">Загрузка журнала аудита…</p>
+        )}
       </div>
     </div>
   );

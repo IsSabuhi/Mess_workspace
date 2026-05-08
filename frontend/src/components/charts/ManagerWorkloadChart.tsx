@@ -38,13 +38,27 @@ export default function ManagerWorkloadChart({ rows, dark }: Props) {
         trigger: "axis",
         axisPointer: { type: "shadow" },
         confine: true,
+        formatter: (params: unknown) => {
+          const rowsSafe = Array.isArray(params) ? (params as Array<{ axisValue: string; value: number; seriesName: string }>) : [];
+          const axisValue = rowsSafe[0]?.axisValue ?? "";
+          const inTime = rowsSafe.find((x) => x.seriesName === "В срок")?.value ?? 0;
+          const overdueCount = rowsSafe.find((x) => x.seriesName === "Просрочено")?.value ?? 0;
+          const total = inTime + overdueCount;
+          const overduePct = total > 0 ? Math.round((overdueCount / total) * 100) : 0;
+          return [
+            `<b>${axisValue}</b>`,
+            `Всего задач: ${total}`,
+            `В срок: ${inTime}`,
+            `Просрочено: ${overdueCount} (${overduePct}%)`,
+          ].join("<br/>");
+        },
       },
       legend: {
         bottom: 0,
         textStyle: { color: text, fontSize: 11 },
         itemWidth: 12,
         itemHeight: 8,
-        data: ["В срок (без просрочки)", "Просрочено"],
+        data: ["В срок", "Просрочено"],
       },
       grid: {
         left: "2%",
@@ -78,8 +92,8 @@ export default function ManagerWorkloadChart({ rows, dark }: Props) {
               yAxisIndex: 0,
               width: 18,
               right: 4,
-              start: 100 - showPct,
-              end: 100,
+              start: 0,
+              end: showPct,
               brushSelect: false,
               handleSize: 10,
               textStyle: { color: text, fontSize: 10 },
@@ -90,11 +104,12 @@ export default function ManagerWorkloadChart({ rows, dark }: Props) {
         : [],
       series: [
         {
-          name: "В срок (без просрочки)",
+          name: "В срок",
           type: "bar",
           stack: "total",
           emphasis: { focus: "series" },
           data: onTrack,
+          barMaxWidth: 22,
           itemStyle: { color: dark ? "#34d399" : "#10b981" },
         },
         {
@@ -103,6 +118,7 @@ export default function ManagerWorkloadChart({ rows, dark }: Props) {
           stack: "total",
           emphasis: { focus: "series" },
           data: overdue,
+          barMaxWidth: 22,
           itemStyle: { color: dark ? "#f87171" : "#ef4444" },
         },
       ],

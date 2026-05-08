@@ -23,7 +23,7 @@ export type ScheduleUserRow = {
   manual_row_color?: string | null;
   /** Автоцвет по совпадению смен (только shift), если ручной цвет не задан. */
   auto_row_color?: string | null;
-  /** Периоды отпуска из кадрового справочника. */
+  /** Периоды отпуска из справочника сотрудника. */
   vacation_periods?: Array<{ start: string; end: string; kind?: "vacation" | "study" }>;
 };
 

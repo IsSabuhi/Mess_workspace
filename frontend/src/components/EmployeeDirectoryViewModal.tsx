@@ -128,7 +128,7 @@ type Props = {
 };
 
 /**
- * Карточка сотрудника из кадрового справочника (только чтение). Доступ к API — право `employee_directory.read`.
+ * Карточка сотрудника из справочника сотрудника (только чтение). Доступ к API — право `employee_directory.read`.
  */
 export function EmployeeDirectoryViewModal({ userId, onClose }: Props) {
   const open = !!userId;
@@ -184,7 +184,7 @@ export function EmployeeDirectoryViewModal({ userId, onClose }: Props) {
             className="text-sm font-medium text-sky-600 hover:underline dark:text-sky-400"
             onClick={onClose}
           >
-            Открыть кадровый справочник →
+            Открыть справочник сотрудника →
           </Link>
         </div>
       </div>

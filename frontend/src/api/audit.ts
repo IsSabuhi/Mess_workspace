@@ -29,3 +29,20 @@ export async function patchAuditSettings(body: {
     body: JSON.stringify(body),
   });
 }
+
+export async function listAuditEvents(params?: {
+  limit?: number;
+  offset?: number;
+  entity_type?: string;
+  action?: string;
+  q?: string;
+}): Promise<AuditEventOut[]> {
+  const sp = new URLSearchParams();
+  if (typeof params?.limit === "number") sp.set("limit", String(params.limit));
+  if (typeof params?.offset === "number") sp.set("offset", String(params.offset));
+  if (params?.entity_type?.trim()) sp.set("entity_type", params.entity_type.trim());
+  if (params?.action?.trim()) sp.set("action", params.action.trim());
+  if (params?.q?.trim()) sp.set("q", params.q.trim());
+  const qs = sp.toString();
+  return apiFetch<AuditEventOut[]>(`/api/v1/audit/events${qs ? `?${qs}` : ""}`);
+}
