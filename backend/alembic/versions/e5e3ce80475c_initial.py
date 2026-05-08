@@ -200,7 +200,7 @@ def upgrade() -> None:
         ),
         {
             "id": board_id,
-            "name": "Основная доска",
+            "name": "Основная доска MES",
             "slug": "main",
             "created_at": now,
         },

@@ -1,3 +1,5 @@
+import asyncio
+import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -8,6 +10,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import get_settings
 from app.database import async_session_maker
+from app.db_startup import run_alembic_upgrade
 from app.models import Role, User, UserRole
 from app.paths import UPLOAD_KB_DIR, UPLOADS_DIR
 from app.routers import (
@@ -36,6 +39,8 @@ UPLOAD_KB_DIR.mkdir(parents=True, exist_ok=True)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    if settings.auto_migrate_on_startup:
+        await asyncio.to_thread(run_alembic_upgrade)
     async with async_session_maker() as session:
         try:
             users_exist = await session.scalar(select(User.id).limit(1))
@@ -64,6 +69,7 @@ async def lifespan(_app: FastAPI):
         except SQLAlchemyError:
             await session.rollback()
             raise
+    print("[mess-api] Startup complete: API готово к запросам.", file=sys.stderr, flush=True)
     yield
 
 

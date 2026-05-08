@@ -24,7 +24,7 @@ from app.models import (  # noqa: F401
 
 config = context.config
 
-if config.config_file_name is not None:
+if config.config_file_name is not None and config.attributes.get("configure_logger", True):
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
@@ -33,7 +33,11 @@ target_metadata = Base.metadata
 def get_url() -> str:
     url = get_settings().database_url
     if "+asyncpg" in url:
-        return url.replace("+asyncpg", "+psycopg", 1)
+        url = url.replace("+asyncpg", "+psycopg", 1)
+    # Не висеть бесконечно при недоступном PostgreSQL (libpq connect_timeout, секунды).
+    if "connect_timeout" not in url:
+        sep = "&" if "?" in url else "?"
+        url = f"{url}{sep}connect_timeout=30"
     return url
 
 

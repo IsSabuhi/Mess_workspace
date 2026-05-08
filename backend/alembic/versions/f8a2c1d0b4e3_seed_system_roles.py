@@ -12,8 +12,6 @@ from typing import Sequence, Union
 from alembic import op
 from sqlalchemy import text
 
-from app.permissions import ALL_PERMISSION_CODES
-
 # revision identifiers, used by Alembic.
 revision: str = "f8a2c1d0b4e3"
 down_revision: Union[str, None] = "e5e3ce80475c"
@@ -52,18 +50,20 @@ def upgrade() -> None:
     rows = conn.execute(text("SELECT id, code FROM permissions")).fetchall()
     code_to_id = {r[1]: r[0] for r in rows}
 
-    roles_spec: list[tuple[str, str, str, tuple[str, ...]]] = [
+    # None = выдать все права, которые уже есть в БД (после initial их меньше, чем в app.permissions;
+    # жёсткая привязка к ALL_PERMISSION_CODES здесь ломала миграции и могла приводить к долгим сбоям).
+    roles_spec: list[tuple[str, str, str, tuple[str, ...] | None]] = [
         (
             "super_admin",
             "Супер-администратор",
             "Полный доступ ко всем функциям (системная роль).",
-            ALL_PERMISSION_CODES,
+            None,
         ),
         (
             "admin",
             "Администратор",
             "Управление пользователями, ролями и всеми модулями (системная роль).",
-            ALL_PERMISSION_CODES,
+            None,
         ),
         (
             "lead",
@@ -97,17 +97,27 @@ def upgrade() -> None:
             ),
             {"id": role_id, "name": name, "slug": slug, "description": desc, "created_at": now},
         )
-        for code in codes:
-            pid = code_to_id.get(code)
-            if pid is None:
-                raise RuntimeError(f"Missing permission code in DB: {code}")
+        if codes is None:
             conn.execute(
                 text(
                     "INSERT INTO role_permissions (role_id, permission_id) "
-                    "VALUES (:role_id, :permission_id)"
+                    "SELECT CAST(:role_id AS uuid), p.id FROM permissions p"
                 ),
-                {"role_id": role_id, "permission_id": pid},
+                {"role_id": str(role_id)},
             )
+        else:
+            for code in codes:
+                pid = code_to_id.get(code)
+                if pid is None:
+                    # Право появится в последующих миграциях; роль догонится там.
+                    continue
+                conn.execute(
+                    text(
+                        "INSERT INTO role_permissions (role_id, permission_id) "
+                        "VALUES (:role_id, :permission_id)"
+                    ),
+                    {"role_id": role_id, "permission_id": pid},
+                )
 
 
 def downgrade() -> None:
