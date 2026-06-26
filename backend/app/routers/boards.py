@@ -2,13 +2,13 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.deps import get_current_user
-from app.models import Board, BoardMember, KanbanColumn, System, User, UserSystem
+from app.models import Board, BoardMember, KanbanColumn, System, Task, User, UserSystem
 from app.models.board import (
     BOARD_MEMBER_ROLE_EDITOR,
     BOARD_MEMBER_ROLE_MANAGER,
@@ -18,6 +18,7 @@ from app.models.board import (
 from app.permissions import BOARD_COLUMNS_MANAGE
 from app.schemas.board import (
     BoardCreate,
+    BoardDeletePreviewOut,
     BoardMemberOut,
     BoardMembersReplace,
     BoardOut,
@@ -155,7 +156,7 @@ async def create_board(
     creator: Annotated[User, Depends(get_current_user)],
 ) -> BoardOut:
     if not creator.is_superuser:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admin can create boards")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Только администратор может создавать доски")
     if body.system_id is not None:
         sys_row = await session.get(System, body.system_id)
         if not sys_row or not sys_row.is_active:
@@ -427,15 +428,51 @@ async def delete_board(
     if not await _can_delete_board(session, user, board):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Недостаточно прав для удаления доски")
     board_name = board.name
+    task_count = int(
+        (
+            await session.execute(
+                select(func.count(Task.id)).where(Task.board_id == board.id)
+            )
+        ).scalar_one()
+    )
+    if task_count > 0:
+        # Явно удаляем задачи доски, чтобы не зависеть от порядка каскадов board/columns/task.
+        await session.execute(delete(Task).where(Task.board_id == board.id))
     await record_audit_event(
         session,
         entity_type="board",
         entity_id=board.id,
         action="board.deleted",
         actor_user_id=user.id,
-        details={"name": board_name},
+        details={"name": board_name, "tasks_deleted": task_count},
     )
     await session.delete(board)
+
+
+@router.get("/{board_id}/delete-preview", response_model=BoardDeletePreviewOut)
+async def board_delete_preview(
+    board_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> BoardDeletePreviewOut:
+    board = await session.get(Board, board_id)
+    if not board:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Board not found")
+    if board.is_default:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нельзя удалить доску по умолчанию")
+    if board.scope != BOARD_SCOPE_SYSTEM:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Можно удалить только системную доску")
+    if not await _can_delete_board(session, user, board):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Недостаточно прав для удаления доски")
+
+    task_count = int(
+        (
+            await session.execute(
+                select(func.count(Task.id)).where(Task.board_id == board.id)
+            )
+        ).scalar_one()
+    )
+    return BoardDeletePreviewOut(board_id=board.id, board_name=board.name, task_count=task_count)
 
 
 @router.get("/{board_id}/audit", response_model=list[AuditEventOut])

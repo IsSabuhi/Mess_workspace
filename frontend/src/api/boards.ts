@@ -58,6 +58,16 @@ export async function deleteBoard(boardId: string): Promise<void> {
   await apiFetch<void>(`/api/v1/boards/${boardId}`, { method: "DELETE" });
 }
 
+export type BoardDeletePreviewOut = {
+  board_id: string;
+  board_name: string;
+  task_count: number;
+};
+
+export async function getBoardDeletePreview(boardId: string): Promise<BoardDeletePreviewOut> {
+  return apiFetch<BoardDeletePreviewOut>(`/api/v1/boards/${boardId}/delete-preview`);
+}
+
 export async function updateBoard(boardId: string, body: { name?: string }): Promise<BoardOut> {
   return apiFetch<BoardOut>(`/api/v1/boards/${boardId}`, {
     method: "PATCH",

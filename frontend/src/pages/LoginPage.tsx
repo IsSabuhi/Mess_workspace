@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react';
+import { Eye, EyeOff } from "lucide-react";
 import { Navigate, useLocation } from 'react-router-dom';
 
 import { ApiError } from '../api/client';
@@ -12,6 +13,7 @@ export function LoginPage() {
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -75,15 +77,26 @@ export function LoginPage() {
               className='mb-1 block text-sm font-medium text-slate-700 dark:text-slate-200'>
               Пароль
             </label>
-            <input
-              id='password'
-              type='password'
-              autoComplete='current-password'
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className='w-full rounded-xl border border-slate-200 bg-white/90 px-4 py-3 text-slate-900 shadow-sm outline-none ring-sky-400/40 transition focus:border-sky-400 focus:ring-4 dark:border-slate-600 dark:bg-slate-800/90 dark:text-white'
-            />
+            <div className="relative">
+              <input
+                id='password'
+                type={showPassword ? "text" : "password"}
+                autoComplete='current-password'
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className='w-full rounded-xl border border-slate-200 bg-white/90 px-4 py-3 pr-12 text-slate-900 shadow-sm outline-none ring-sky-400/40 transition focus:border-sky-400 focus:ring-4 dark:border-slate-600 dark:bg-slate-800/90 dark:text-white'
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-slate-500 transition hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+                title={showPassword ? "Скрыть пароль" : "Показать пароль"}
+                aria-label={showPassword ? "Скрыть пароль" : "Показать пароль"}
+              >
+                {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
           </div>
           {error && (
             <p className='rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/50 dark:text-red-300'>

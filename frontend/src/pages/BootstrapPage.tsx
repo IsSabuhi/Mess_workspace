@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from "react";
+import { Eye, EyeOff } from "lucide-react";
 import { Link, Navigate } from "react-router-dom";
 
 import { ApiError } from "../api/client";
@@ -10,6 +11,7 @@ export function BootstrapPage() {
   const { state } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [fullName, setFullName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
@@ -88,14 +90,25 @@ export function BootstrapPage() {
           </div>
           <div>
             <label className="mb-1 block text-sm font-medium">Пароль (мин. 8 символов)</label>
-            <input
-              type="password"
-              minLength={8}
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full rounded-xl border border-slate-200 bg-white/90 px-4 py-3 dark:border-slate-600 dark:bg-slate-800/90"
-            />
+            <div className="relative">
+              <input
+                type={showPassword ? "text" : "password"}
+                minLength={8}
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-white/90 px-4 py-3 pr-12 dark:border-slate-600 dark:bg-slate-800/90"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-slate-500 transition hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+                title={showPassword ? "Скрыть пароль" : "Показать пароль"}
+                aria-label={showPassword ? "Скрыть пароль" : "Показать пароль"}
+              >
+                {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
           </div>
           {error && (
             <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/50 dark:text-red-300">

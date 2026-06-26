@@ -1,10 +1,20 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
+import { AlertTriangle } from "lucide-react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 
-import { deleteBoard, listBoardAudit, listBoardMembers, listBoards, replaceBoardMembers, updateBoard } from "../api/boards";
+import {
+  deleteBoard,
+  getBoardDeletePreview,
+  listBoardAudit,
+  listBoardMembers,
+  listBoards,
+  replaceBoardMembers,
+  updateBoard,
+} from "../api/boards";
 import { listAssigneeCandidates } from "../api/users";
 import { AppShell } from "../components/AppShell";
+import { Modal } from "../components/Modal";
 import { useAuth } from "../context/AuthContext";
 import { canManageBoardColumns } from "../lib/permissions";
 import { toastApiError, toastSuccess } from "../lib/toast";
@@ -26,6 +36,8 @@ export function BoardSettingsPage() {
   const [search, setSearch] = useState("");
   const [membersDraft, setMembersDraft] = useState<Array<{ user_id: string; role: "viewer" | "editor" | "manager" }>>([]);
   const [editBoardName, setEditBoardName] = useState("");
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteConfirmName, setDeleteConfirmName] = useState("");
 
   const boardsQuery = useQuery({ queryKey: ["boards"], queryFn: listBoards, enabled: !!user });
   const assigneeQuery = useQuery({
@@ -43,6 +55,11 @@ export function BoardSettingsPage() {
     queryFn: () => listBoardAudit(boardId),
     enabled: !!(boardId && user && tab === "audit"),
   });
+  const deletePreviewQuery = useQuery({
+    queryKey: ["board-delete-preview", boardId],
+    queryFn: () => getBoardDeletePreview(boardId),
+    enabled: !!(boardId && user && deleteOpen),
+  });
 
   const board = useMemo(() => (boardsQuery.data ?? []).find((b) => b.id === boardId) ?? null, [boardsQuery.data, boardId]);
   const currentRole = useMemo(() => {
@@ -55,6 +72,8 @@ export function BoardSettingsPage() {
   useEffect(() => {
     if (!board) return;
     setEditBoardName(board.name);
+    setDeleteConfirmName("");
+    setDeleteOpen(false);
   }, [board]);
 
   useEffect(() => {
@@ -87,6 +106,9 @@ export function BoardSettingsPage() {
     },
     onError: (e: unknown) => toastApiError(e, "Не удалось удалить доску"),
   });
+  const deletePreview = deletePreviewQuery.data;
+  const expectedDeleteName = deletePreview?.board_name ?? board.name;
+  const canConfirmDelete = deleteConfirmName.trim() === expectedDeleteName.trim();
 
   const candidates = useMemo(() => {
     const all = (assigneeQuery.data ?? []).map((u) => ({ id: u.id, full_name: u.full_name }));
@@ -165,7 +187,17 @@ export function BoardSettingsPage() {
           <section className="rounded-xl border border-red-200 bg-red-50/80 p-4 dark:border-red-900/60 dark:bg-red-950/20">
             <p className="mb-2 text-sm font-medium text-red-800 dark:text-red-300">Удаление</p>
             <p className="text-sm text-red-800 dark:text-red-300">Удаление доски удалит все ее колонки и задачи без возможности восстановления.</p>
-            <button type="button" disabled={deleteBoardMut.isPending} onClick={() => deleteBoardMut.mutate()} className="mt-3 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-100 disabled:opacity-60 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300 dark:hover:bg-red-950/50">{deleteBoardMut.isPending ? "Удаление…" : "Удалить доску"}</button>
+            <button
+              type="button"
+              disabled={deleteBoardMut.isPending}
+              onClick={() => {
+                setDeleteConfirmName("");
+                setDeleteOpen(true);
+              }}
+              className="mt-3 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-100 disabled:opacity-60 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300 dark:hover:bg-red-950/50"
+            >
+              {deleteBoardMut.isPending ? "Удаление…" : "Удалить доску"}
+            </button>
           </section>
         </div>
       )}
@@ -181,6 +213,70 @@ export function BoardSettingsPage() {
           {!auditQuery.isPending && (auditQuery.data ?? []).length === 0 && <p className="text-sm text-slate-500">Событий пока нет.</p>}
         </div>
       )}
+
+      <Modal
+        open={deleteOpen}
+        onClose={() => !deleteBoardMut.isPending && setDeleteOpen(false)}
+        size="md"
+        closeOnBackdrop={!deleteBoardMut.isPending}
+        closeOnEscape={!deleteBoardMut.isPending}
+        title="Подтверждение удаления доски"
+        description="Это действие необратимо."
+        footer={
+          <>
+            <button
+              type="button"
+              disabled={deleteBoardMut.isPending}
+              onClick={() => setDeleteOpen(false)}
+              className="rounded-xl bg-slate-200 px-4 py-2.5 text-sm font-medium text-slate-800 transition hover:bg-slate-300 disabled:opacity-50 dark:bg-slate-700 dark:text-slate-100 dark:hover:bg-slate-600"
+            >
+              Отмена
+            </button>
+            <button
+              type="button"
+              disabled={deleteBoardMut.isPending || !canConfirmDelete}
+              onClick={() => deleteBoardMut.mutate()}
+              className="rounded-xl bg-red-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {deleteBoardMut.isPending ? "Удаление…" : "Удалить доску"}
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50/80 p-3 text-sm text-red-800 dark:border-red-900/60 dark:bg-red-950/20 dark:text-red-300">
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+            <div className="space-y-1">
+              <p className="font-medium">Будет удалена доска «{expectedDeleteName}».</p>
+              {deletePreviewQuery.isPending ? (
+                <p>Проверяем связанные задачи…</p>
+              ) : (deletePreview?.task_count ?? 0) > 0 ? (
+                <p>
+                  В этой доске найдено задач: <span className="font-semibold">{deletePreview?.task_count}</span>. Они
+                  также будут удалены.
+                </p>
+              ) : (
+                <p>Связанных задач не найдено.</p>
+              )}
+            </div>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-200">
+              Для подтверждения введите название доски
+            </label>
+            <input
+              value={deleteConfirmName}
+              onChange={(e) => setDeleteConfirmName(e.target.value)}
+              placeholder={expectedDeleteName}
+              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+            />
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              Нужно ввести точно: <span className="font-semibold">{expectedDeleteName}</span>
+            </p>
+          </div>
+        </div>
+      </Modal>
     </AppShell>
   );
 }

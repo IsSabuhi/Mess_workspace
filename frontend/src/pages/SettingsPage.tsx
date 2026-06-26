@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { History, LayoutDashboard, Lock, Moon, Palette, Sun, Monitor, UserRound } from "lucide-react";
+import { Eye, EyeOff, History, LayoutDashboard, Lock, Moon, Palette, Sun, Monitor, UserRound } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { fetchLoginHistory, patchProfile } from "../api/auth";
@@ -85,6 +85,9 @@ export function SettingsPage() {
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newPasswordConfirm, setNewPasswordConfirm] = useState("");
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showNewPasswordConfirm, setShowNewPasswordConfirm] = useState(false);
   const [pwdErr, setPwdErr] = useState<string | null>(null);
   const [pwdMsg, setPwdMsg] = useState<string | null>(null);
 
@@ -393,40 +396,73 @@ export function SettingsPage() {
                     <label className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-200">
                       Текущий пароль
                     </label>
-                    <input
-                      type="password"
-                      autoComplete="current-password"
-                      value={currentPassword}
-                      onChange={(e) => setCurrentPassword(e.target.value)}
-                      className={inputClass}
-                    />
+                    <div className="relative">
+                      <input
+                        type={showCurrentPassword ? "text" : "password"}
+                        autoComplete="current-password"
+                        value={currentPassword}
+                        onChange={(e) => setCurrentPassword(e.target.value)}
+                        className={`${inputClass} pr-12`}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowCurrentPassword((v) => !v)}
+                        className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-slate-500 transition hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+                        title={showCurrentPassword ? "Скрыть пароль" : "Показать пароль"}
+                        aria-label={showCurrentPassword ? "Скрыть пароль" : "Показать пароль"}
+                      >
+                        {showCurrentPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
                   </div>
                   <div>
                     <label className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-200">
                       Новый пароль
                     </label>
-                    <input
-                      type="password"
-                      autoComplete="new-password"
-                      minLength={8}
-                      value={newPassword}
-                      onChange={(e) => setNewPassword(e.target.value)}
-                      className={inputClass}
-                    />
+                    <div className="relative">
+                      <input
+                        type={showNewPassword ? "text" : "password"}
+                        autoComplete="new-password"
+                        minLength={8}
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        className={`${inputClass} pr-12`}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowNewPassword((v) => !v)}
+                        className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-slate-500 transition hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+                        title={showNewPassword ? "Скрыть пароль" : "Показать пароль"}
+                        aria-label={showNewPassword ? "Скрыть пароль" : "Показать пароль"}
+                      >
+                        {showNewPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
                     <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Не менее 8 символов.</p>
                   </div>
                   <div>
                     <label className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-200">
                       Повтор нового пароля
                     </label>
-                    <input
-                      type="password"
-                      autoComplete="new-password"
-                      minLength={8}
-                      value={newPasswordConfirm}
-                      onChange={(e) => setNewPasswordConfirm(e.target.value)}
-                      className={inputClass}
-                    />
+                    <div className="relative">
+                      <input
+                        type={showNewPasswordConfirm ? "text" : "password"}
+                        autoComplete="new-password"
+                        minLength={8}
+                        value={newPasswordConfirm}
+                        onChange={(e) => setNewPasswordConfirm(e.target.value)}
+                        className={`${inputClass} pr-12`}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowNewPasswordConfirm((v) => !v)}
+                        className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-slate-500 transition hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+                        title={showNewPasswordConfirm ? "Скрыть пароль" : "Показать пароль"}
+                        aria-label={showNewPasswordConfirm ? "Скрыть пароль" : "Показать пароль"}
+                      >
+                        {showNewPasswordConfirm ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
                   </div>
                   {pwdErr && (
                     <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">

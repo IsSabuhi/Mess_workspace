@@ -52,3 +52,35 @@ export async function updateUser(userId: string, body: UserUpdate): Promise<User
 export async function deleteUser(userId: string): Promise<void> {
   await apiFetch<void>(`/api/v1/users/${userId}`, { method: "DELETE" });
 }
+
+export type EmployeeImportRowStatus =
+  | "created"
+  | "updated"
+  | "skipped_duplicate_file"
+  | "skipped_exists"
+  | "skipped_invalid";
+
+export type EmployeeImportRowDetail = {
+  sheet_row: number;
+  login: string | null;
+  status: EmployeeImportRowStatus;
+  user_id: string | null;
+  email: string | null;
+  message: string | null;
+};
+
+export type EmployeeImportOut = {
+  created: number;
+  updated: number;
+  skipped: number;
+  rows: EmployeeImportRowDetail[];
+};
+
+export async function importUsersFromExcel(file: File): Promise<EmployeeImportOut> {
+  const form = new FormData();
+  form.set("file", file);
+  return apiFetch<EmployeeImportOut>("/api/v1/users/import-excel", {
+    method: "POST",
+    body: form,
+  });
+}

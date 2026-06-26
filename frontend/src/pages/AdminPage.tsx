@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Eye, EyeOff, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Navigate, useSearchParams } from "react-router-dom";
 
@@ -18,7 +19,7 @@ import { listPositions } from "../api/positions";
 import type { SystemOut } from "../api/systems";
 import { getTaskArchiveSettings, listSystems, updateTaskArchiveSettings } from "../api/systems";
 import type { UserCreate, UserUpdate } from "../api/users";
-import { createUser, deleteUser, listUsers, updateUser } from "../api/users";
+import { createUser, deleteUser, importUsersFromExcel, listUsers, updateUser } from "../api/users";
 import { AppShell } from "../components/AppShell";
 import { useAuth } from "../context/AuthContext";
 import { invalidateAndRefetch } from "../lib/queryClient";
@@ -471,9 +472,14 @@ export function AdminPage() {
 }
 
 function SystemSettingsSection() {
+  const { state } = useAuth();
+  const currentUser = state.status === "authenticated" ? state.user : null;
+  const canImportUsers = !!(currentUser && hasPermission(currentUser, PERM.USERS_MANAGE));
   const qc = useQueryClient();
   const [autoArchiveDays, setAutoArchiveDays] = useState("60");
   const [auditRetentionDays, setAuditRetentionDays] = useState("180");
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importResultOpen, setImportResultOpen] = useState(false);
   const taskArchiveQuery = useQuery({
     queryKey: ["admin", "task-archive-settings"],
     queryFn: getTaskArchiveSettings,
@@ -507,6 +513,18 @@ function SystemSettingsSection() {
       await qc.invalidateQueries({ queryKey: ["admin", "audit-settings"] });
     },
     onError: (e: unknown) => toastApiError(e, "Не удалось сохранить настройки аудита"),
+  });
+  const importUsersMut = useMutation({
+    mutationFn: (file: File) => importUsersFromExcel(file),
+    onSuccess: async () => {
+      toastSuccess("Импорт сотрудников завершён");
+      setImportResultOpen(true);
+      setImportFile(null);
+      await qc.invalidateQueries({ queryKey: ["admin", "users"] });
+      await qc.invalidateQueries({ queryKey: ["users", "assignee-candidates"] });
+      await qc.invalidateQueries({ queryKey: ["employee-directory"] });
+    },
+    onError: (e: unknown) => toastApiError(e, "Не удалось импортировать сотрудников"),
   });
 
   return (
@@ -598,6 +616,86 @@ function SystemSettingsSection() {
           </form>
         </div>
       </div>
+      {canImportUsers && (
+        <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-5 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
+          <h3 className="text-base font-semibold text-slate-900 dark:text-white">Импорт сотрудников из Excel</h3>
+          <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+            Загрузите файл `xlsx` с колонками «УчетнаяЗапись», «ФИО», «Должность» (опционально «Системы»). Для новых
+            сотрудников пароль по умолчанию будет равен их учётной записи.
+          </p>
+          <form
+            className="mt-4 flex flex-wrap items-center gap-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!importFile) {
+                toastError("Выберите файл Excel");
+                return;
+              }
+              importUsersMut.mutate(importFile);
+            }}
+          >
+            <input
+              type="file"
+              accept=".xlsx"
+              onChange={(e) => setImportFile(e.target.files?.[0] ?? null)}
+              disabled={importUsersMut.isPending}
+              className="max-w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+            />
+            <button
+              type="submit"
+              disabled={importUsersMut.isPending || !importFile}
+              className="inline-flex items-center gap-2 rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-md hover:bg-sky-600 disabled:opacity-60"
+            >
+              {importUsersMut.isPending ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Импорт…
+                </>
+              ) : (
+                "Импортировать"
+              )}
+            </button>
+          </form>
+
+          {importUsersMut.data && importResultOpen && (
+            <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/80 p-3 text-sm dark:border-slate-700 dark:bg-slate-800/50">
+              <p className="font-medium text-slate-900 dark:text-white">
+                Результат: создано {importUsersMut.data.created}, обновлено {importUsersMut.data.updated}, пропущено{" "}
+                {importUsersMut.data.skipped}.
+              </p>
+              <div className="mt-2 max-h-56 overflow-auto rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900/60">
+                <table className="w-full text-left text-xs">
+                  <thead className="sticky top-0 bg-slate-100/90 dark:bg-slate-800/90">
+                    <tr>
+                      <th className="px-2 py-1.5">Строка</th>
+                      <th className="px-2 py-1.5">Логин</th>
+                      <th className="px-2 py-1.5">Статус</th>
+                      <th className="px-2 py-1.5">Комментарий</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
+                    {importUsersMut.data.rows.map((row) => (
+                      <tr key={`${row.sheet_row}-${row.login ?? "empty"}`}>
+                        <td className="px-2 py-1.5">{row.sheet_row}</td>
+                        <td className="px-2 py-1.5">{row.login ?? "—"}</td>
+                        <td className="px-2 py-1.5">{row.status}</td>
+                        <td className="px-2 py-1.5">{row.message ?? "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <button
+                type="button"
+                onClick={() => setImportResultOpen(false)}
+                className="mt-3 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+              >
+                Скрыть детали
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -914,6 +1012,8 @@ function UserFormModal({
   );
   const [password, setPassword] = useState("");
   const [passwordConfirm, setPasswordConfirm] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showPasswordConfirm, setShowPasswordConfirm] = useState(false);
   const [isSuperuser, setIsSuperuser] = useState(initial?.is_superuser ?? false);
   const [isActive, setIsActive] = useState(initial?.is_active ?? true);
   const [roleIds, setRoleIds] = useState<Set<string>>(
@@ -961,6 +1061,8 @@ function UserFormModal({
     setSystemIds(new Set(initial.systems?.map((s) => s.id) ?? []));
     setPassword("");
     setPasswordConfirm("");
+    setShowPassword(false);
+    setShowPasswordConfirm(false);
   }, [initial]);
 
   async function submit(e: React.FormEvent) {
@@ -1127,25 +1229,47 @@ function UserFormModal({
             <label className="mb-1 block text-sm font-medium">
               Пароль {initial && "(оставьте пустым, чтобы не менять)"}
             </label>
-            <input
-              type="password"
-              minLength={initial ? 0 : 8}
-              required={!initial}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800"
-            />
+            <div className="relative">
+              <input
+                type={showPassword ? "text" : "password"}
+                minLength={initial ? 0 : 8}
+                required={!initial}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 pr-12 dark:border-slate-600 dark:bg-slate-800"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-slate-500 transition hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+                title={showPassword ? "Скрыть пароль" : "Показать пароль"}
+                aria-label={showPassword ? "Скрыть пароль" : "Показать пароль"}
+              >
+                {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
           </div>
           <div>
             <label className="mb-1 block text-sm font-medium">Повтор пароля</label>
-            <input
-              type="password"
-              minLength={initial ? 0 : 8}
-              required={!initial}
-              value={passwordConfirm}
-              onChange={(e) => setPasswordConfirm(e.target.value)}
-              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800"
-            />
+            <div className="relative">
+              <input
+                type={showPasswordConfirm ? "text" : "password"}
+                minLength={initial ? 0 : 8}
+                required={!initial}
+                value={passwordConfirm}
+                onChange={(e) => setPasswordConfirm(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 pr-12 dark:border-slate-600 dark:bg-slate-800"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPasswordConfirm((v) => !v)}
+                className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-slate-500 transition hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+                title={showPasswordConfirm ? "Скрыть пароль" : "Показать пароль"}
+                aria-label={showPasswordConfirm ? "Скрыть пароль" : "Показать пароль"}
+              >
+                {showPasswordConfirm ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
           </div>
           {initial && (
             <>

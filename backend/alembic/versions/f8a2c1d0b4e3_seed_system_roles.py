@@ -41,7 +41,12 @@ _EMPLOYEE_CODES = (
     "knowledge.read.all",
 )
 
-_VIEWER_CODES = ("tasks.read.all", "knowledge.read.all")
+_VIEWER_CODES = (
+    "tasks.read.all",
+    "knowledge.read.all",
+    "employee_directory.read",
+    "schedule.read",
+)
 
 
 def upgrade() -> None:
@@ -55,14 +60,8 @@ def upgrade() -> None:
     roles_spec: list[tuple[str, str, str, tuple[str, ...] | None]] = [
         (
             "super_admin",
-            "Супер-администратор",
-            "Полный доступ ко всем функциям (системная роль).",
-            None,
-        ),
-        (
-            "admin",
             "Администратор",
-            "Управление пользователями, ролями и всеми модулями (системная роль).",
+            "Полный доступ ко всем функциям (системная роль).",
             None,
         ),
         (

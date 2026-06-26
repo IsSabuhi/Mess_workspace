@@ -52,18 +52,18 @@ async def lifespan(_app: FastAPI):
                     raise RuntimeError(
                         "Empty database: set INITIAL_ADMIN_EMAIL and INITIAL_ADMIN_PASSWORD in environment."
                     )
-                admin = User(
+                super_admin_user = User(
                     email=email,
                     full_name=full_name,
                     hashed_password=hash_password(password),
                     is_superuser=True,
                     is_active=True,
                 )
-                session.add(admin)
+                session.add(super_admin_user)
                 await session.flush()
                 super_admin = (await session.execute(select(Role).where(Role.slug == "super_admin"))).scalar_one_or_none()
                 if super_admin:
-                    session.add(UserRole(user_id=admin.id, role_id=super_admin.id))
+                    session.add(UserRole(user_id=super_admin_user.id, role_id=super_admin.id))
                     await session.flush()
                 await session.commit()
         except SQLAlchemyError:

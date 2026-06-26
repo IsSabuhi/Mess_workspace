@@ -85,3 +85,9 @@ class BoardMemberSetItem(BaseModel):
 
 class BoardMembersReplace(BaseModel):
     members: list[BoardMemberSetItem] = Field(default_factory=list, max_length=2000)
+
+
+class BoardDeletePreviewOut(BaseModel):
+    board_id: uuid.UUID
+    board_name: str
+    task_count: int

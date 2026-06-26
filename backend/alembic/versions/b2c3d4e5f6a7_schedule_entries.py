@@ -69,7 +69,7 @@ def upgrade() -> None:
             SELECT r.id, p.id
             FROM roles r
             JOIN permissions p ON p.code = 'schedule.read'
-            WHERE r.slug IN ('super_admin', 'admin', 'lead', 'employee')
+            WHERE r.slug IN ('super_admin', 'lead', 'employee')
             ON CONFLICT DO NOTHING
             """
         )
@@ -81,7 +81,7 @@ def upgrade() -> None:
             SELECT r.id, p.id
             FROM roles r
             JOIN permissions p ON p.code = 'schedule.manage'
-            WHERE r.slug IN ('super_admin', 'admin', 'lead')
+            WHERE r.slug IN ('super_admin', 'lead')
             ON CONFLICT DO NOTHING
             """
         )

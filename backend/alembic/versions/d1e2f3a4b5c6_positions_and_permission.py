@@ -67,7 +67,7 @@ def upgrade() -> None:
             text(
                 "INSERT INTO role_permissions (role_id, permission_id) "
                 "SELECT r.id, CAST(:pid AS uuid) FROM roles r "
-                "WHERE r.slug IN ('super_admin', 'admin') "
+                "WHERE r.slug IN ('super_admin') "
                 "AND NOT EXISTS ("
                 " SELECT 1 FROM role_permissions x WHERE x.role_id = r.id AND x.permission_id = CAST(:pid AS uuid)"
                 ")"

@@ -71,7 +71,7 @@ def upgrade() -> None:
             SELECT r.id, p.id
             FROM roles r
             JOIN permissions p ON p.code IN ('employee_directory.read', 'employee_directory.manage')
-            WHERE r.slug IN ('super_admin', 'admin', 'lead')
+            WHERE r.slug IN ('super_admin', 'lead')
             ON CONFLICT DO NOTHING
             """
         )
