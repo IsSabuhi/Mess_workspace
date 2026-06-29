@@ -52,7 +52,7 @@ async def can_manage_space_acl(session: AsyncSession, user: User, space: Knowled
 
 
 async def can_view_article(session: AsyncSession, user: User, article: KnowledgeArticle) -> bool:
-    """Опубликованные статьи видны всем с доступом к пространству. Черновики — автору, суперпользователю и тем, у кого есть knowledge.manage.all (в т.ч. руководитель направления)."""
+    """Опубликованные статьи видны всем с доступом к пространству. Черновики — автору, суперпользователю и тем, у кого есть knowledge.manage.all"""
     if article.status != ArticleStatus.draft:
         return True
     if user.is_superuser:

@@ -40,9 +40,11 @@ def upgrade() -> None:
     now = datetime.now(timezone.utc)
     conn = op.get_bind()
     for name, slug, so in [
-        ("Руководитель направления", "lead", 0),
-        ("Ведущий инженер", "senior-engineer", 1),
-        ("Инженер", "engineer", 2),
+        ("Начальник отдела", "lead", 0),
+        ("Ведущий специалист", "leading specialist", 1),
+        ("Главный специалист", "main expert", 2),
+        ("Эксперт", "expert", 3),
+        ("Менеджер", "manager", 4)
     ]:
         conn.execute(
             text(
