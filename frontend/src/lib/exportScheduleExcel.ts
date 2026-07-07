@@ -1,6 +1,6 @@
 import ExcelJS from "exceljs";
 
-import type { ScheduleDayInfo, ScheduleGroupOut, ScheduleUserRow } from "../api/schedule";
+import type { ScheduleGroupOut, ScheduleUserRow } from "../api/schedule";
 
 function fileStamp(): string {
   return new Date().toISOString().slice(0, 10);
