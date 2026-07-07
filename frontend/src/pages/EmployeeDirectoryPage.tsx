@@ -1111,17 +1111,30 @@ export function EmployeeDirectoryPage() {
                     <option value="unspecified">Не указан</option>
                   </select>
                 </label>
-                <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                  При пятидневке в будни без праздника часы подставляются автоматически: женский — 7.2 ч, мужской или не
-                  указан — 8 ч. Праздники РФ (будни) и сб/вс — пустые ячейки. Для отпуска в расписании «о» и «у»
-                  считаются равнозначными. Сменный: цикл 11-3-8 с пустыми выходными по смене. 2/2: 11д-11в и пустые дни
-                  цикла.
-                </p>
+                <div className="rounded-lg border border-slate-200/60 bg-white/60 px-3 py-2.5 text-[11px] leading-relaxed text-slate-500 dark:border-slate-600/60 dark:bg-slate-900/40 dark:text-slate-400">
+                  <p>Эти поля используются кнопкой «Автозаполнение» на странице «Расписание».</p>
+                  <ul className="mt-2 list-inside list-disc space-y-1">
+                    <li>
+                      <strong>5/2</strong> — в будни без праздника: женский пол — <span className="font-mono">7.2</span>,
+                      мужской или не указан — <span className="font-mono">8</span>; сб, вс и праздники РФ — пустые ячейки
+                    </li>
+                    <li>
+                      <strong>Сменный</strong> — цикл 11-3-8; выходные по смене — пусто, дни отпуска —{" "}
+                      <span className="font-mono">о</span>
+                    </li>
+                    <li>
+                      <strong>2/2</strong> — чередование <span className="font-mono">11д</span> / <span className="font-mono">11в</span> и
+                      пустых дней
+                    </li>
+                  </ul>
+                </div>
               </div>
               <div className="rounded-xl border border-slate-200/80 bg-slate-50/80 p-3 dark:border-slate-600 dark:bg-slate-800/40">
                 <p className="text-sm font-medium text-slate-800 dark:text-slate-100">Отпуск для графика</p>
                 <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  Интервалы дат — выберите тип: отпуск («о») или учебный отпуск («у»).
+                  Укажите периоды — при автозаполнении в расписании подставятся коды: отпуск —{" "}
+                  <span className="font-mono">о</span>, учебный отпуск — <span className="font-mono">у</span>. Можно
+                  добавить несколько интервалов.
                 </p>
                 <ul className="mt-3 space-y-2">
                   {profileForm.vacation_periods.map((period, idx) => (

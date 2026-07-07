@@ -1,1 +1,1 @@
-# Mess Workspace backend application package.
+# Портал MES — backend application package.

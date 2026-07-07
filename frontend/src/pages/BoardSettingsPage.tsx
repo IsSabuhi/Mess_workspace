@@ -12,7 +12,6 @@ import {
   replaceBoardMembers,
   updateBoard,
 } from "../api/boards";
-import { listAssigneeCandidates } from "../api/users";
 import { AppShell } from "../components/AppShell";
 import { Modal } from "../components/Modal";
 import { useAuth } from "../context/AuthContext";
@@ -40,11 +39,6 @@ export function BoardSettingsPage() {
   const [deleteConfirmName, setDeleteConfirmName] = useState("");
 
   const boardsQuery = useQuery({ queryKey: ["boards"], queryFn: listBoards, enabled: !!user });
-  const assigneeQuery = useQuery({
-    queryKey: ["users", "assignee-candidates", user?.id],
-    queryFn: listAssigneeCandidates,
-    enabled: !!user,
-  });
   const membersQuery = useQuery({
     queryKey: ["board-members", boardId],
     queryFn: () => listBoardMembers(boardId),
@@ -107,22 +101,32 @@ export function BoardSettingsPage() {
     onError: (e: unknown) => toastApiError(e, "Не удалось удалить доску"),
   });
   const deletePreview = deletePreviewQuery.data;
-  const expectedDeleteName = deletePreview?.board_name ?? board.name;
+  const expectedDeleteName = deletePreview?.board_name ?? board?.name ?? "";
   const canConfirmDelete = deleteConfirmName.trim() === expectedDeleteName.trim();
 
   const candidates = useMemo(() => {
-    const all = (assigneeQuery.data ?? []).map((u) => ({ id: u.id, full_name: u.full_name }));
+    if (board?.scope === "system") return [];
+    const all = (membersQuery.data ?? [])
+      .filter((m) => !m.is_system_member)
+      .map((m) => ({ id: m.user_id, full_name: m.full_name }));
     const selected = new Set(membersDraft.map((m) => m.user_id));
     const q = search.trim().toLowerCase();
     return all.filter((u) => !selected.has(u.id) && (!q || u.full_name.toLowerCase().includes(q)));
-  }, [assigneeQuery.data, membersDraft, search]);
+  }, [board?.scope, membersQuery.data, membersDraft, search]);
   const existing = useMemo(() => {
-    const byId = new Map((assigneeQuery.data ?? []).map((u) => [u.id, u.full_name]));
     const q = search.trim().toLowerCase();
     return membersDraft
-      .filter((m) => !q || (byId.get(m.user_id) ?? m.user_id).toLowerCase().includes(q))
-      .map((m) => ({ ...m, name: byId.get(m.user_id) ?? m.user_id }));
-  }, [assigneeQuery.data, membersDraft, search]);
+      .map((m) => {
+        const row = (membersQuery.data ?? []).find((x) => x.user_id === m.user_id);
+        return {
+          ...m,
+          name: row?.full_name ?? m.user_id,
+          is_system_member: row?.is_system_member ?? false,
+        };
+      })
+      .filter((m) => !q || m.name.toLowerCase().includes(q))
+      .sort((a, b) => a.name.localeCompare(b.name, "ru"));
+  }, [membersQuery.data, membersDraft, search]);
 
   if (state.status !== "authenticated") return <Navigate to="/login" replace />;
   if (!board) return <AppShell title="Настройки доски"><p className="text-slate-500">Доска не найдена.</p></AppShell>;
@@ -150,11 +154,21 @@ export function BoardSettingsPage() {
 
       {tab === "members" && (
         <div className="space-y-3">
+          {board.system_name && (
+            <p className="text-sm text-slate-600 dark:text-slate-400">
+              Все сотрудники системы «{board.system_name}» участвуют в доске. Роль по умолчанию — наблюдатель.
+            </p>
+          )}
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Поиск по ФИО" className="w-full max-w-md rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800" />
           <div className="rounded-xl border border-slate-200 dark:border-slate-700">
+            {existing.length === 0 && (
+              <p className="px-3 py-4 text-sm text-slate-500">Участники не найдены.</p>
+            )}
             {existing.map((m) => (
               <div key={m.user_id} className="flex items-center gap-2 border-b border-slate-100 px-3 py-2 text-sm last:border-b-0 dark:border-slate-800">
-                <button type="button" onClick={() => setMembersDraft((p) => p.filter((x) => x.user_id !== m.user_id))} className="rounded px-2 py-0.5 text-xs text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40">Удалить</button>
+                {!m.is_system_member && (
+                  <button type="button" onClick={() => setMembersDraft((p) => p.filter((x) => x.user_id !== m.user_id))} className="rounded px-2 py-0.5 text-xs text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40">Удалить</button>
+                )}
                 <span className="min-w-0 flex-1 truncate">{m.name}</span>
                 <select value={m.role} onChange={(e) => setMembersDraft((p) => p.map((x) => (x.user_id === m.user_id ? { ...x, role: e.target.value as "viewer" | "editor" | "manager" } : x)))} className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs dark:border-slate-600 dark:bg-slate-800">
                   <option value="viewer">{ROLE_LABEL.viewer}</option>
@@ -164,14 +178,16 @@ export function BoardSettingsPage() {
               </div>
             ))}
           </div>
-          <div className="rounded-xl border border-slate-200 dark:border-slate-700">
-            {candidates.map((u) => (
-              <div key={u.id} className="flex items-center gap-2 border-b border-slate-100 px-3 py-2 text-sm last:border-b-0 dark:border-slate-800">
-                <button type="button" onClick={() => setMembersDraft((p) => [...p, { user_id: u.id, role: "viewer" }])} className="rounded px-2 py-0.5 text-xs text-sky-700 hover:bg-sky-50 dark:hover:bg-sky-950/30">Добавить</button>
-                <span className="min-w-0 flex-1 truncate">{u.full_name}</span>
-              </div>
-            ))}
-          </div>
+          {board.scope !== "system" && candidates.length > 0 && (
+            <div className="rounded-xl border border-slate-200 dark:border-slate-700">
+              {candidates.map((u) => (
+                <div key={u.id} className="flex items-center gap-2 border-b border-slate-100 px-3 py-2 text-sm last:border-b-0 dark:border-slate-800">
+                  <button type="button" onClick={() => setMembersDraft((p) => [...p, { user_id: u.id, role: "viewer" }])} className="rounded px-2 py-0.5 text-xs text-sky-700 hover:bg-sky-50 dark:hover:bg-sky-950/30">Добавить</button>
+                  <span className="min-w-0 flex-1 truncate">{u.full_name}</span>
+                </div>
+              ))}
+            </div>
+          )}
           <button type="button" disabled={saveMembersMut.isPending} onClick={() => saveMembersMut.mutate(membersDraft)} className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600 disabled:opacity-60">{saveMembersMut.isPending ? "Сохранение…" : "Сохранить участников"}</button>
         </div>
       )}

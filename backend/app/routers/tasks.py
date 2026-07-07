@@ -18,22 +18,10 @@ from app.http_errors import (
     UNKNOWN_SYSTEM,
 )
 from app.deps import get_current_user, require_permission
-from app.models import (
-    Board,
-    BoardMember,
-    KanbanColumn,
-    Notification,
-    NotificationType,
-    System,
-    Task,
-    TaskComment,
-    TaskTag,
-    User,
-    UserSystem,
-)
-from app.models.board import BOARD_MEMBER_ROLE_EDITOR, BOARD_MEMBER_ROLE_MANAGER, BOARD_SCOPE_SYSTEM
+from app.models import Board, KanbanColumn, Notification, NotificationType, System, Task, TaskComment, TaskTag, User, UserSystem
+from app.models.board import BOARD_SCOPE_SYSTEM
 from app.models.task import task_assignees_table
-from app.permissions import TASKS_CREATE, TASKS_READ_ASSIGNED
+from app.permissions import TASKS_READ_ASSIGNED
 from app.schemas.task import (
     ColumnMini,
     TaskAnalyticsBucketOut,
@@ -52,8 +40,17 @@ from app.schemas.task import (
 )
 from app.services.authz import user_has_permission, user_sees_all_tasks
 from app.services.audit import record_audit_event
+from app.services.board_lock import can_bypass_board_editing_lock, is_global_board_locked
 from app.services.task_archive import auto_archive_done_tasks
-from app.services.task_policy import can_delete_task, can_read_task, can_update_task
+from app.services.task_policy import (
+    can_comment_on_task,
+    can_create_task_on_board,
+    can_delete_task,
+    can_move_task,
+    can_read_task,
+    can_update_task,
+    can_update_task_description_when_locked,
+)
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 _MENTION_RE = re.compile(r"@([a-zA-Z0-9_.+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})")
@@ -394,17 +391,8 @@ async def create_task(
     board = await session.get(Board, board_id)
     if not board or board.is_archived:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid board")
-    can_create_by_permission = await user_has_permission(session, user, TASKS_CREATE)
-    if board.scope != BOARD_SCOPE_SYSTEM and not (user.is_superuser or can_create_by_permission):
+    if not await can_create_task_on_board(session, user, board):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
-    if board.scope == BOARD_SCOPE_SYSTEM and not user.is_superuser:
-        role = await session.scalar(
-            select(BoardMember.role)
-            .where(BoardMember.board_id == board.id, BoardMember.user_id == user.id)
-            .limit(1)
-        )
-        if role not in {BOARD_MEMBER_ROLE_EDITOR, BOARD_MEMBER_ROLE_MANAGER}:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
 
     col = await session.get(KanbanColumn, body.column_id)
     if not col or col.board_id != board_id:
@@ -478,10 +466,30 @@ async def update_task(
     task = (await session.execute(stmt)).scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
-    if not await can_update_task(session, user, task):
+
+    board = await session.get(Board, task.board_id)
+    requested_fields = body.model_fields_set
+    move_only_fields = {"column_id", "position"}
+    locked_allowed_fields = {"column_id", "position", "description"}
+    is_move_only = bool(requested_fields) and requested_fields.issubset(move_only_fields)
+
+    if board and is_global_board_locked(board) and not await can_bypass_board_editing_lock(session, user):
+        if not requested_fields.issubset(locked_allowed_fields):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Доска заблокирована: можно менять только статус (колонку) и описание",
+            )
+        if requested_fields & move_only_fields and not await can_move_task(session, user, task):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
+        if "description" in requested_fields and not await can_update_task_description_when_locked(session, user, task):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
+    elif is_move_only:
+        if not await can_move_task(session, user, task):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
+    elif not await can_update_task(session, user, task):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
 
-    changed_fields = sorted(list(body.model_fields_set))
+    changed_fields = sorted(list(requested_fields))
     old_column_id = task.column_id
     old_system_id = task.system_id
     if body.title is not None:
@@ -588,7 +596,7 @@ async def create_task_comment(
     task = (await session.execute(select(Task).where(Task.id == task_id).options(*_TASK_LOAD))).scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
-    if not await can_read_task(session, user, task):
+    if not await can_comment_on_task(session, user, task):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
 
     comment = TaskComment(task_id=task.id, author_id=user.id, body=body.body.strip())
@@ -625,7 +633,7 @@ async def update_task_comment(
     task = (await session.execute(select(Task).where(Task.id == task_id).options(*_TASK_LOAD))).scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
-    if not await can_read_task(session, user, task):
+    if not await can_comment_on_task(session, user, task):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
     comment = (
         await session.execute(
@@ -666,7 +674,7 @@ async def delete_task_comment(
     task = (await session.execute(select(Task).where(Task.id == task_id).options(*_TASK_LOAD))).scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
-    if not await can_read_task(session, user, task):
+    if not await can_comment_on_task(session, user, task):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
     comment = (
         await session.execute(

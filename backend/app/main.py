@@ -74,7 +74,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(
-    title="Mess Workspace API",
+    title="Портал MES API",
     description=(
         "**Пользователи:** первый администратор создаётся автоматически при пустой БД "
         "(по переменным `INITIAL_ADMIN_*`). "

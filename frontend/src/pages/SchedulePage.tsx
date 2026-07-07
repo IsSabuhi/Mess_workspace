@@ -494,7 +494,7 @@ export function SchedulePage() {
   return (
     <AppShell
       title="Расписание"
-      subtitle="Таблица как в Excel: только ФИО в первой колонке; система — справа. Порядок блоков систем задаётся в справочнике «Системы». Подсказки по кодам — в блоке «Справка» ниже."
+      subtitle="Порядок блоков систем — в справочнике «Системы». Коды ячеек и кнопки заполнения — в блоке «Справка» ниже."
       wide
     >
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -690,40 +690,99 @@ export function SchedulePage() {
           {showScheduleHelp ? "Скрыть справку по кодам" : "Справка по кодам и автозаполнению"}
         </button>
         {showScheduleHelp && (
-          <div className="mt-2 grid gap-2 rounded-2xl border border-slate-200/80 bg-white/80 px-4 py-3 text-sm text-slate-600 shadow-soft dark:border-slate-600/60 dark:bg-slate-900/80 dark:text-slate-300 dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)] sm:grid-cols-2">
-            <div>
-              <p className="font-medium text-slate-800 dark:text-slate-100">Коды</p>
-              <p className="mt-1 text-xs">
-                Колонка «Часы» — сумма только числовых ячеек (8, 7.2, 11, 3…); буквы не входят. «Часы» и «Система»
-                не закреплены — прокрутите таблицу вправо, чтобы увидеть конец месяца без перекрытий; слева закреплено только
-                ФИО. Для сменщиков по каждой системе считается покрытие: в день должно быть не меньше двух человек «на работе»;
-                отпуск <span className="font-mono">о</span>, учёба <span className="font-mono">у</span> и пустые ячейки в расчёт не входят — см. блок предупреждений над таблицей и розовую обводку дат.
+          <div className="mt-2 space-y-4 rounded-2xl border border-slate-200/80 bg-white/80 px-4 py-4 text-sm text-slate-600 shadow-soft dark:border-slate-600/60 dark:bg-slate-900/80 dark:text-slate-300 dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)]">
+            <section>
+              <p className="font-medium text-slate-800 dark:text-slate-100">Коды в ячейках</p>
+              <ul className="mt-2 list-inside list-disc space-y-1 text-xs leading-relaxed">
+                <li>
+                  <span className="font-mono">о</span> — отпуск (даты задаются в кадровом справочнике)
+                </li>
+                <li>
+                  <span className="font-mono">у</span> — учёба
+                </li>
+                <li>
+                  <span className="font-mono">8</span>, <span className="font-mono">7.2</span> — рабочие часы при графике 5/2
+                </li>
+                <li>
+                  <span className="font-mono">11</span>, <span className="font-mono">3</span> — смены в цикле 11-3-8
+                </li>
+                <li>
+                  <span className="font-mono">11д</span>, <span className="font-mono">11в</span> — дневная и вечерняя смена при графике 2/2
+                </li>
+                <li>Пустая ячейка — выходной, праздник РФ или день без смены</li>
+              </ul>
+            </section>
+
+            <section className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <p className="font-medium text-slate-800 dark:text-slate-100">Таблица</p>
+                <ul className="mt-2 list-inside list-disc space-y-1 text-xs leading-relaxed">
+                  <li>
+                    Колонка «Часы» суммирует только числа (<span className="font-mono">8</span>,{" "}
+                    <span className="font-mono">7.2</span>, <span className="font-mono">11</span>…); буквы не учитываются
+                  </li>
+                  <li>Закреплено только ФИО — прокрутите вправо, чтобы увидеть конец месяца</li>
+                  <li>Наведите на ФИО — email, системы и тип графика сотрудника</li>
+                  <li>Клик по ФИО — выбрать цвет строки для удобства сравнения смен</li>
+                </ul>
+              </div>
+              <div>
+                <p className="font-medium text-slate-800 dark:text-slate-100">Покрытие смен</p>
+                <p className="mt-2 text-xs leading-relaxed">
+                  Для сменных графиков по каждой системе проверяется, что в день «на работе» не меньше двух человек.
+                  В расчёт не входят пустые ячейки, отпуск (<span className="font-mono">о</span>) и учёба (
+                  <span className="font-mono">у</span>). Проблемные даты подсвечиваются над таблицей и розовой обводкой.
+                </p>
+              </div>
+            </section>
+
+            <section className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <p className="font-medium text-slate-800 dark:text-slate-100">Автозаполнение</p>
+                <ul className="mt-2 list-inside list-disc space-y-1 text-xs leading-relaxed">
+                  <li>
+                    Тип графика, пол и отпуска берутся из кадрового справочника (карточка сотрудника)
+                  </li>
+                  <li>
+                    <strong>5/2</strong> — в будни без праздника: женский пол — <span className="font-mono">7.2</span>,
+                    мужской или не указан — <span className="font-mono">8</span>; сб, вс и праздники РФ — пусто
+                  </li>
+                  <li>
+                    <strong>Сменный</strong> — цикл 11-3-8; выходные по смене — пусто, отпуск — <span className="font-mono">о</span>
+                  </li>
+                  <li>
+                    <strong>2/2</strong> — чередование <span className="font-mono">11д</span> / <span className="font-mono">11в</span> и
+                    пустых дней
+                  </li>
+                  <li>
+                    «Только пустые ячейки» — не перезаписывать уже заполненные дни
+                  </li>
+                </ul>
+              </div>
+              <div>
+                <p className="font-medium text-slate-800 dark:text-slate-100">Ручные правки и перегенерация</p>
+                <ul className="mt-2 list-inside list-disc space-y-1 text-xs leading-relaxed">
+                  <li>Любую ячейку можно изменить вручную — значение сохранится сразу</li>
+                  <li>
+                    «Перегенерировать по ручным» достраивает остаток месяца по циклу от ваших правок — только для
+                    строки, в которой вы последним сохранили ячейку (кнопка неактивна, пока правок не было)
+                  </li>
+                  <li>После смены месяца выбор строки сбрасывается — снова сохраните ячейку у нужного сотрудника</li>
+                  <li>
+                    Цвета строк для сменщиков подбираются автоматически, если совпадают смена и день; ручной цвет
+                    важнее. В новом месяце, если цвет не задан, берётся из прошлого
+                  </li>
+                </ul>
+              </div>
+            </section>
+
+            <section>
+              <p className="font-medium text-slate-800 dark:text-slate-100">Импорт и выгрузка</p>
+              <p className="mt-2 text-xs leading-relaxed">
+                «Из Excel» — загрузка листа месяца из .xlsx: строки сопоставляются с сотрудниками по ФИО. «В Excel» —
+                выгрузка текущего месяца или всего года.
               </p>
-              <p className="mt-1 text-xs">
-                <span className="font-mono">о</span> только отпуск (из справочника) · <span className="font-mono">у</span> учёба ·{" "}
-                <span className="font-mono">8</span>/<span className="font-mono">11</span>/<span className="font-mono">3</span> смены ·{" "}
-                <span className="font-mono">7.2</span> · <span className="font-mono">11д</span>/<span className="font-mono">11в</span>
-              </p>
-            </div>
-            <div>
-              <p className="font-medium text-slate-800 dark:text-slate-100">Автозаполнение</p>
-              <p className="mt-1 text-xs">
-                5/2 — часы из пола в кадровом справочнике; праздники РФ и сб/вс — пустые ячейки. Отпуск — только «о», периоды в справочнике.
-                Подсветка: автоматически красим только сотрудников с типом графика «Сменный» (shift), если есть связь
-                «одинаковый день+код 11/3/8» или «совпавшая фаза цикла». Ручной цвет по клику на ФИО имеет приоритет.
-                Если ручной цвет в новом месяце не задан, берётся цвет из прошлого месяца.
-                «о»/«у» не смена. Наведите на ФИО — email, системы и тип графика.
-              </p>
-              <p className="mt-1 text-xs">
-                «Перегенерировать по ручным» действует только на строку сотрудника, у которого вы последним сохранили
-                ячейку в этом месяце (другие строки не меняются). Поштучные правки задают фрагмент; пустые после очистки
-                сохраняются; «пачки» автозаполнения не мешают достройке хвоста по 11-3-8 / 2/2 или 5/2. Смена месяца
-                сбрасывает выбор — снова сохраните ячейку у нужного человека.
-              </p>
-              <p className="mt-1 text-xs">
-                «Из Excel» — загрузка листа месяца из .xlsx: строки по ФИО сопоставляются с сотрудниками в системе.
-              </p>
-            </div>
+            </section>
           </div>
         )}
       </div>

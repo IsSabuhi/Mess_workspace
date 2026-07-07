@@ -99,9 +99,9 @@ export function Sidebar({ collapsed, onToggleCollapse }: Props) {
           {!collapsed && (
             <div className='leading-tight'>
               <p className='text-sm font-semibold text-slate-900 dark:text-white'>
-                Mess Workspace
+                Портал MES
               </p>
-              {/* <p className="text-xs text-slate-500 dark:text-slate-400">Отдел</p> */}
+              <p className="text-xs text-slate-500 dark:text-slate-400">Задачи · График · Команда</p>
             </div>
           )}
         </div>

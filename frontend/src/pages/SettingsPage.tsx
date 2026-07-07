@@ -18,7 +18,6 @@ import { toastApiError, toastSuccess } from "../lib/toast";
 const HOME_BLOCK_LABELS: Record<string, string> = {
   employee_expiry: "Контроль сроков сотрудников",
   my_tasks_panel: "Счётчики и блок «Мои задачи и сроки»",
-  employee_focus: "Подсказка «Фокус сотрудника»",
   manager_approval: "На согласовании",
   manager_team_overdue: "Просроченные задачи команды",
   manager_by_system: "По системам (проектам)",
@@ -29,7 +28,6 @@ const HOME_BLOCK_LABELS: Record<string, string> = {
 const HOME_BLOCK_HINTS: Record<string, string> = {
   employee_expiry: "Сводка по просроченным и истекающим срокам из справочника",
   my_tasks_panel: "Карточки со счётчиками и список ваших задач с дедлайнами",
-  employee_focus: "Краткая подсказка по приоритетам на главной",
   manager_approval: "Задачи в колонках согласования",
   manager_team_overdue: "Список просроченных задач по команде",
   manager_by_system: "Распределение активных задач по проектам",
@@ -105,7 +103,7 @@ export function SettingsPage() {
     if (!user) return [] as string[];
     const ids: string[] = [];
     if (!isManager) {
-      ids.push("my_tasks_panel", "employee_focus");
+      ids.push("my_tasks_panel");
     } else {
       ids.push(
         "manager_approval",
@@ -279,8 +277,7 @@ export function SettingsPage() {
                 <div>
                   <h2 className="text-lg font-semibold tracking-tight text-slate-900 dark:text-white">Профиль</h2>
                   <p className="mt-1 text-sm leading-relaxed text-slate-600 dark:text-slate-400">
-                    ФИО, должность и дата рождения. Системы назначает администратор. Email меняется только у
-                    администратора.
+                    Системы и Email назначает администратор.
                   </p>
                 </div>
               </div>

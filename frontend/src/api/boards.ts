@@ -22,6 +22,7 @@ export type BoardOut = {
   system_name: string | null;
   is_default: boolean;
   is_archived: boolean;
+  is_editing_locked: boolean;
   created_at: string;
   columns: KanbanColumnOut[];
 };
@@ -31,11 +32,13 @@ export async function getDefaultBoard(): Promise<BoardOut> {
 }
 
 export type BoardMemberOut = {
-  id: string;
+  id: string | null;
   board_id: string;
   user_id: string;
+  full_name: string;
   role: "viewer" | "editor" | "manager";
-  created_at: string;
+  created_at: string | null;
+  is_system_member: boolean;
 };
 
 export async function listBoards(): Promise<BoardOut[]> {
@@ -72,6 +75,13 @@ export async function updateBoard(boardId: string, body: { name?: string }): Pro
   return apiFetch<BoardOut>(`/api/v1/boards/${boardId}`, {
     method: "PATCH",
     body: JSON.stringify(body),
+  });
+}
+
+export async function setBoardEditingLock(boardId: string, is_editing_locked: boolean): Promise<BoardOut> {
+  return apiFetch<BoardOut>(`/api/v1/boards/${boardId}/editing-lock`, {
+    method: "PATCH",
+    body: JSON.stringify({ is_editing_locked }),
   });
 }
 

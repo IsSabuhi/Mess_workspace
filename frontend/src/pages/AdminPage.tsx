@@ -1027,7 +1027,7 @@ function UserFormModal({
   const [deleteBusy, setDeleteBusy] = useState(false);
 
   const { backdropProps: userFormBackdrop, stopPanelPointer: userFormPanelStop } = useModalLayer(true, onClose, {
-    closeOnBackdrop: !(saving || deleteBusy),
+    closeOnBackdrop: false,
     closeOnEscape: !(saving || deleteBusy),
   });
 

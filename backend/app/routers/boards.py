@@ -19,6 +19,7 @@ from app.permissions import BOARD_COLUMNS_MANAGE
 from app.schemas.board import (
     BoardCreate,
     BoardDeletePreviewOut,
+    BoardEditingLockUpdate,
     BoardMemberOut,
     BoardMembersReplace,
     BoardOut,
@@ -30,6 +31,13 @@ from app.schemas.board import (
 from app.schemas.audit import AuditEventOut
 from app.services.authz import user_has_permission
 from app.services.audit import list_audit_events_for_entity, record_audit_event
+from app.services.board_lock import can_bypass_board_editing_lock, can_manage_board_editing_lock, is_global_board_locked
+from app.services.board_members import (
+    build_board_member_list,
+    effective_board_member_role,
+    merge_system_board_members,
+    sync_system_members_on_board_create,
+)
 
 router = APIRouter(prefix="/boards", tags=["boards"])
 
@@ -55,6 +63,7 @@ def _board_to_out(board: Board, system_name: str | None = None) -> BoardOut:
         system_name=system_name,
         is_default=board.is_default,
         is_archived=board.is_archived,
+        is_editing_locked=board.is_editing_locked,
         created_at=board.created_at,
         columns=[KanbanColumnOut.model_validate(c) for c in cols],
     )
@@ -80,19 +89,19 @@ async def _board_visible_for_user(session: AsyncSession, user: User, board: Boar
     return False
 
 
-async def _board_member_role(session: AsyncSession, board_id: uuid.UUID, user_id: uuid.UUID) -> str | None:
-    role = await session.scalar(
-        select(BoardMember.role).where(BoardMember.board_id == board_id, BoardMember.user_id == user_id).limit(1)
-    )
-    return str(role) if role is not None else None
+async def _board_member_role(session: AsyncSession, board: Board, user_id: uuid.UUID) -> str | None:
+    return await effective_board_member_role(session, board, user_id)
 
 
 async def _can_manage_board_columns(session: AsyncSession, user: User, board: Board) -> bool:
+    if is_global_board_locked(board):
+        if not await can_bypass_board_editing_lock(session, user):
+            return False
     if user.is_superuser or await user_has_permission(session, user, BOARD_COLUMNS_MANAGE):
         return True
     if board.scope != BOARD_SCOPE_SYSTEM:
         return False
-    role = await _board_member_role(session, board.id, user.id)
+    role = await _board_member_role(session, board, user.id)
     return role in {BOARD_MEMBER_ROLE_EDITOR, BOARD_MEMBER_ROLE_MANAGER}
 
 
@@ -101,7 +110,7 @@ async def _can_delete_board(session: AsyncSession, user: User, board: Board) -> 
         return True
     if board.scope != BOARD_SCOPE_SYSTEM:
         return False
-    role = await _board_member_role(session, board.id, user.id)
+    role = await _board_member_role(session, board, user.id)
     return role == BOARD_MEMBER_ROLE_MANAGER
 
 
@@ -175,13 +184,15 @@ async def create_board(
     )
     session.add(board)
     await session.flush()
-    session.add(
-        BoardMember(
-            board_id=board.id,
-            user_id=creator.id,
-            role=BOARD_MEMBER_ROLE_MANAGER,
+    await sync_system_members_on_board_create(session, board, creator.id)
+    if board.scope != BOARD_SCOPE_SYSTEM:
+        session.add(
+            BoardMember(
+                board_id=board.id,
+                user_id=creator.id,
+                role=BOARD_MEMBER_ROLE_MANAGER,
+            )
         )
-    )
     await session.flush()
     await session.refresh(board, attribute_names=["columns", "members"])
     system_name = None
@@ -211,7 +222,7 @@ async def list_board_members(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Board not found")
     if not await _board_visible_for_user(session, user, board):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
-    return [BoardMemberOut.model_validate(m) for m in board.members]
+    return await build_board_member_list(session, board)
 
 
 @router.put("/{board_id}/members", response_model=list[BoardMemberOut])
@@ -227,7 +238,8 @@ async def replace_board_members(
     if not await _can_manage_board_settings(session, user, board):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Недостаточно прав для управления доской")
 
-    unique_members = list({m.user_id: m for m in body.members}.values())
+    unique_members = await merge_system_board_members(session, board, body.members)
+    unique_members = list({m.user_id: m for m in unique_members}.values())
     if board.scope == BOARD_SCOPE_SYSTEM and board.system_id is not None:
         for m in unique_members:
             u = await session.get(User, m.user_id)
@@ -252,18 +264,48 @@ async def replace_board_members(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Недопустимый участник доски")
         session.add(BoardMember(board_id=board_id, user_id=m.user_id, role=m.role))
     await session.flush()
-    rows = (
-        await session.execute(select(BoardMember).where(BoardMember.board_id == board_id).order_by(BoardMember.created_at))
-    ).scalars().all()
+    await session.refresh(board, attribute_names=["members"])
     await record_audit_event(
         session,
         entity_type="board",
         entity_id=board_id,
         action="board.members.replaced",
         actor_user_id=user.id,
-        details={"member_count": len(rows)},
+        details={"member_count": len(unique_members)},
     )
-    return [BoardMemberOut.model_validate(r) for r in rows]
+    return await build_board_member_list(session, board)
+
+
+@router.patch("/{board_id}/editing-lock", response_model=BoardOut)
+async def set_board_editing_lock(
+    board_id: uuid.UUID,
+    body: BoardEditingLockUpdate,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> BoardOut:
+    board = (
+        await session.execute(select(Board).where(Board.id == board_id).options(selectinload(Board.columns)))
+    ).scalar_one_or_none()
+    if not board:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Board not found")
+    if board.scope != BOARD_SCOPE_GLOBAL:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Блокировка доступна только для основной (глобальной) доски",
+        )
+    if not await can_manage_board_editing_lock(session, user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Недостаточно прав для управления блокировкой доски")
+    board.is_editing_locked = body.is_editing_locked
+    await session.flush()
+    await record_audit_event(
+        session,
+        entity_type="board",
+        entity_id=board.id,
+        action="board.editing_lock.changed",
+        actor_user_id=user.id,
+        details={"is_editing_locked": board.is_editing_locked},
+    )
+    return _board_to_out(board)
 
 
 @router.patch("/{board_id}", response_model=BoardOut)

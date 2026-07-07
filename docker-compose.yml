@@ -6,10 +6,11 @@ services:
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
       - minio_data:/data
+    restart: unless-stopped
 
   minio-init:
     image: minio/mc:latest
@@ -26,29 +27,64 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    env_file:
+      - .env
     environment:
-      DATABASE_URL: ${DATABASE_URL}
-      SECRET_KEY: ${SECRET_KEY:-dev-secret-change-in-production}
+      # В Docker MinIO доступен по имени сервиса, не localhost.
+      MINIO_ENDPOINT: http://minio:9000
       STORAGE_BACKEND: ${STORAGE_BACKEND:-minio}
-      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://minio:9000}
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
-      MINIO_BUCKET: ${MINIO_BUCKET:-mess-workspace}
-      MINIO_PUBLIC_BASE_URL: ${MINIO_PUBLIC_BASE_URL:-http://localhost:9000}
+    # Postgres на хосте / в LAN: в DATABASE_URL укажите IP сервера БД или host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
-      - minio
-      - minio-init
+      minio-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
 
   web:
     build:
       context: ./frontend
       dockerfile: Dockerfile
       args:
+        # В проде оставьте пустым: браузер ходит на тот же origin, nginx проксирует /api.
         VITE_API_BASE: ${VITE_API_BASE:-}
     ports:
       - "${WEB_PORT:-8080}:80"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Одноразовые скрипты (миграции данных, infer_employee_genders и т.д.):
+  # docker compose --profile jobs run --rm api-job scripts/infer_employee_genders.py --write
+  api-job:
+    profiles: ["jobs"]
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      MINIO_ENDPOINT: http://minio:9000
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-minio}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    entrypoint: ["python"]
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
 
 volumes:
   minio_data:

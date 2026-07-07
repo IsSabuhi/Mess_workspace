@@ -2,7 +2,6 @@ import uuid
 from datetime import datetime
 
 from pydantic import BaseModel, Field, model_validator
-
 from app.schemas.common import ORMModel
 
 
@@ -39,16 +38,19 @@ class BoardOut(ORMModel):
     system_name: str | None = None
     is_default: bool
     is_archived: bool = False
+    is_editing_locked: bool = False
     created_at: datetime
     columns: list[KanbanColumnOut] = []
 
 
-class BoardMemberOut(ORMModel):
-    id: uuid.UUID
+class BoardMemberOut(BaseModel):
+    id: uuid.UUID | None = None
     board_id: uuid.UUID
     user_id: uuid.UUID
+    full_name: str = ""
     role: str
-    created_at: datetime
+    created_at: datetime | None = None
+    is_system_member: bool = False
 
 
 class BoardCreate(BaseModel):
@@ -70,6 +72,10 @@ class BoardCreate(BaseModel):
 
 class BoardUpdate(BaseModel):
     name: str | None = Field(None, max_length=255)
+
+
+class BoardEditingLockUpdate(BaseModel):
+    is_editing_locked: bool
 
 
 class BoardMemberSetItem(BaseModel):

@@ -8,7 +8,6 @@ ALLOWED_HOME_DASHBOARD_BLOCK_IDS = frozenset(
     {
         "employee_expiry",
         "my_tasks_panel",
-        "employee_focus",
         "manager_approval",
         "manager_team_overdue",
         "manager_by_system",

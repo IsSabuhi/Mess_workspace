@@ -163,7 +163,7 @@ export function HomePage() {
   ];
 
   return (
-    <AppShell title="Обзор" subtitle="Добро пожаловать в рабочий портал отдела">
+    <AppShell title="Обзор" subtitle="Добро пожаловать в Портал MES">
       <div className="flex flex-col gap-6">
         {/* Герой: профиль + статистика + быстрые ссылки */}
         {user && (
@@ -455,23 +455,6 @@ export function HomePage() {
                 </p>
                 <p className="mt-1 text-xs text-amber-700/80 dark:text-amber-300/80">
                   Запланируйте продление заранее
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {!isManager && user && showBlock("employee_focus") && (
-          <div className="rounded-2xl border border-dashed border-slate-200/90 bg-slate-50/50 p-5 dark:border-slate-600 dark:bg-slate-900/40">
-            <div className="flex items-start gap-3">
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-slate-600 shadow-sm dark:bg-slate-800 dark:text-slate-300">
-                <Briefcase className="h-5 w-5" />
-              </span>
-              <div>
-                <h3 className="font-semibold text-slate-900 dark:text-white">Фокус сотрудника</h3>
-                <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                  Отслеживайте блок «Мои задачи и сроки»: сначала закрывайте просроченные, затем задачи с ближайшим
-                  дедлайном. Командная аналитика доступна только руководителям и администраторам.
                 </p>
               </div>
             </div>

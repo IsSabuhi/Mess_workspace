@@ -1,4 +1,4 @@
-# Mess Workspace
+# Портал MES
 
 Корпоративный портал отдела **MES** для управления операционной работой: задачи по системам, графики смен, справочник сотрудников, база знаний, роли/права и аудит действий.
 
@@ -6,7 +6,7 @@
 
 ## Что это за продукт
 
-`Mess Workspace` объединяет в одном интерфейсе:
+**Портал MES** объединяет в одном интерфейсе:
 
 - Kanban-доски (глобальная + системные доски с доступом по участникам),
 - расписание смен с автогенерацией и ручными правками,
@@ -108,16 +108,21 @@
 
 ## Быстрый запуск (Docker Compose)
 
+PostgreSQL **не входит** в compose — нужна уже развёрнутая внешняя БД.
+
 ```bash
-docker compose up --build
+cp .env.template .env
+# Отредактируйте DATABASE_URL, SECRET_KEY, INITIAL_ADMIN_*, MINIO_PUBLIC_BASE_URL
+
+docker compose up --build -d
 ```
 
 После запуска:
 
 - Приложение: `http://localhost:8080` (или ваш `WEB_PORT`)
 - Swagger через прокси: `http://localhost:8080/api/docs`
-- MinIO API: `http://localhost:9000`
-- MinIO Console: `http://localhost:9001`
+- MinIO API: `http://localhost:9000` (порт `MINIO_API_PORT`)
+- MinIO Console: `http://localhost:9001` (порт `MINIO_CONSOLE_PORT`)
 
 Что запускается:
 
@@ -130,7 +135,37 @@ docker compose up --build
 
 1. `alembic upgrade head`
 2. запуск `uvicorn app.main:app --host 0.0.0.0 --port 8000`
-3. авто-создание первого суперпользователя при пустой БД (`INITIAL_ADMIN_*`).
+3. авто-создание первого суперпользователя при пустой БД (`INITIAL_ADMIN_*` из `.env`).
+
+### Внешний PostgreSQL
+
+В `DATABASE_URL` укажите хост, доступный **из контейнера** `api`:
+
+- Postgres на том же сервере: `host.docker.internal` (в compose включён `extra_hosts`) или IP сервера в LAN;
+- Postgres на отдельном хосте: его IP/имя и порт `5432`;
+- не используйте `localhost` — для контейнера это сам контейнер, не хост.
+
+Убедитесь, что PostgreSQL принимает подключения с Docker-сети (`pg_hba.conf`, firewall).
+
+### Одноразовые скрипты в Docker
+
+Пока `api` запущен:
+
+```bash
+docker compose exec api python scripts/infer_employee_genders.py
+docker compose exec api python scripts/infer_employee_genders.py --write
+```
+
+Без запущенного `api` (профиль `jobs`):
+
+```bash
+docker compose --profile jobs run --rm api-job scripts/infer_employee_genders.py --write
+```
+
+### Конфигурация для Docker
+
+Корневой файл `.env` (из `.env.template`) передаётся в контейнер `api` через `env_file`.
+Для локальной разработки без Docker по-прежнему используйте `backend/.env` (см. ниже).
 
 ## Локальная разработка (без Docker)
 
@@ -158,7 +193,9 @@ Vite-прокси направляет `/api` и `/uploads` на `http://127.0.0
 
 ## Конфигурация окружения
 
-### Backend (`backend/.env`)
+### Backend (`backend/.env` — локальная разработка без Docker)
+
+Для `docker compose` используйте корневой `.env` (см. `.env.template`).
 
 Минимально важные переменные:
 

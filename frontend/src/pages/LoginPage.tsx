@@ -50,7 +50,7 @@ export function LoginPage() {
             Вход
           </h1>
           <p className='mt-1 text-sm text-slate-500 dark:text-slate-400'>
-            Внутренний портал отдела
+            Внутренний портал MES
           </p>
         </div>
 

@@ -13,7 +13,7 @@ import {
 import { arrayMove, SortableContext, horizontalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { GripVertical, Pencil, Plus, Tags, Trash2 } from "lucide-react";
+import { GripVertical, Lock, LockOpen, Pencil, Plus, Tags, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
@@ -25,6 +25,7 @@ import {
   getDefaultBoard,
   listBoardMembers,
   listBoards,
+  setBoardEditingLock,
   updateBoardColumn,
 } from "../api/boards";
 import type { BoardOut, KanbanColumnOut } from "../api/boards";
@@ -48,10 +49,19 @@ import { AppShell } from "../components/AppShell";
 import { useAuth } from "../context/AuthContext";
 import {
   PERM,
+  boardPermissionContext,
+  canBypassBoardEditingLock,
+  canCommentOnTask,
+  canCreateTaskOnBoard,
   canDeleteTask,
+  canEditTaskDescription,
+  canEditTaskTitle,
+  canFullyEditTask,
   canManageBoardColumns,
+  canManageBoardColumnsOnBoard,
+  canManageBoardEditingLock,
+  canManageTaskTags,
   canMoveTask,
-  canUpdateTask,
   hasPermission,
 } from "../lib/permissions";
 import { computeTaskKpis } from "../lib/taskAnalyticsFilters";
@@ -387,8 +397,6 @@ export function TasksPage() {
     }),
   );
 
-  const canCreateByPermission = !!user && hasPermission(user, PERM.TASKS_CREATE);
-  const canManageColsByPermission = !!user && canManageBoardColumns(user);
   const canCreateBoards = !!user?.is_superuser;
   const canViewAllSystems = !!(
     user &&
@@ -448,23 +456,20 @@ export function TasksPage() {
     const rows = boardMembersQuery.data ?? [];
     return rows.find((m) => m.user_id === user.id)?.role ?? null;
   }, [boardMembersQuery.data, user]);
-  const canCreate = !!(
-    user &&
-    (canCreateByPermission ||
-      (board?.scope === "system" &&
-        (currentBoardMemberRole === "editor" || currentBoardMemberRole === "manager")))
+  const boardPermCtx = useMemo(
+    () => boardPermissionContext(board, currentBoardMemberRole),
+    [board, currentBoardMemberRole],
   );
-  const canManageCols = !!(
-    user &&
-    (canManageColsByPermission ||
-      (board?.scope === "system" &&
-        (currentBoardMemberRole === "editor" || currentBoardMemberRole === "manager")))
-  );
+  const canCreate = !!(user && canCreateTaskOnBoard(user, boardPermCtx));
+  const canManageTags = !!(user && canManageTaskTags(user, boardPermCtx));
+  const canManageCols = !!(user && canManageBoardColumnsOnBoard(user, boardPermCtx));
   const canDeleteCurrentBoard = !!(
     user &&
     board?.scope === "system" &&
-    (canManageColsByPermission || currentBoardMemberRole === "manager")
+    (canManageBoardColumns(user) || currentBoardMemberRole === "manager")
   );
+  const isBoardEditingLocked = !!(board?.scope === "global" && board.is_editing_locked);
+  const canManageBoardLock = !!(user && board?.scope === "global" && canManageBoardEditingLock(user));
   const tasks = tasksQuery.data ?? [];
   const boardSystems = useMemo(() => {
     if (!user) return [];
@@ -692,6 +697,33 @@ export function TasksPage() {
     },
     onError: (e: unknown) => toastApiError(e, "Не удалось создать доску"),
   });
+  const boardLockMut = useMutation({
+    mutationFn: (locked: boolean) => {
+      if (!board?.id) throw new Error("Доска не загружена");
+      return setBoardEditingLock(board.id, locked);
+    },
+    onMutate: async (locked) => {
+      const boardId = board?.id;
+      if (!boardId) return;
+      await qc.cancelQueries({ queryKey: ["boards"] });
+      const prevBoards = qc.getQueryData<BoardOut[]>(["boards"]);
+      const prevDefault = qc.getQueryData<BoardOut>(["board", "default"]);
+      const patch = (b: BoardOut): BoardOut => ({ ...b, is_editing_locked: locked });
+      qc.setQueryData<BoardOut[]>(["boards"], (old) => old?.map((b) => (b.id === boardId ? patch(b) : b)) ?? old);
+      qc.setQueryData<BoardOut>(["board", "default"], (old) => (old?.id === boardId && old ? patch(old) : old));
+      return { prevBoards, prevDefault };
+    },
+    onError: (e, _locked, ctx) => {
+      if (ctx?.prevBoards) qc.setQueryData(["boards"], ctx.prevBoards);
+      if (ctx?.prevDefault) qc.setQueryData(["board", "default"], ctx.prevDefault);
+      toastApiError(e, "Не удалось изменить блокировку доски");
+    },
+    onSuccess: (updated) => {
+      qc.setQueryData<BoardOut>(["board", "default"], (old) => (old?.id === updated.id ? updated : old));
+      qc.setQueryData<BoardOut[]>(["boards"], (old) => old?.map((b) => (b.id === updated.id ? updated : b)) ?? old);
+      toastSuccess(updated.is_editing_locked ? "Доска заблокирована для редактирования" : "Блокировка доски снята");
+    },
+  });
   const moveMut = useMutation({
     mutationFn: ({ id, column_id }: { id: string; column_id: string }) => updateTask(id, { column_id }),
     onSuccess: (updated) => {
@@ -835,7 +867,7 @@ export function TasksPage() {
     setEditingTagId(null);
   }, []);
   const { backdropProps: tagModalBackdrop, stopPanelPointer: tagModalPanelStop } = useModalLayer(
-    !!(tagModalOpen && canCreate),
+    !!(tagModalOpen && canManageTags),
     closeTagModal,
   );
 
@@ -989,7 +1021,26 @@ export function TasksPage() {
 
   function saveDrawer() {
     if (!user || !drawerTaskId || !drawerTask) return;
-    if (!canUpdateTask(user, drawerTask)) return;
+    const lockedLimited = isBoardEditingLocked && !canBypassBoardEditingLock(user);
+
+    if (lockedLimited) {
+      const body: {
+        description?: string | null;
+        column_id?: string;
+      } = {};
+      if (canEditTaskDescription(user, drawerTask, boardPermCtx)) {
+        const desc = editDescription.trim() || null;
+        if (desc !== (drawerTask.description ?? null)) body.description = desc;
+      }
+      if (canMoveTask(user, drawerTask, boardPermCtx) && editColumnId !== drawerTask.column_id) {
+        body.column_id = editColumnId;
+      }
+      if (Object.keys(body).length === 0) return;
+      saveMut.mutate({ id: drawerTaskId, body });
+      return;
+    }
+
+    if (!canFullyEditTask(user, drawerTask, boardPermCtx)) return;
     saveMut.mutate({
       id: drawerTaskId,
       body: {
@@ -1006,7 +1057,7 @@ export function TasksPage() {
   }
 
   function submitComment() {
-    if (!drawerTaskId) return;
+    if (!drawerTaskId || !drawerCanComment) return;
     const body = commentBody.trim();
     if (!body) return;
     addCommentMut.mutate({ taskId: drawerTaskId, body });
@@ -1068,7 +1119,7 @@ export function TasksPage() {
   }
 
   function moveTask(task: TaskOut, col: KanbanColumnOut) {
-    if (!user || !canMoveTask(user, task)) return;
+    if (!user || !canMoveTask(user, task, boardPermCtx)) return;
     if (task.column_id === col.id) return;
     moveMut.mutate({ id: task.id, column_id: col.id });
   }
@@ -1161,7 +1212,7 @@ export function TasksPage() {
     const overId = oid;
     if (taskId === overId) return;
     const task = tasks.find((t) => t.id === taskId);
-    if (!task || !canMoveTask(user, task)) return;
+    if (!task || !canMoveTask(user, task, boardPermCtx)) return;
 
     const targetColId = resolveColumnIdFromOver(overId);
     if (!targetColId) return;
@@ -1255,8 +1306,13 @@ export function TasksPage() {
     }
   }
 
-  const drawerCanEdit = user && drawerTask ? canUpdateTask(user, drawerTask) : false;
-  const drawerCanDelete = !!(user && drawerTask && canDeleteTask(user));
+  const drawerCanEditTitle = user && drawerTask ? canEditTaskTitle(user, drawerTask, boardPermCtx) : false;
+  const drawerCanEditDescription = user && drawerTask ? canEditTaskDescription(user, drawerTask, boardPermCtx) : false;
+  const drawerCanFullyEdit = user && drawerTask ? canFullyEditTask(user, drawerTask, boardPermCtx) : false;
+  const drawerCanChangeColumn = user && drawerTask ? canMoveTask(user, drawerTask, boardPermCtx) : false;
+  const drawerCanSave = drawerCanFullyEdit || drawerCanEditDescription || drawerCanChangeColumn;
+  const drawerCanDelete = !!(user && drawerTask && canDeleteTask(user, boardPermCtx));
+  const drawerCanComment = !!(user && canCommentOnTask(user, boardPermCtx));
   const newCommentMentionToken = activeMentionToken(commentBody);
   const newCommentMentionList = newCommentMentionToken
     ? mentionChoices
@@ -1280,7 +1336,15 @@ export function TasksPage() {
   const displayError = formError ?? loadError;
 
   return (
-    <AppShell title="Задачи" subtitle="Канбан по колонкам доски по умолчанию" wide>
+    <AppShell title="Задачи" wide>
+      {isBoardEditingLocked && (
+        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50/90 px-4 py-3 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
+          <p className="font-medium">Доска заблокирована для редактирования</p>
+          <p className="mt-1 text-amber-800 dark:text-amber-300">
+            Можно перемещать задачи, менять описание и оставлять комментарии. Создание задач и изменение заголовка, сроков и других полей временно недоступно.
+          </p>
+        </div>
+      )}
       <div className="mb-4 flex flex-wrap items-center gap-3">
         {(canViewAllSystems || boardSystems.length > 1) && (
           <label className="flex items-center gap-2 text-sm">
@@ -1343,7 +1407,7 @@ export function TasksPage() {
             + Задача
           </button>
         )}
-        {canCreate && (
+        {canManageTags && (
           <button
             type="button"
             onClick={openTagCreateModal}
@@ -1363,6 +1427,25 @@ export function TasksPage() {
             className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
           >
             + Колонка
+          </button>
+        )}
+        {canManageBoardLock && board && (
+          <button
+            type="button"
+            disabled={boardLockMut.isPending}
+            onClick={() => boardLockMut.mutate(!board.is_editing_locked)}
+            className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-sm font-semibold shadow-sm disabled:opacity-60 ${
+              board.is_editing_locked
+                ? "border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+                : "border-slate-200 bg-white text-slate-800 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
+            }`}
+          >
+            {board.is_editing_locked ? <LockOpen className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
+            {boardLockMut.isPending
+              ? "Сохранение…"
+              : board.is_editing_locked
+                ? "Снять блокировку"
+                : "Заблокировать доску"}
           </button>
         )}
         {canDeleteCurrentBoard && board?.scope === "system" && (
@@ -1605,12 +1688,12 @@ export function TasksPage() {
                       key={task.id}
                       task={task}
                       isOverdue={overdueById.has(task.id)}
-                      canDrag={!!user && canMoveTask(user, task)}
+                      canDrag={!!user && canMoveTask(user, task, boardPermCtx)}
                       onOpen={() => void openDrawer(task)}
-                      canDelete={!!user && canDeleteTask(user)}
+                      canDelete={!!user && canDeleteTask(user, boardPermCtx)}
                       onDelete={() => confirmDeleteTask(task)}
                       moveButtons={
-                        user && canMoveTask(user, task) ? (
+                        user && canMoveTask(user, task, boardPermCtx) ? (
                           <div className="mt-1 flex flex-wrap gap-1">
                             {sortedCols
                               .filter((c) => c.id !== task.column_id)
@@ -1792,7 +1875,7 @@ export function TasksPage() {
                 <input
                   value={editTitle}
                   onChange={(e) => setEditTitle(e.target.value)}
-                  disabled={!drawerCanEdit}
+                  disabled={!drawerCanEditTitle}
                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
                 />
               </div>
@@ -1801,7 +1884,7 @@ export function TasksPage() {
                 <textarea
                   value={editDescription}
                   onChange={(e) => setEditDescription(e.target.value)}
-                  disabled={!drawerCanEdit}
+                  disabled={!drawerCanEditDescription}
                   rows={5}
                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
                 />
@@ -1812,7 +1895,7 @@ export function TasksPage() {
                   <select
                     value={editPriority}
                     onChange={(e) => setEditPriority(e.target.value as TaskOut["priority"])}
-                    disabled={!drawerCanEdit}
+                    disabled={!drawerCanFullyEdit}
                     className="w-full rounded-xl border border-slate-200 bg-white px-2 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
                   >
                     {(Object.keys(PRIORITY_LABEL) as TaskOut["priority"][]).map((p) => (
@@ -1828,7 +1911,7 @@ export function TasksPage() {
                     type="datetime-local"
                     value={editDue}
                     onChange={(e) => setEditDue(e.target.value)}
-                    disabled={!drawerCanEdit}
+                    disabled={!drawerCanFullyEdit}
                     className="w-full rounded-xl border border-slate-200 bg-white px-2 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
                   />
                 </div>
@@ -1838,7 +1921,7 @@ export function TasksPage() {
                 <select
                   value={editSystemId}
                   onChange={(e) => setEditSystemId(e.target.value)}
-                  disabled={!drawerCanEdit}
+                  disabled={!drawerCanFullyEdit}
                   className="w-full rounded-xl border border-slate-200 bg-white px-2 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
                 >
                   {boardSystems.map((s) => (
@@ -1853,7 +1936,7 @@ export function TasksPage() {
                 <select
                   value={editColumnId}
                   onChange={(e) => setEditColumnId(e.target.value)}
-                  disabled={!drawerCanEdit}
+                  disabled={!drawerCanChangeColumn}
                   className="w-full rounded-xl border border-slate-200 bg-white px-2 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
                 >
                   {sortedCols.map((c) => (
@@ -1870,7 +1953,7 @@ export function TasksPage() {
                     value={editAssigneeIds}
                     onChange={setEditAssigneeIds}
                     candidates={assigneeChoices}
-                    disabled={!drawerCanEdit}
+                    disabled={!drawerCanFullyEdit}
                     selfId={user?.id ?? null}
                     selfDisplayName={user?.full_name ?? "я"}
                   />
@@ -1887,7 +1970,7 @@ export function TasksPage() {
                         <button
                           key={tag.id}
                           type="button"
-                          disabled={!drawerCanEdit}
+                          disabled={!drawerCanFullyEdit}
                           onClick={() =>
                             setEditTagIds((prev) =>
                               prev.includes(tag.id)
@@ -1907,7 +1990,7 @@ export function TasksPage() {
                       );
                     })}
                     </div>
-                    {drawerCanEdit && (
+                    {drawerCanFullyEdit && (
                       <div className="mt-2 flex items-center gap-2">
                         <button
                           type="button"
@@ -1951,7 +2034,7 @@ export function TasksPage() {
                         <p className="font-medium text-slate-700 dark:text-slate-200">
                           {comment.author?.full_name ?? "Пользователь"} · {formatDt(comment.created_at)}
                         </p>
-                        {user && (drawerCanEdit || comment.author_id === user.id) && (
+                        {user && (drawerCanFullyEdit || comment.author_id === user.id) && (
                           <div className="flex gap-1">
                             <button
                               type="button"
@@ -2071,20 +2154,22 @@ export function TasksPage() {
                   {formatDt(drawerTask.updated_at)}
                 </p>
               </div>
-              {drawerCanEdit && (
+              {drawerCanSave && (
                 <div className="flex justify-end gap-2 pb-2 pt-2">
-                  <button
-                    type="button"
-                    disabled={archiveMut.isPending}
-                    onClick={() => toggleArchiveTask(drawerTask)}
-                    className="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-60 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
-                  >
-                    {archiveMut.isPending
-                      ? "Обновление…"
-                      : drawerTask.archived_at
-                        ? "Восстановить"
-                        : "В архив"}
-                  </button>
+                  {drawerCanFullyEdit && (
+                    <button
+                      type="button"
+                      disabled={archiveMut.isPending}
+                      onClick={() => toggleArchiveTask(drawerTask)}
+                      className="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-60 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+                    >
+                      {archiveMut.isPending
+                        ? "Обновление…"
+                        : drawerTask.archived_at
+                          ? "Восстановить"
+                          : "В архив"}
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={closeDrawer}
@@ -2115,10 +2200,10 @@ export function TasksPage() {
                   </button>
                 </div>
               )}
-              {!drawerCanEdit && !drawerCanDelete && (
+              {!drawerCanSave && !drawerCanDelete && (
                 <p className="pb-6 text-sm text-slate-500">Нет прав на редактирование этой задачи.</p>
               )}
-              {!drawerCanEdit && drawerCanDelete && (
+              {!drawerCanSave && drawerCanDelete && (
                 <p className="pb-2 text-sm text-slate-500">Редактирование недоступно, удаление — по кнопке ниже.</p>
               )}
             </div>
@@ -2252,7 +2337,7 @@ export function TasksPage() {
         </div>
       )}
 
-      {tagModalOpen && canCreate && (
+      {tagModalOpen && canManageTags && (
         <div
           {...tagModalBackdrop}
           className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"

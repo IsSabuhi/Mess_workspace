@@ -275,7 +275,7 @@ export function ManagerTeamDashboardPage() {
   if (!canViewManagerTeamDashboard(user)) return <Navigate to="/" replace />;
 
   return (
-    <AppShell title="Аналитика задач" subtitle="Сводка по Kanban для руководителя" wide>
+    <AppShell title="Аналитика задач" subtitle="Сводка по Kanban" wide>
       <div className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200/80 bg-white/80 px-4 py-3 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
           <Link to="/" className="inline-flex items-center gap-1 text-sm font-medium text-sky-600 hover:underline dark:text-sky-400">
