@@ -5,6 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.deps import get_current_user
@@ -16,6 +17,11 @@ from app.services.notifications import sync_task_deadline_notifications
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
 
+def _notification_to_out(item: Notification) -> NotificationOut:
+    board_id = item.task.board_id if item.task is not None else None
+    return NotificationOut.model_validate(item).model_copy(update={"board_id": board_id})
+
+
 @router.get("", response_model=list[NotificationOut])
 async def list_notifications(
     session: Annotated[AsyncSession, Depends(get_db)],
@@ -25,12 +31,16 @@ async def list_notifications(
 ) -> list[NotificationOut]:
     await sync_task_deadline_notifications(session, user)
     safe_limit = max(1, min(limit, 200))
-    stmt = select(Notification).where(Notification.user_id == user.id)
+    stmt = (
+        select(Notification)
+        .where(Notification.user_id == user.id)
+        .options(selectinload(Notification.task))
+    )
     if unread_only:
         stmt = stmt.where(Notification.read_at.is_(None))
     stmt = stmt.order_by(Notification.created_at.desc()).limit(safe_limit)
     rows = (await session.execute(stmt)).scalars().all()
-    return [NotificationOut.model_validate(n) for n in rows]
+    return [_notification_to_out(n) for n in rows]
 
 
 @router.get("/unread-count", response_model=NotificationUnreadCount)
@@ -54,14 +64,25 @@ async def mark_read(
     session: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
 ) -> NotificationOut:
-    item = await session.get(Notification, notification_id)
+    item = await session.scalar(
+        select(Notification)
+        .where(Notification.id == notification_id)
+        .options(selectinload(Notification.task))
+    )
     if not item or item.user_id != user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification not found")
     if item.read_at is None:
         item.read_at = datetime.now(timezone.utc)
         await session.commit()
         await session.refresh(item)
-    return NotificationOut.model_validate(item)
+        # re-load task after refresh (relationship may be expired)
+        item = await session.scalar(
+            select(Notification)
+            .where(Notification.id == notification_id)
+            .options(selectinload(Notification.task))
+        )
+        assert item is not None
+    return _notification_to_out(item)
 
 
 @router.post("/read-all", response_model=Message)

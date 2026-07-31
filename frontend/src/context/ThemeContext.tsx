@@ -9,11 +9,11 @@ import {
   type ReactNode,
 } from "react";
 
-type Theme = "light" | "dark" | "system";
+type Theme = "light" | "dark";
 
 type ThemeContextValue = {
   theme: Theme;
-  resolved: "light" | "dark";
+  resolved: Theme;
   setTheme: (t: Theme) => void;
   toggle: () => void;
 };
@@ -22,39 +22,25 @@ const STORAGE_KEY = "mess-workspace-theme";
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
-function getSystemDark(): boolean {
-  return window.matchMedia("(prefers-color-scheme: dark)").matches;
-}
-
-function applyClass(theme: Theme) {
-  const root = document.documentElement;
-  const dark = theme === "dark" || (theme === "system" && getSystemDark());
-  root.classList.toggle("dark", dark);
+function readStoredTheme(): Theme {
+  const s = localStorage.getItem(STORAGE_KEY);
+  if (s === "light" || s === "dark") return s;
+  // Раньше был режим "system" — один раз фиксируем в явную тему по ответу браузера.
+  if (s === "system") {
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  return "light";
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>(() => {
-    const s = localStorage.getItem(STORAGE_KEY) as Theme | null;
-    return s === "light" || s === "dark" || s === "system" ? s : "system";
-  });
-
-  const resolved: "light" | "dark" =
-    theme === "dark" || (theme === "system" && getSystemDark()) ? "dark" : "light";
+  const [theme, setThemeState] = useState<Theme>(readStoredTheme);
 
   useLayoutEffect(() => {
-    applyClass(theme);
+    document.documentElement.classList.toggle("dark", theme === "dark");
   }, [theme]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, theme);
-  }, [theme]);
-
-  useEffect(() => {
-    if (theme !== "system") return;
-    const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const handler = () => applyClass("system");
-    mq.addEventListener("change", handler);
-    return () => mq.removeEventListener("change", handler);
   }, [theme]);
 
   const setTheme = useCallback((t: Theme) => {
@@ -62,12 +48,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const toggle = useCallback(() => {
-    setThemeState(resolved === "dark" ? "light" : "dark");
-  }, [resolved]);
+    setThemeState((prev) => (prev === "dark" ? "light" : "dark"));
+  }, []);
 
   const value = useMemo(
-    () => ({ theme, resolved, setTheme, toggle }),
-    [theme, resolved, setTheme, toggle],
+    () => ({ theme, resolved: theme, setTheme, toggle }),
+    [theme, setTheme, toggle],
   );
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;

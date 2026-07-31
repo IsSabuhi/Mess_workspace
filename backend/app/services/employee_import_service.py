@@ -195,6 +195,7 @@ async def run_employee_import(session: AsyncSession, rows: list[ParsedEmployeeRo
             hashed_password=hash_password(password_plain),
             is_active=True,
             is_superuser=False,
+            must_change_password=True,
         )
         session.add(user)
         await session.flush()

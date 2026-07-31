@@ -18,6 +18,7 @@ from app.models.role import Permission, Role, RolePermission, UserRole
 from app.models.system import System
 from app.models.system_setting import SystemSetting
 from app.models.task import Task, TaskPriority
+from app.models.task_attachment import TaskAttachment
 from app.models.task_comment import TaskComment
 from app.models.task_tag import TaskTag, TaskTagLink
 from app.models.user import User
@@ -51,6 +52,7 @@ __all__ = [
     "SystemSetting",
     "Task",
     "TaskPriority",
+    "TaskAttachment",
     "TaskComment",
     "TaskTag",
     "TaskTagLink",

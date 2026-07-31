@@ -9,7 +9,7 @@ from app.database import get_db
 from app.deps import get_current_user
 from app.models import Board, BoardMember, TaskTag, User
 from app.models.board import BOARD_MEMBER_ROLE_EDITOR, BOARD_MEMBER_ROLE_MANAGER, BOARD_SCOPE_SYSTEM
-from app.permissions import TASKS_CREATE
+from app.permissions import BOARD_COLUMNS_MANAGE
 from app.services.authz import user_has_permission
 from app.schemas.task_tag import TaskTagCreate, TaskTagOut, TaskTagUpdate
 
@@ -19,7 +19,8 @@ router = APIRouter(prefix="/task-tags", tags=["task-tags"])
 async def _can_manage_tags(session: AsyncSession, user: User) -> bool:
     if user.is_superuser:
         return True
-    if await user_has_permission(session, user, TASKS_CREATE):
+    # Теги — часть структуры доски, не просто «создание задач».
+    if await user_has_permission(session, user, BOARD_COLUMNS_MANAGE):
         return True
     role = await session.scalar(
         select(BoardMember.role)

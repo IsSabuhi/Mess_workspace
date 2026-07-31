@@ -26,11 +26,21 @@ _LEAD_CODES = (
     "tasks.update.assigned",
     "tasks.delete",
     "tasks.move",
-    "board.columns.manage",
+    "boards.create",
+    # Структура доски (колонки/теги/настройки) — только у администратора, не у руководителя.
     "systems.manage",
+    # БЗ: только чтение всех пространств; правка — через участников (editor/admin).
     "knowledge.read.all",
-    "knowledge.manage.all",
-    "knowledge.space.manage",
+)
+
+_MANAGER_CODES = (
+    "tasks.create",
+    "tasks.read.all",
+    "tasks.read.assigned",
+    "tasks.update.assigned",
+    "tasks.move",
+    "boards.create",
+    "knowledge.read.all",
 )
 
 _EMPLOYEE_CODES = (
@@ -67,8 +77,14 @@ def upgrade() -> None:
         (
             "lead",
             "Начальник отдела",
-            "Задачи, доска, системы и БЗ без управления пользователями (системная роль).",
+            "Задачи (просмотр/редактирование), системы, создание досок; БЗ только чтение. Без управления колонками, тегами и настройками доски.",
             _LEAD_CODES,
+        ),
+        (
+            "manager",
+            "Менеджер",
+            "Просмотр задач команды и создание кастомных досок (системная роль).",
+            _MANAGER_CODES,
         ),
         (
             "employee",

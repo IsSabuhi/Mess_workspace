@@ -9,11 +9,19 @@ type Props = {
   title: string;
   subtitle?: string;
   children: ReactNode;
-  /** Шире контент (канбан, БЗ) — меньше пустых полей по краям */
+  /**
+   * Ранее сужал/расширял контент. Сейчас основная область всегда на всю ширину
+   * рабочей зоны (удобно на 2K+); параметр оставлен для совместимости вызовов.
+   */
   wide?: boolean;
+  /**
+   * Узкая колонка по центру — для форм (настройки профиля и т.п.).
+   * Без этого контент занимает всю ширину между сайдбаром и краем окна.
+   */
+  narrow?: boolean;
 };
 
-export function AppShell({ title, subtitle, children, wide }: Props) {
+export function AppShell({ title, subtitle, children, narrow }: Props) {
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(STORAGE_KEY) === "1");
 
   useEffect(() => {
@@ -23,18 +31,18 @@ export function AppShell({ title, subtitle, children, wide }: Props) {
   const margin = collapsed ? "ml-[4.5rem]" : "ml-64";
 
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen overflow-x-clip">
       <Sidebar collapsed={collapsed} onToggleCollapse={() => setCollapsed((c) => !c)} />
-      <div className={`min-h-screen transition-[margin] duration-300 ease-out ${margin}`}>
+      <div className={`min-h-screen min-w-0 overflow-x-clip transition-[margin] duration-300 ease-out ${margin}`}>
         <div
           className={
-            wide
-              ? "mx-auto max-w-[min(100%,96rem)] px-3 pb-10 pt-4 sm:px-5 lg:px-6"
-              : "mx-auto max-w-6xl px-4 pb-10 pt-4 sm:px-6 lg:px-8"
+            narrow
+              ? "mx-auto w-full max-w-3xl px-4 pb-10 pt-4 sm:px-6"
+              : "w-full min-w-0 max-w-none px-3 pb-10 pt-4 sm:px-5 lg:px-6 xl:px-8 2xl:px-10"
           }
         >
           <TopBar title={title} subtitle={subtitle} />
-          <main className="mt-6">{children}</main>
+          <main className="mt-6 min-w-0">{children}</main>
         </div>
       </div>
     </div>

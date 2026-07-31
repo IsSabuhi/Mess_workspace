@@ -1,9 +1,15 @@
 import type { TaskOut, TaskPriority } from "../api/tasks";
-import { taskIsActiveForDashboard, taskIsOverdueForDashboard } from "./taskStatus";
+import { taskInDoneColumn, taskIsActiveForDashboard, taskIsOverdueForDashboard } from "./taskStatus";
 
 export type DueStatusFilter = "overdue" | "due_soon" | "no_due" | "on_track";
 
+/** Срез по доске: основная, все, или конкретная кастомная (`board` + customBoardId). */
+export type BoardAnalyticsScope = "main" | "all" | "board";
+
 export type TaskAnalyticsFilters = {
+  boardScope: BoardAnalyticsScope;
+  /** Id кастомной доски при boardScope === "board" */
+  customBoardId: string | null;
   systemIds: string[];
   columnIds: string[];
   assigneeIds: string[];
@@ -18,6 +24,8 @@ export type TaskAnalyticsFilters = {
 };
 
 export const DEFAULT_TASK_ANALYTICS_FILTERS: TaskAnalyticsFilters = {
+  boardScope: "main",
+  customBoardId: null,
   systemIds: [],
   columnIds: [],
   assigneeIds: [],
@@ -30,6 +38,25 @@ export const DEFAULT_TASK_ANALYTICS_FILTERS: TaskAnalyticsFilters = {
   query: "",
   onlyUnassigned: false,
 };
+
+type BoardScopeRef = { id: string; scope: "global" | "system"; is_default: boolean };
+
+export function filterTasksByBoardScope(
+  tasks: TaskOut[],
+  scope: BoardAnalyticsScope,
+  boards: BoardScopeRef[],
+  customBoardId: string | null = null,
+): TaskOut[] {
+  if (scope === "all") return tasks;
+  if (scope === "board") {
+    if (!customBoardId) return [];
+    return tasks.filter((t) => t.board_id === customBoardId);
+  }
+  const mainIds = new Set(
+    boards.filter((b) => b.is_default || b.scope === "global").map((b) => b.id),
+  );
+  return tasks.filter((t) => mainIds.has(t.board_id));
+}
 
 type TaskKpiSummary = {
   total: number;
@@ -239,4 +266,78 @@ export function tasksDueSoonRows(tasks: TaskOut[]): TaskOut[] {
       const db = b.due_at ? new Date(b.due_at).getTime() : Infinity;
       return da - db;
     });
+}
+
+export type ClosedPeriod = "week" | "month" | "year";
+
+export type ClosedByAssigneeRow = {
+  id: string;
+  name: string;
+  closed: number;
+};
+
+/** Момент «закрытия»: архив или попадание в колонку «Выполнено» (updated_at). */
+export function taskClosedAtIso(t: TaskOut): string | null {
+  if (t.archived_at) return t.archived_at;
+  if (taskInDoneColumn(t)) return t.updated_at;
+  return null;
+}
+
+function startOfWeekMondayLocal(d: Date): Date {
+  const x = new Date(d);
+  const day = x.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  x.setDate(x.getDate() + diff);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+export function closedPeriodBounds(period: ClosedPeriod, now = new Date()): { fromTs: number; toTs: number; label: string } {
+  if (period === "week") {
+    const from = startOfWeekMondayLocal(now);
+    const to = new Date(from);
+    to.setDate(to.getDate() + 7);
+    const end = new Date(to);
+    end.setDate(end.getDate() - 1);
+    const fmt = (v: Date) =>
+      v.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" });
+    return { fromTs: from.getTime(), toTs: to.getTime(), label: `${fmt(from)}–${fmt(end)}` };
+  }
+  if (period === "month") {
+    const from = new Date(now.getFullYear(), now.getMonth(), 1);
+    const to = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const label = from.toLocaleDateString("ru-RU", { month: "long", year: "numeric" });
+    return { fromTs: from.getTime(), toTs: to.getTime(), label };
+  }
+  const from = new Date(now.getFullYear(), 0, 1);
+  const to = new Date(now.getFullYear() + 1, 0, 1);
+  return { fromTs: from.getTime(), toTs: to.getTime(), label: String(now.getFullYear()) };
+}
+
+/** Сколько задач закрыл каждый исполнитель за период (задача с несколькими исполнителями учитывается у каждого). */
+export function closedTasksByAssignee(tasks: TaskOut[], period: ClosedPeriod, now = new Date()): ClosedByAssigneeRow[] {
+  const { fromTs, toTs } = closedPeriodBounds(period, now);
+  const map = new Map<string, ClosedByAssigneeRow>();
+
+  for (const t of tasks) {
+    const closedIso = taskClosedAtIso(t);
+    if (!closedIso) continue;
+    const ts = new Date(closedIso).getTime();
+    if (!Number.isFinite(ts) || ts < fromTs || ts >= toTs) continue;
+
+    const assignees = t.assignees ?? [];
+    if (assignees.length === 0) {
+      if (!map.has("__none__")) {
+        map.set("__none__", { id: "__none__", name: "Не назначен", closed: 0 });
+      }
+      map.get("__none__")!.closed += 1;
+      continue;
+    }
+    for (const a of assignees) {
+      if (!map.has(a.id)) map.set(a.id, { id: a.id, name: a.full_name, closed: 0 });
+      map.get(a.id)!.closed += 1;
+    }
+  }
+
+  return [...map.values()].sort((a, b) => b.closed - a.closed || a.name.localeCompare(b.name, "ru"));
 }

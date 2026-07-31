@@ -11,6 +11,8 @@ export type UserCreate = {
   system_ids?: string[];
   position_id?: string | null;
   birth_date?: string | null;
+  /** Требовать смену пароля при первом входе (по умолчанию true) */
+  must_change_password?: boolean;
 };
 
 export type UserUpdate = {
@@ -24,15 +26,18 @@ export type UserUpdate = {
   system_ids?: string[] | null;
   position_id?: string | null;
   birth_date?: string | null;
+  /** Вместе с password: требовать смену при следующем входе */
+  must_change_password?: boolean;
 };
 
 export async function listUsers(): Promise<UserOut[]> {
   return apiFetch<UserOut[]>("/api/v1/users");
 }
 
-/** Кандидаты в исполнители задачи: все активные (для руководителя) или участники тех же производственных систем */
-export async function listAssigneeCandidates(): Promise<UserOut[]> {
-  return apiFetch<UserOut[]>("/api/v1/users/assignee-candidates");
+/** Кандидаты в исполнители: на системной доске — сотрудники системы ∪ участники доски */
+export async function listAssigneeCandidates(boardId?: string | null): Promise<UserOut[]> {
+  const q = boardId ? `?board_id=${encodeURIComponent(boardId)}` : "";
+  return apiFetch<UserOut[]>(`/api/v1/users/assignee-candidates${q}`);
 }
 
 export async function createUser(body: UserCreate): Promise<UserOut> {

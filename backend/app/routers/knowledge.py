@@ -4,9 +4,10 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.http_errors import FORBIDDEN
+from app.http_errors import FORBIDDEN, INVALID_PASSWORD
 from app.deps import get_current_user, require_permission
 from app.models import (
     KnowledgeArticle,
@@ -16,6 +17,7 @@ from app.models import (
     KnowledgeTemplate,
     System,
     User,
+    UserSystem,
 )
 from app.models.knowledge import ArticleStatus, SpaceMemberRole
 from app.permissions import KNOWLEDGE_MANAGE_ALL, KNOWLEDGE_READ_ALL
@@ -26,6 +28,7 @@ from app.schemas.knowledge import (
     KnowledgeArticleRevisionOut,
     KnowledgeArticleRestoreIn,
     KnowledgeSpaceCreate,
+    KnowledgeSpaceDeleteIn,
     KnowledgeSearchResultOut,
     KnowledgeSpaceOut,
     KnowledgeDirectoryUser,
@@ -38,10 +41,34 @@ from app.schemas.knowledge import (
 )
 from app.services.authz import user_has_permission
 from app.schemas.upload import UploadOut
+from app.security import verify_password
 from app.services.knowledge_access import can_edit_article, can_manage_space_acl, can_read_space, can_view_article
-from app.services.file_storage import save_kb_image
+from app.services.knowledge_children_toc import sync_parent_children_toc
+from app.services.knowledge_space_members import (
+    build_space_member_list,
+    sync_system_members_on_space_create,
+    user_in_space_system,
+)
+from app.services.file_storage import rewrite_stored_media_urls, save_kb_image
+from app.services.audit import record_audit_event
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
+
+_ARTICLE_LOAD = (selectinload(KnowledgeArticle.created_by),)
+
+
+def _article_to_out(article: KnowledgeArticle) -> KnowledgeArticleOut:
+    out = KnowledgeArticleOut.model_validate(article)
+    return out.model_copy(update={"content": rewrite_stored_media_urls(out.content)})
+
+
+async def _article_out(session: AsyncSession, article_id: uuid.UUID) -> KnowledgeArticleOut:
+    article = (
+        await session.execute(
+            select(KnowledgeArticle).where(KnowledgeArticle.id == article_id).options(*_ARTICLE_LOAD)
+        )
+    ).scalar_one()
+    return _article_to_out(article)
 
 
 async def _space_to_out(session: AsyncSession, user: User, space: KnowledgeSpace) -> KnowledgeSpaceOut:
@@ -126,13 +153,21 @@ async def list_spaces(
         result = await session.execute(stmt)
         spaces = result.scalars().all()
     else:
-        stmt = (
+        system_ids = list(
+            (
+                await session.execute(select(UserSystem.system_id).where(UserSystem.user_id == user.id))
+            ).scalars().all()
+        )
+        clauses = [KnowledgeSpaceMember.user_id == user.id]
+        if system_ids:
+            clauses.append(KnowledgeSpace.system_id.in_(system_ids))
+        member_join = (
             select(KnowledgeSpace)
-            .join(KnowledgeSpaceMember, KnowledgeSpaceMember.space_id == KnowledgeSpace.id)
-            .where(KnowledgeSpaceMember.user_id == user.id)
+            .outerjoin(KnowledgeSpaceMember, KnowledgeSpaceMember.space_id == KnowledgeSpace.id)
+            .where(or_(*clauses))
             .order_by(KnowledgeSpace.name)
         )
-        result = await session.execute(stmt)
+        result = await session.execute(member_join)
         spaces = result.scalars().unique().all()
     return [await _space_to_out(session, user, s) for s in spaces]
 
@@ -163,6 +198,7 @@ async def create_space(
     session.add(
         KnowledgeSpaceMember(space_id=space.id, user_id=user.id, role=SpaceMemberRole.admin)
     )
+    await sync_system_members_on_space_create(session, space, user.id)
     await session.flush()
     return await _space_to_out(session, user, space)
 
@@ -194,18 +230,58 @@ async def update_space(
     if not await can_manage_space_acl(session, user, space):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
 
-    if body.name is not None:
-        space.name = body.name
-    if body.description is not None:
-        space.description = body.description
-    if body.system_id is not None:
-        if body.system_id:
-            sys = await session.get(System, body.system_id)
+    patch = body.model_dump(exclude_unset=True)
+    if "name" in patch and patch["name"] is not None:
+        space.name = patch["name"]
+    if "description" in patch:
+        space.description = patch["description"]
+    if "system_id" in patch:
+        sid = patch["system_id"]
+        if sid:
+            sys = await session.get(System, sid)
             if not sys:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid system")
-        space.system_id = body.system_id
+        space.system_id = sid
     await session.flush()
+    await record_audit_event(
+        session,
+        entity_type="knowledge_space",
+        entity_id=space.id,
+        action="knowledge.space.updated",
+        actor_user_id=user.id,
+        details={"name": space.name, "changed": list(patch.keys())},
+    )
+    await session.commit()
     return await _space_to_out(session, user, space)
+
+
+@router.delete("/spaces/{space_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_space(
+    space_id: uuid.UUID,
+    body: KnowledgeSpaceDeleteIn,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> None:
+    space = await session.get(KnowledgeSpace, space_id)
+    if not space:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Space not found")
+    if not await can_manage_space_acl(session, user, space):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
+    if not verify_password(body.password, user.hashed_password):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=INVALID_PASSWORD)
+
+    name = space.name
+    slug = space.slug
+    await record_audit_event(
+        session,
+        entity_type="knowledge_space",
+        entity_id=space.id,
+        action="knowledge.space.deleted",
+        actor_user_id=user.id,
+        details={"name": name, "slug": slug},
+    )
+    await session.delete(space)
+    await session.commit()
 
 
 @router.post("/spaces/{space_id}/members", status_code=status.HTTP_204_NO_CONTENT)
@@ -269,17 +345,7 @@ async def list_space_members(
     if not await can_manage_space_acl(session, user, space):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
 
-    stmt = (
-        select(KnowledgeSpaceMember, User)
-        .join(User, KnowledgeSpaceMember.user_id == User.id)
-        .where(KnowledgeSpaceMember.space_id == space_id)
-        .order_by(User.email)
-    )
-    result = await session.execute(stmt)
-    return [
-        SpaceMemberOut(user_id=u.id, email=u.email, full_name=u.full_name, role=m.role)
-        for m, u in result.all()
-    ]
+    return await build_space_member_list(session, space)
 
 
 @router.patch("/spaces/{space_id}/members/{member_user_id}", response_model=SpaceMemberOut)
@@ -302,13 +368,25 @@ async def update_space_member(
             KnowledgeSpaceMember.user_id == member_user_id,
         )
     )
+    is_system = await user_in_space_system(session, space, member_user_id)
     if not m:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found")
-    m.role = body.role
+        if not is_system:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found")
+        # Повышение роли сотрудника системы — создаём явную запись.
+        m = KnowledgeSpaceMember(space_id=space_id, user_id=member_user_id, role=body.role)
+        session.add(m)
+    else:
+        m.role = body.role
     await session.flush()
     u = await session.get(User, member_user_id)
     assert u
-    return SpaceMemberOut(user_id=u.id, email=u.email, full_name=u.full_name, role=m.role)
+    return SpaceMemberOut(
+        user_id=u.id,
+        email=u.email,
+        full_name=u.full_name,
+        role=m.role,
+        is_system_member=is_system,
+    )
 
 
 @router.delete("/spaces/{space_id}/members/{member_user_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -323,6 +401,12 @@ async def remove_space_member(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Space not found")
     if not await can_manage_space_acl(session, user, space):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
+
+    if await user_in_space_system(session, space, member_user_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Нельзя удалить сотрудника системы пространства. Снимите привязку к системе или уберите пользователя из системы.",
+        )
 
     m = await session.scalar(
         select(KnowledgeSpaceMember).where(
@@ -368,7 +452,7 @@ async def get_article(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Article not found")
     if not await can_view_article(session, user, article):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Article not found")
-    return KnowledgeArticleOut.model_validate(article)
+    return await _article_out(session, article.id)
 
 
 @router.get("/spaces/{space_id}/articles", response_model=list[KnowledgeArticleOut])
@@ -383,11 +467,12 @@ async def list_articles(
     if not await can_read_space(session, user, space):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
 
-    sees_all_drafts = user.is_superuser or await user_has_permission(session, user, KNOWLEDGE_MANAGE_ALL)
+    sees_all_drafts = await can_edit_article(session, user, space)
     if sees_all_drafts:
         stmt = (
             select(KnowledgeArticle)
             .where(KnowledgeArticle.space_id == space_id)
+            .options(*_ARTICLE_LOAD)
             .order_by(KnowledgeArticle.position, KnowledgeArticle.title)
         )
     else:
@@ -400,10 +485,11 @@ async def list_articles(
                     KnowledgeArticle.created_by_id == user.id,
                 ),
             )
+            .options(*_ARTICLE_LOAD)
             .order_by(KnowledgeArticle.position, KnowledgeArticle.title)
         )
     result = await session.execute(stmt)
-    return [KnowledgeArticleOut.model_validate(a) for a in result.scalars().all()]
+    return [_article_to_out(a) for a in result.scalars().all()]
 
 
 @router.get("/spaces/{space_id}/search/articles", response_model=list[KnowledgeSearchResultOut])
@@ -421,8 +507,8 @@ async def search_articles(
     query = q.strip()
     if not query:
         return []
-    sees_all_drafts = user.is_superuser or await user_has_permission(session, user, KNOWLEDGE_MANAGE_ALL)
-    stmt = select(KnowledgeArticle).where(KnowledgeArticle.space_id == space_id)
+    sees_all_drafts = await can_edit_article(session, user, space)
+    stmt = select(KnowledgeArticle).where(KnowledgeArticle.space_id == space_id).options(*_ARTICLE_LOAD)
     if not sees_all_drafts:
         stmt = stmt.where(
             or_(
@@ -436,7 +522,7 @@ async def search_articles(
     ).limit(50)
     rows = (await session.execute(stmt)).scalars().all()
     return [
-        KnowledgeSearchResultOut(article=KnowledgeArticleOut.model_validate(a), snippet=_article_snippet(a, query))
+        KnowledgeSearchResultOut(article=_article_to_out(a), snippet=_article_snippet(a, query))
         for a in rows
     ]
 
@@ -478,7 +564,9 @@ async def create_article(
     session.add(article)
     await session.flush()
     await _save_article_revision(session, article, user)
-    return KnowledgeArticleOut.model_validate(article)
+    if article.parent_id is not None:
+        await sync_parent_children_toc(session, space_id, article.parent_id)
+    return await _article_out(session, article.id)
 
 
 @router.patch("/spaces/{space_id}/articles/{article_id}", response_model=KnowledgeArticleOut)
@@ -502,6 +590,7 @@ async def update_article(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Article not found")
 
     patch = body.model_dump(exclude_unset=True)
+    old_parent_id = article.parent_id
     if "parent_id" in patch:
         await _validate_article_parent(session, space_id, article_id, patch["parent_id"])
         article.parent_id = patch["parent_id"]
@@ -515,7 +604,17 @@ async def update_article(
         article.position = body.position
     await session.flush()
     await _save_article_revision(session, article, user)
-    return KnowledgeArticleOut.model_validate(article)
+
+    if any(k in patch for k in ("title", "parent_id", "position")):
+        parents: set[uuid.UUID] = set()
+        if old_parent_id is not None:
+            parents.add(old_parent_id)
+        if article.parent_id is not None:
+            parents.add(article.parent_id)
+        for pid in parents:
+            await sync_parent_children_toc(session, space_id, pid)
+
+    return await _article_out(session, article.id)
 
 
 @router.get("/spaces/{space_id}/articles/{article_id}/revisions", response_model=list[KnowledgeArticleRevisionOut])
@@ -579,10 +678,18 @@ async def restore_article_revision(
     article.title = rev.title
     article.content = rev.content
     article.status = rev.status
+    old_parent_id = article.parent_id
     article.parent_id = rev.parent_id
     await session.flush()
     await _save_article_revision(session, article, user)
-    return KnowledgeArticleOut.model_validate(article)
+    parents: set[uuid.UUID] = set()
+    if old_parent_id is not None:
+        parents.add(old_parent_id)
+    if article.parent_id is not None:
+        parents.add(article.parent_id)
+    for pid in parents:
+        await sync_parent_children_toc(session, space_id, pid)
+    return await _article_out(session, article.id)
 
 
 @router.delete("/spaces/{space_id}/articles/{article_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -603,7 +710,11 @@ async def delete_article(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Article not found")
     if not await can_view_article(session, user, article):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Article not found")
+    parent_id = article.parent_id
     await session.delete(article)
+    await session.flush()
+    if parent_id is not None:
+        await sync_parent_children_toc(session, space_id, parent_id)
     await session.commit()
 
 

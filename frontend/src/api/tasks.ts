@@ -1,6 +1,25 @@
+import type { AuditEventOut } from "./audit";
 import { apiFetch } from "./client";
 
 export type TaskPriority = "low" | "normal" | "high" | "urgent";
+
+export type ChecklistItem = {
+  id: string;
+  text: string;
+  done: boolean;
+};
+
+export type TaskAttachmentOut = {
+  id: string;
+  task_id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  url: string;
+  uploaded_by_id: string | null;
+  created_at: string;
+  uploaded_by: { id: string; email: string; full_name: string } | null;
+};
 
 export type TaskOut = {
   id: string;
@@ -12,6 +31,8 @@ export type TaskOut = {
   creator_id: string | null;
   priority: TaskPriority;
   due_at: string | null;
+  estimate_hours: number | string | null;
+  checklist: ChecklistItem[];
   position: number;
   created_at: string;
   updated_at: string;
@@ -21,6 +42,8 @@ export type TaskOut = {
   system: { id: string; name: string; slug: string } | null;
   column: { id: string; name: string; slug: string; is_done_column?: boolean } | null;
   tags: { id: string; name: string; color: string }[];
+  attachments: TaskAttachmentOut[];
+  comments_count?: number;
 };
 
 export type TaskCommentOut = {
@@ -72,6 +95,8 @@ export type TaskCreate = {
   assignee_ids?: string[];
   priority?: TaskPriority;
   due_at?: string | null;
+  estimate_hours?: number | null;
+  checklist?: ChecklistItem[];
   position?: number;
   tag_ids?: string[];
 };
@@ -84,6 +109,8 @@ export type TaskUpdate = {
   assignee_ids?: string[];
   priority?: TaskPriority;
   due_at?: string | null;
+  estimate_hours?: number | null;
+  checklist?: ChecklistItem[];
   position?: number;
   archived_at?: string | null;
   tag_ids?: string[];
@@ -145,6 +172,11 @@ export async function deleteTask(taskId: string): Promise<void> {
   await apiFetch<void>(`/api/v1/tasks/${taskId}`, { method: "DELETE" });
 }
 
+export async function listTaskHistory(taskId: string, limit = 100): Promise<AuditEventOut[]> {
+  const sp = new URLSearchParams({ limit: String(limit) });
+  return apiFetch<AuditEventOut[]>(`/api/v1/tasks/${taskId}/history?${sp.toString()}`);
+}
+
 export async function listTaskComments(taskId: string): Promise<TaskCommentOut[]> {
   return apiFetch<TaskCommentOut[]>(`/api/v1/tasks/${taskId}/comments`);
 }
@@ -156,7 +188,11 @@ export async function createTaskComment(taskId: string, body: { body: string }):
   });
 }
 
-export async function updateTaskComment(taskId: string, commentId: string, body: { body: string }): Promise<TaskCommentOut> {
+export async function updateTaskComment(
+  taskId: string,
+  commentId: string,
+  body: { body: string },
+): Promise<TaskCommentOut> {
   return apiFetch<TaskCommentOut>(`/api/v1/tasks/${taskId}/comments/${commentId}`, {
     method: "PATCH",
     body: JSON.stringify(body),
@@ -165,6 +201,78 @@ export async function updateTaskComment(taskId: string, commentId: string, body:
 
 export async function deleteTaskComment(taskId: string, commentId: string): Promise<void> {
   await apiFetch<void>(`/api/v1/tasks/${taskId}/comments/${commentId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function uploadTaskAttachment(taskId: string, file: File): Promise<TaskAttachmentOut> {
+  const form = new FormData();
+  form.append("file", file);
+  return apiFetch<TaskAttachmentOut>(`/api/v1/tasks/${taskId}/attachments`, {
+    method: "POST",
+    body: form,
+  });
+}
+
+export type TaskExcelImportRowDetail = {
+  row: number;
+  title: string;
+  status: string;
+  message: string | null;
+  task_id: string | null;
+};
+
+export type TaskExcelImportOut = {
+  sheet_name: string;
+  system_id: string;
+  system_name: string;
+  board_id: string;
+  created: number;
+  skipped: number;
+  warnings: number;
+  rows: TaskExcelImportRowDetail[];
+};
+
+export type TaskExcelImportFileResult = {
+  filename: string;
+  ok: boolean;
+  error: string | null;
+  result: TaskExcelImportOut | null;
+};
+
+export type TaskExcelImportBatchOut = {
+  files_total: number;
+  files_ok: number;
+  files_failed: number;
+  created_total: number;
+  warnings_total: number;
+  files: TaskExcelImportFileResult[];
+};
+
+export async function importTasksFromExcel(params: {
+  files: File[];
+  /** Только при одном файле; при нескольких система определяется по имени файла/листа */
+  systemId?: string;
+  sheetName?: string;
+}): Promise<TaskExcelImportBatchOut> {
+  const form = new FormData();
+  for (const f of params.files) {
+    form.append("files", f);
+  }
+  if (params.systemId?.trim() && params.files.length === 1) {
+    form.append("system_id", params.systemId.trim());
+  }
+  if (params.sheetName?.trim()) {
+    form.append("sheet_name", params.sheetName.trim());
+  }
+  return apiFetch<TaskExcelImportBatchOut>("/api/v1/tasks/import-excel", {
+    method: "POST",
+    body: form,
+  });
+}
+
+export async function deleteTaskAttachment(taskId: string, attachmentId: string): Promise<void> {
+  await apiFetch<void>(`/api/v1/tasks/${taskId}/attachments/${attachmentId}`, {
     method: "DELETE",
   });
 }

@@ -17,6 +17,8 @@ export type UserOut = {
   schedule_mode: string;
   is_active: boolean;
   is_superuser: boolean;
+  /** Нужно сменить пароль после сброса админом или первичного входа */
+  must_change_password?: boolean;
   created_at: string;
   updated_at: string;
   roles: { id: string; slug: string; name: string }[];
@@ -61,7 +63,7 @@ export type ProfilePatch = {
   birth_date?: string | null;
   position_id?: string | null;
   dashboard_preferences?: DashboardPreferences;
-  /** Обязателен вместе с new_password */
+  /** При must_change_password можно не передавать */
   current_password?: string;
   new_password?: string;
 };

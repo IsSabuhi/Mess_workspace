@@ -1,11 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Eye, EyeOff, History, LayoutDashboard, Lock, Moon, Palette, Sun, Monitor, UserRound } from "lucide-react";
+import { Eye, EyeOff, History, LayoutDashboard, Lock, Moon, Palette, Sun, UserRound } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { fetchLoginHistory, patchProfile } from "../api/auth";
 import type { LoginAuditOut } from "../api/auth";
 import { HOME_DASHBOARD_BLOCK_IDS, isHomeBlockVisible as isDashboardBlockShown } from "../lib/homeDashboardBlocks";
-import { ApiError } from "../api/client";
 import { listPositions } from "../api/positions";
 import type { PositionOut } from "../api/positions";
 import { AppShell } from "../components/AppShell";
@@ -13,7 +12,8 @@ import { Switch } from "../components/Switch";
 import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
 import { PERM, canEmployeeDirectoryAccess, hasPermission } from "../lib/permissions";
-import { toastApiError, toastSuccess } from "../lib/toast";
+import { toastApiError, toastError, toastSuccess } from "../lib/toast";
+import { useToastQueryError } from "../lib/useToastQueryError";
 
 const HOME_BLOCK_LABELS: Record<string, string> = {
   employee_expiry: "Контроль сроков сотрудников",
@@ -66,7 +66,7 @@ function usePositionOptions(
 }
 
 export function SettingsPage() {
-  const { theme, setTheme, resolved } = useTheme();
+  const { theme, setTheme } = useTheme();
   const { state, setAuthenticatedUser } = useAuth();
   const qc = useQueryClient();
   const user = state.status === "authenticated" ? state.user : null;
@@ -75,7 +75,6 @@ export function SettingsPage() {
   const [positionId, setPositionId] = useState("");
   const [birthDate, setBirthDate] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
   const [homeBlockVisible, setHomeBlockVisible] = useState<Record<string, boolean>>({});
   const homeBlockVisibleRef = useRef(homeBlockVisible);
   homeBlockVisibleRef.current = homeBlockVisible;
@@ -86,7 +85,6 @@ export function SettingsPage() {
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showNewPasswordConfirm, setShowNewPasswordConfirm] = useState(false);
-  const [pwdErr, setPwdErr] = useState<string | null>(null);
   const [pwdMsg, setPwdMsg] = useState<string | null>(null);
 
   const isManager = useMemo(
@@ -150,6 +148,7 @@ export function SettingsPage() {
     queryFn: fetchLoginHistory,
     enabled: !!user,
   });
+  useToastQueryError(historyQuery.error, "Не удалось загрузить историю");
 
   const patchDashboardMut = useMutation({
     mutationFn: (home: Record<string, boolean>) =>
@@ -189,7 +188,6 @@ export function SettingsPage() {
       }),
     onSuccess: async (updated) => {
       setPwdMsg("Пароль изменён");
-      setPwdErr(null);
       setCurrentPassword("");
       setNewPassword("");
       setNewPasswordConfirm("");
@@ -198,8 +196,6 @@ export function SettingsPage() {
     },
     onError: (e: unknown) => {
       setPwdMsg(null);
-      if (e instanceof ApiError) setPwdErr(e.detail);
-      else setPwdErr("Не удалось сменить пароль");
       toastApiError(e, "Не удалось сменить пароль");
     },
   });
@@ -213,7 +209,6 @@ export function SettingsPage() {
       }),
     onSuccess: async (updated) => {
       setMsg("Профиль сохранён");
-      setErr(null);
       toastSuccess("Профиль сохранён");
       setAuthenticatedUser(updated);
       await qc.invalidateQueries({ queryKey: ["positions", "settings"] });
@@ -221,8 +216,6 @@ export function SettingsPage() {
     },
     onError: (e: unknown) => {
       setMsg(null);
-      if (e instanceof ApiError) setErr(e.detail);
-      else setErr("Не удалось сохранить");
       toastApiError(e, "Не удалось сохранить профиль");
     },
   });
@@ -230,39 +223,32 @@ export function SettingsPage() {
   function onSubmitProfile(e: React.FormEvent) {
     e.preventDefault();
     setMsg(null);
-    setErr(null);
     saveMut.mutate();
   }
 
   function onSubmitPassword(e: React.FormEvent) {
     e.preventDefault();
-    setPwdErr(null);
     setPwdMsg(null);
     if (newPassword.length < 8) {
-      setPwdErr("Новый пароль: минимум 8 символов");
+      toastError("Новый пароль: минимум 8 символов");
       return;
     }
     if (newPassword !== newPasswordConfirm) {
-      setPwdErr("Новый пароль и подтверждение не совпадают");
+      toastError("Новый пароль и подтверждение не совпадают");
       return;
     }
     if (!currentPassword.trim()) {
-      setPwdErr("Введите текущий пароль");
+      toastError("Введите текущий пароль");
       return;
     }
     changePwdMut.mutate();
   }
 
-  const themeDescription =
-    theme === "system"
-      ? `как в системе (сейчас ${resolved === "dark" ? "тёмное" : "светлое"} оформление)`
-      : theme === "dark"
-        ? "тёмное оформление"
-        : "светлое оформление";
+  const themeDescription = theme === "dark" ? "тёмное оформление" : "светлое оформление";
 
   return (
-    <AppShell title="Настройки" subtitle="Профиль, внешний вид и безопасность">
-      <div className="relative mx-auto max-w-3xl">
+    <AppShell title="Настройки" subtitle="Профиль, внешний вид и безопасность" narrow>
+      <div className="relative">
         <div className="pointer-events-none absolute -right-24 -top-8 h-56 w-56 rounded-full bg-sky-400/15 blur-3xl dark:bg-sky-500/10" />
         <div className="pointer-events-none absolute -left-20 top-48 h-48 w-48 rounded-full bg-indigo-400/12 blur-3xl dark:bg-indigo-500/10" />
 
@@ -349,11 +335,6 @@ export function SettingsPage() {
                     Email:{" "}
                     <span className="break-all font-mono text-slate-800 dark:text-slate-200">{user.email}</span>
                   </div>
-                  {err && (
-                    <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
-                      {err}
-                    </p>
-                  )}
                   {msg && (
                     <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
                       {msg}
@@ -461,11 +442,6 @@ export function SettingsPage() {
                       </button>
                     </div>
                   </div>
-                  {pwdErr && (
-                    <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
-                      {pwdErr}
-                    </p>
-                  )}
                   {pwdMsg && (
                     <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
                       {pwdMsg}
@@ -500,12 +476,11 @@ export function SettingsPage() {
               </div>
             </div>
             <div className="p-6 sm:p-8">
-              <div className="grid gap-3 sm:grid-cols-3">
+              <div className="grid gap-3 sm:grid-cols-2">
                 {(
                   [
                     { id: "light" as const, label: "Светлая", Icon: Sun },
                     { id: "dark" as const, label: "Тёмная", Icon: Moon },
-                    { id: "system" as const, label: "Как в системе", Icon: Monitor },
                   ] as const
                 ).map(({ id, label, Icon }) => {
                   const active = theme === id;
@@ -612,11 +587,6 @@ export function SettingsPage() {
             <div className="p-6 sm:p-8">
               {historyQuery.isPending && (
                 <p className="text-sm text-slate-500 dark:text-slate-400">Загрузка…</p>
-              )}
-              {historyQuery.isError && (
-                <p className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
-                  Не удалось загрузить историю
-                </p>
               )}
               {historyQuery.data && historyQuery.data.length === 0 && (
                 <p className="rounded-xl border border-dashed border-slate-200 bg-slate-50/80 px-4 py-6 text-center text-sm text-slate-500 dark:border-slate-600 dark:bg-slate-800/40 dark:text-slate-400">

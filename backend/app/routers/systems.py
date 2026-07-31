@@ -7,9 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.deps import get_current_user, require_permission
+from app.deps import get_current_user, require_any_permission, require_permission
 from app.models import System, Task, User, UserSystem
-from app.permissions import SYSTEMS_MANAGE
+from app.permissions import ROLES_MANAGE, SYSTEMS_MANAGE, USERS_MANAGE
 from app.schemas.position import PositionBrief
 from app.schemas.system import (
     SystemCreate,
@@ -156,7 +156,7 @@ async def delete_system(
 @router.get("/settings/task-archive", response_model=TaskArchiveSettingsOut)
 async def get_task_archive_settings(
     session: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(require_permission(SYSTEMS_MANAGE))],
+    _: Annotated[User, Depends(require_any_permission(USERS_MANAGE, ROLES_MANAGE))],
 ) -> TaskArchiveSettingsOut:
     days = await get_task_auto_archive_days(session)
     return TaskArchiveSettingsOut(auto_archive_done_days=days)
@@ -166,7 +166,7 @@ async def get_task_archive_settings(
 async def update_task_archive_settings(
     body: TaskArchiveSettingsUpdate,
     session: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(require_permission(SYSTEMS_MANAGE))],
+    _: Annotated[User, Depends(require_any_permission(USERS_MANAGE, ROLES_MANAGE))],
 ) -> TaskArchiveSettingsOut:
     days = await set_task_auto_archive_days(session, body.auto_archive_done_days)
     return TaskArchiveSettingsOut(auto_archive_done_days=days)

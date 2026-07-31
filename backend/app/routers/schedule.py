@@ -47,7 +47,8 @@ from app.services.schedule_hours import sum_month_hours
 
 router = APIRouter(prefix="/schedule", tags=["schedule"])
 _HEX_COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
-AUTO_SHIFT_COLORS = ["#3b82f6", "#facc15", "#10b981", "#a855f7", "#22c55e"]
+# Стабильная палитра по фазе цикла 11→3→8→выходной (индекс 0..3).
+AUTO_SHIFT_COLORS = ["#3b82f6", "#facc15", "#10b981", "#a855f7"]
 
 
 def _days_in_month(year: int, month: int) -> int:
@@ -151,25 +152,21 @@ def _month_shift_tokens(ud: dict[int, str], dim: int) -> list[str]:
     return [_norm_shift_token(ud.get(d)) for d in range(1, dim + 1)]
 
 
-def _share_same_code_some_day(a: list[str], b: list[str]) -> bool:
-    for i in range(min(len(a), len(b))):
-        if a[i] != "_" and a[i] == b[i]:
-            return True
-    return False
-
-
 def _expected_shift_token(day1_based: int, phase: int) -> str:
+    """Ожидаемый токен цикла 11→3→8→выходной для дня месяца и фазы 0..3."""
     cycle = ("11", "3", "8", "_")
     return cycle[(day1_based - 1 + phase) % 4]
 
 
 def _fit_phase_score(tokens: list[str], phase: int) -> int:
+    """Сколько рабочих кодов 11/3/8 совпали с циклом при данной фазе (пустые/_ не штрафуют)."""
     score = 0
     for i, got in enumerate(tokens):
         if got == "_":
             continue
         exp = _expected_shift_token(i + 1, phase)
         if exp == "_":
+            # Рабочий код в день, где по циклу выходной — несовпадение.
             continue
         if got == exp:
             score += 1
@@ -188,16 +185,8 @@ def _infer_best_phase(tokens: list[str]) -> tuple[int, int]:
 
 
 def _min_phase_agreement_days(month_len: int) -> int:
+    """Минимум совпадений с циклом, чтобы уверенно считать фазу (не красить шум)."""
     return min(month_len, max(2, (month_len + 9) // 10))
-
-
-def _rows_linked_for_highlight(a: list[str], b: list[str]) -> bool:
-    if _share_same_code_some_day(a, b):
-        return True
-    pa, sa = _infer_best_phase(a)
-    pb, sb = _infer_best_phase(b)
-    min_sc = _min_phase_agreement_days(min(len(a), len(b)))
-    return pa == pb and sa >= min_sc and sb >= min_sc
 
 
 def _collect_shift_brigade_row_colors(
@@ -206,66 +195,24 @@ def _collect_shift_brigade_row_colors(
     dim: int,
 ) -> dict[uuid.UUID, int]:
     """
-    Граф связности по 11/3/8 в текущем месяце.
-    Связь есть, если:
-    - у пары есть хотя бы один день с одинаковым кодом 11/3/8, или
-    - совпала фаза цикла 11→3→8 по токенам месяца (с мягким порогом совпадений).
+    Автоцвет сменщиков (work_schedule_kind=shift): цвет = фаза цикла 11→3→8→выходной.
+
+    Одна фаза (одинаковое смещение по месяцу) → один и тот же индекс цвета 0..3.
+    Одиночки тоже красятся — цвет привязан к фазе, а не к размеру группы.
     """
-    eligible_users: list[User] = []
-    token_list: list[list[str]] = []
+    min_sc = _min_phase_agreement_days(dim)
+    out: dict[uuid.UUID, int] = {}
     for u in users:
         wkind, _ = normalize_profile_schedule(u.employee_profile)
         if wkind != "shift":
             continue
-        ud = by_user.get(u.id, {})
-        tokens = _month_shift_tokens(ud, dim)
+        tokens = _month_shift_tokens(by_user.get(u.id, {}), dim)
         if not any(t != "_" for t in tokens):
             continue
-        eligible_users.append(u)
-        token_list.append(tokens)
-
-    n = len(eligible_users)
-    if n < 2:
-        return {}
-
-    parent = list(range(n))
-    rank = [0] * n
-
-    def find(i: int) -> int:
-        while parent[i] != i:
-            parent[i] = parent[parent[i]]
-            i = parent[i]
-        return i
-
-    def union(i: int, j: int) -> None:
-        ri = find(i)
-        rj = find(j)
-        if ri == rj:
-            return
-        if rank[ri] < rank[rj]:
-            parent[ri] = rj
-        elif rank[ri] > rank[rj]:
-            parent[rj] = ri
-        else:
-            parent[rj] = ri
-            rank[ri] += 1
-
-    for i in range(n):
-        for j in range(i + 1, n):
-            if _rows_linked_for_highlight(token_list[i], token_list[j]):
-                union(i, j)
-
-    by_root: dict[int, list[int]] = defaultdict(list)
-    for i in range(n):
-        by_root[find(i)].append(i)
-
-    out: dict[uuid.UUID, int] = {}
-    components = [grp for grp in by_root.values() if len(grp) >= 2]
-    components.sort(key=lambda grp: str(eligible_users[grp[0]].id))
-    for color_idx, grp in enumerate(components):
-        phase = color_idx % 5
-        for idx in grp:
-            out[eligible_users[idx].id] = phase
+        phase, score = _infer_best_phase(tokens)
+        if score < min_sc:
+            continue
+        out[u.id] = phase % 4
     return out
 
 
@@ -324,7 +271,12 @@ def _build_schedule_user_row(
             if not start or not end:
                 continue
             kind_raw = str(p.get("kind") or "vacation").strip().lower()
-            kind = "study" if kind_raw == "study" else "vacation"
+            if kind_raw == "study":
+                kind = "study"
+            elif kind_raw == "sick":
+                kind = "sick"
+            else:
+                kind = "vacation"
             vacation_periods.append({"start": start, "end": end, "kind": kind})
 
     cells: dict[str, str | None] = {}
@@ -704,7 +656,7 @@ async def regenerate_schedule(
     if eligible is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Сотрудник не найден или не выводится в расписании",
+            detail="Сотрудник не найден или не выводится в графике",
         )
     n = await run_schedule_regenerate_from_manual(
         session,

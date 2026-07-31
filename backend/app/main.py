@@ -12,7 +12,7 @@ from app.config import get_settings
 from app.database import async_session_maker
 from app.db_startup import run_alembic_upgrade
 from app.models import Role, User, UserRole
-from app.paths import UPLOAD_KB_DIR, UPLOADS_DIR
+from app.paths import UPLOAD_KB_DIR, UPLOAD_TASKS_DIR, UPLOADS_DIR
 from app.routers import (
     audit,
     auth,
@@ -35,6 +35,7 @@ settings = get_settings()
 
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 UPLOAD_KB_DIR.mkdir(parents=True, exist_ok=True)
+UPLOAD_TASKS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @asynccontextmanager
@@ -87,7 +88,7 @@ app = FastAPI(
 _origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_origins if _origins else ["*"],
+    allow_origins=_origins if _origins else ["http://172.24.230.140"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

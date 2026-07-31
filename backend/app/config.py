@@ -26,7 +26,9 @@ class Settings(BaseSettings):
     minio_access_key: str = "minioadmin"
     minio_secret_key: str = "minioadmin"
     minio_bucket: str = "mess-workspace"
-    minio_public_base_url: str = "http://localhost:9000"
+    minio_public_base_url: str = "/mes/files"
+    # Публичный base path фронта (BrowserRouter basename) для ссылок в HTML статей
+    public_app_base: str = "/mes"
 
 
 @lru_cache

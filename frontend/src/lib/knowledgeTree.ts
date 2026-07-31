@@ -2,9 +2,53 @@ import type { KnowledgeArticleOut } from "../api/knowledge";
 
 export type ArticleTreeNode = KnowledgeArticleOut & { children: ArticleTreeNode[] };
 
-function sortArticles(a: KnowledgeArticleOut, b: KnowledgeArticleOut): number {
-  if (a.position !== b.position) return a.position - b.position;
-  return a.title.localeCompare(b.title, "ru");
+/**
+ * Порядок среди соседей (один parent):
+ * - если у всех одинаковый position (по умолчанию 0) — А…Я по названию;
+ * - иначе ручной порядок по position, затем название.
+ */
+export function sortSiblingArticles(items: KnowledgeArticleOut[]): KnowledgeArticleOut[] {
+  if (items.length <= 1) return [...items];
+  const positions = new Set(items.map((a) => a.position));
+  if (positions.size === 1) {
+    return [...items].sort((a, b) => a.title.localeCompare(b.title, "ru"));
+  }
+  return [...items].sort((a, b) => {
+    if (a.position !== b.position) return a.position - b.position;
+    return a.title.localeCompare(b.title, "ru");
+  });
+}
+
+/** Новые позиции после сдвига статьи среди соседей (0…n-1). null — сдвиг невозможен. */
+export function computeSiblingPositionsAfterMove(
+  siblings: KnowledgeArticleOut[],
+  articleId: string,
+  direction: "up" | "down",
+): { id: string; position: number }[] | null {
+  const ordered = sortSiblingArticles(siblings);
+  const idx = ordered.findIndex((a) => a.id === articleId);
+  if (idx < 0) return null;
+  const swapWith = direction === "up" ? idx - 1 : idx + 1;
+  if (swapWith < 0 || swapWith >= ordered.length) return null;
+  const next = [...ordered];
+  [next[idx], next[swapWith]] = [next[swapWith], next[idx]];
+  return next.map((a, i) => ({ id: a.id, position: i }));
+}
+
+/**
+ * position для новой статьи:
+ * - режим А…Я (все соседи с одним position) — тот же position (обычно 0);
+ * - ручной порядок — в конец (max + 1).
+ */
+export function nextArticlePosition(
+  articles: KnowledgeArticleOut[],
+  parentId: string | null,
+): number {
+  const siblings = articles.filter((a) => a.parent_id === parentId);
+  if (!siblings.length) return 0;
+  const positions = new Set(siblings.map((a) => a.position));
+  if (positions.size === 1) return siblings[0].position;
+  return Math.max(...siblings.map((a) => a.position)) + 1;
 }
 
 /** Дерево статей: корни — parent_id === null */
@@ -17,9 +61,19 @@ export function buildArticleTree(articles: KnowledgeArticleOut[]): ArticleTreeNo
   }
   const mapNode = (x: KnowledgeArticleOut): ArticleTreeNode => ({
     ...x,
-    children: (byParent.get(x.id) ?? []).sort(sortArticles).map(mapNode),
+    children: sortSiblingArticles(byParent.get(x.id) ?? []).map(mapNode),
   });
-  return (byParent.get(null) ?? []).sort(sortArticles).map(mapNode);
+  return sortSiblingArticles(byParent.get(null) ?? []).map(mapNode);
+}
+
+/**
+ * Статья для автооткрытия главной пространства:
+ * первая корневая с дочерними (оглавление), иначе первая корневая.
+ */
+export function pickDefaultSpaceArticleId(roots: ArticleTreeNode[]): string | null {
+  if (!roots.length) return null;
+  const withChildren = roots.find((r) => r.children.length > 0);
+  return (withChildren ?? roots[0]).id;
 }
 
 /** Цепочка от корня до leaf (включая leaf) */
@@ -53,6 +107,24 @@ export function collectDescendantIds(articles: KnowledgeArticleOut[], rootId: st
   };
   walk(rootId);
   return out;
+}
+
+/** Поддерево прямых детей статьи (с вложенностью). */
+export function getArticleChildrenTree(
+  articles: KnowledgeArticleOut[],
+  parentId: string,
+): ArticleTreeNode[] {
+  const byParent = new Map<string | null, KnowledgeArticleOut[]>();
+  for (const a of articles) {
+    const p = a.parent_id;
+    if (!byParent.has(p)) byParent.set(p, []);
+    byParent.get(p)!.push(a);
+  }
+  const mapNode = (x: KnowledgeArticleOut): ArticleTreeNode => ({
+    ...x,
+    children: sortSiblingArticles(byParent.get(x.id) ?? []).map(mapNode),
+  });
+  return sortSiblingArticles(byParent.get(parentId) ?? []).map(mapNode);
 }
 
 export type FlatOption = { id: string; title: string; depth: number };

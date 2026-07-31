@@ -4,30 +4,38 @@ import { ChevronLeft, FolderKanban } from "lucide-react";
 import { Link, Navigate } from "react-router-dom";
 
 import { listTasks, type TaskOut, type TaskPriority } from "../api/tasks";
+import { listBoards } from "../api/boards";
 import { AppShell } from "../components/AppShell";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
 import {
   DEFAULT_TASK_ANALYTICS_FILTERS,
+  closedPeriodBounds,
+  closedTasksByAssignee,
   computeTaskKpis,
+  filterTasksByBoardScope,
   filterTasksForAnalytics,
   groupTasksByAssignee,
   groupTasksBySystem,
   overdueTaskRows,
   tasksDueSoonRows,
+  type BoardAnalyticsScope,
+  type ClosedPeriod,
   type DueStatusFilter,
   type TaskAnalyticsFilters,
 } from "../lib/taskAnalyticsFilters";
 import { canViewManagerTeamDashboard } from "../lib/permissions";
+import { downloadAnalyticsReportExcel } from "../lib/exportAnalyticsReportExcel";
 import { taskHasAssignee } from "../lib/taskAssignees";
 import { taskInDoneColumn, taskIsActiveForDashboard } from "../lib/taskStatus";
+import { toastApiError, toastSuccess } from "../lib/toast";
 
 const ManagerSystemsChart = lazy(() => import("../components/charts/ManagerSystemsChart"));
 const ManagerWorkloadChart = lazy(() => import("../components/charts/ManagerWorkloadChart"));
 const ManagerCreatedClosedChart = lazy(() => import("../components/charts/ManagerCreatedClosedChart"));
 
-type AnalyticsTab = "summary" | "overdue" | "workload" | "risk";
+type AnalyticsTab = "summary" | "overdue" | "workload" | "closed" | "risk";
 type SystemTableSort = "overdue_desc" | "total_desc" | "name_asc";
 type WeeklyFlowRow = { label: string; created: number; closed: number };
 type AgingColumnRow = { id: string; name: string; total: number; b0_3: number; b4_7: number; b8_14: number; b15p: number };
@@ -132,36 +140,6 @@ function toggleInList(list: string[], id: string): string[] {
   return list.includes(id) ? list.filter((x) => x !== id) : [...list, id];
 }
 
-function taskToCsv(rows: TaskOut[]): string {
-  const escape = (v: string) => `"${v.replaceAll("\"", "\"\"")}"`;
-  const lines = [
-    ["Задача", "Система", "Колонка", "Приоритет", "Срок", "Исполнители"].map(escape).join(";"),
-    ...rows.map((t) =>
-      [
-        t.title,
-        t.system?.name ?? "Без системы",
-        t.column?.name ?? "—",
-        t.priority,
-        t.due_at ?? "",
-        (t.assignees ?? []).map((a) => a.full_name).join(", "),
-      ]
-        .map(escape)
-        .join(";"),
-    ),
-  ];
-  return lines.join("\n");
-}
-
-function downloadCsv(filename: string, csv: string): void {
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
 export function ManagerTeamDashboardPage() {
   const { resolved: themeResolved } = useTheme();
   const chartDark = themeResolved === "dark";
@@ -173,6 +151,7 @@ export function ManagerTeamDashboardPage() {
   const [filters, setFilters] = useState<TaskAnalyticsFilters>(DEFAULT_TASK_ANALYTICS_FILTERS);
   const [systemSearch, setSystemSearch] = useState("");
   const [systemSort, setSystemSort] = useState<SystemTableSort>("overdue_desc");
+  const [closedPeriod, setClosedPeriod] = useState<ClosedPeriod>("week");
 
   const allTasksQuery = useQuery({
     queryKey: ["tasks", user?.id ?? "", "manager-analytics"],
@@ -180,8 +159,19 @@ export function ManagerTeamDashboardPage() {
     enabled: canAccess,
   });
 
+  const boardsQuery = useQuery({
+    queryKey: ["boards", user?.id ?? "", "manager-analytics"],
+    queryFn: listBoards,
+    enabled: canAccess,
+  });
+
   const allTasks = allTasksQuery.data ?? [];
-  const filtered = useMemo(() => filterTasksForAnalytics(allTasks, filters), [allTasks, filters]);
+  const boards = boardsQuery.data ?? [];
+  const scopedTasks = useMemo(
+    () => filterTasksByBoardScope(allTasks, filters.boardScope, boards, filters.customBoardId),
+    [allTasks, boards, filters.boardScope, filters.customBoardId],
+  );
+  const filtered = useMemo(() => filterTasksForAnalytics(scopedTasks, filters), [scopedTasks, filters]);
   const kpis = useMemo(() => computeTaskKpis(filtered), [filtered]);
   const bySystem = useMemo(() => groupTasksBySystem(filtered), [filtered]);
   const byAssignee = useMemo(() => groupTasksByAssignee(filtered), [filtered]);
@@ -231,36 +221,94 @@ export function ManagerTeamDashboardPage() {
   const weeklyFlowRows = useMemo(() => createdVsClosedWeekly(filtered, 8), [filtered]);
   const agingRows = useMemo(() => agingByColumn(filtered), [filtered]);
 
+  // Закрытия: учитываем архив (иначе закрытые задачи выпадают из фильтра).
+  const closedSourceTasks = useMemo(
+    () => filterTasksForAnalytics(scopedTasks, { ...filters, includeArchived: true, dueStatuses: [] }),
+    [scopedTasks, filters],
+  );
+  const closedPeriodMeta = useMemo(() => closedPeriodBounds(closedPeriod), [closedPeriod]);
+  const closedByAssignee = useMemo(
+    () => closedTasksByAssignee(closedSourceTasks, closedPeriod),
+    [closedSourceTasks, closedPeriod],
+  );
+  const closedTotal = useMemo(
+    () => closedByAssignee.reduce((s, r) => s + r.closed, 0),
+    [closedByAssignee],
+  );
+
+  const customBoards = useMemo(
+    () =>
+      boards
+        .filter((b) => b.scope === "system" && !b.is_archived)
+        .slice()
+        .sort((a, b) => a.name.localeCompare(b.name, "ru")),
+    [boards],
+  );
+
+  const reportBoardLabel = useMemo(() => {
+    if (filters.boardScope === "main") return "Основная доска";
+    if (filters.boardScope === "all") return "Все доски";
+    const b = customBoards.find((x) => x.id === filters.customBoardId);
+    if (!b) return "Другая доска";
+    return b.system_name ? `${b.name} (${b.system_name})` : b.name;
+  }, [filters.boardScope, filters.customBoardId, customBoards]);
+
+  const [exportPending, setExportPending] = useState(false);
+
+  const exportExcelReport = async () => {
+    if (exportPending) return;
+    setExportPending(true);
+    try {
+      await downloadAnalyticsReportExcel({
+        boardScope: filters.boardScope,
+        boardLabel: reportBoardLabel,
+        kpis,
+        bySystem,
+        byAssignee,
+        overdueRows,
+        weeklyFlow: weeklyFlowRows,
+        closedPeriod,
+        closedByAssignee,
+        tasks: filtered,
+      });
+      toastSuccess("Отчёт Excel сформирован");
+    } catch (e) {
+      toastApiError(e, "Не удалось сформировать отчёт");
+    } finally {
+      setExportPending(false);
+    }
+  };
+
   const systemOptions = useMemo(() => {
     const m = new Map<string, string>();
-    for (const t of allTasks) {
+    for (const t of scopedTasks) {
       const id = t.system?.id ?? "__none__";
       const name = t.system?.name ?? "Без системы";
       m.set(id, name);
     }
     return [...m.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, "ru"));
-  }, [allTasks]);
+  }, [scopedTasks]);
 
   const assigneeOptions = useMemo(() => {
     const m = new Map<string, string>();
-    for (const t of allTasks) for (const a of t.assignees ?? []) m.set(a.id, a.full_name);
+    for (const t of scopedTasks) for (const a of t.assignees ?? []) m.set(a.id, a.full_name);
     return [...m.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, "ru"));
-  }, [allTasks]);
+  }, [scopedTasks]);
 
   const columnOptions = useMemo(() => {
     const m = new Map<string, string>();
-    for (const t of allTasks) if (t.column?.id) m.set(t.column.id, t.column.name);
+    for (const t of scopedTasks) if (t.column?.id) m.set(t.column.id, t.column.name);
     return [...m.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, "ru"));
-  }, [allTasks]);
+  }, [scopedTasks]);
 
   const tagOptions = useMemo(() => {
     const m = new Map<string, string>();
-    for (const t of allTasks) for (const tg of t.tags ?? []) m.set(tg.id, `#${tg.name}`);
+    for (const t of scopedTasks) for (const tg of t.tags ?? []) m.set(tg.id, `#${tg.name}`);
     return [...m.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, "ru"));
-  }, [allTasks]);
+  }, [scopedTasks]);
 
   const managerOwnTasks = useMemo(() => {
-    return allTasks
+    return scopedTasks
       .filter((t) => taskIsActiveForDashboard(t) && user && taskHasAssignee(t, user.id))
       .slice()
       .sort((a, b) => {
@@ -269,7 +317,34 @@ export function ManagerTeamDashboardPage() {
         return da - db;
       })
       .slice(0, 6);
-  }, [allTasks, user]);
+  }, [scopedTasks, user]);
+
+  const boardScopeOptions: Array<{ id: Exclude<BoardAnalyticsScope, "board">; label: string }> = [
+    { id: "main", label: "Основная" },
+    { id: "all", label: "Все доски" },
+  ];
+
+  const setBoardScope = (scope: Exclude<BoardAnalyticsScope, "board">) => {
+    setFilters((f) => ({
+      ...f,
+      boardScope: scope,
+      customBoardId: null,
+      columnIds: [],
+    }));
+  };
+
+  const setCustomBoard = (boardId: string) => {
+    if (!boardId) {
+      setBoardScope("main");
+      return;
+    }
+    setFilters((f) => ({
+      ...f,
+      boardScope: "board",
+      customBoardId: boardId,
+      columnIds: [],
+    }));
+  };
 
   if (state.status !== "authenticated" || !user) return null;
   if (!canViewManagerTeamDashboard(user)) return <Navigate to="/" replace />;
@@ -282,21 +357,66 @@ export function ManagerTeamDashboardPage() {
             <ChevronLeft className="h-4 w-4" />
             К обзору
           </Link>
-          <div className="flex flex-wrap items-center gap-2">
-            {(["summary", "overdue", "workload", "risk"] as AnalyticsTab[]).map((x) => (
-              <button
-                key={x}
-                type="button"
-                onClick={() => setTab(x)}
-                className={`rounded-lg px-3 py-1.5 text-xs font-medium ${
-                  tab === x
-                    ? "bg-sky-600 text-white"
-                    : "bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
-                }`}
-              >
-                {x === "summary" ? "Сводка" : x === "overdue" ? "Просрочки" : x === "workload" ? "Нагрузка" : "Риски сроков"}
-              </button>
-            ))}
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="inline-flex flex-wrap items-center gap-1 rounded-lg bg-slate-100 p-0.5 dark:bg-slate-800" role="group" aria-label="Срез по доскам">
+              {boardScopeOptions.map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setBoardScope(opt.id)}
+                  className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                    filters.boardScope === opt.id
+                      ? "bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-slate-50"
+                      : "text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-slate-100"
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+              {customBoards.length > 0 && (
+                <select
+                  value={filters.boardScope === "board" ? filters.customBoardId ?? "" : ""}
+                  onChange={(e) => setCustomBoard(e.target.value)}
+                  className={`max-w-[11rem] rounded-md border-0 py-1.5 pl-2.5 pr-7 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-sky-500/40 ${
+                    filters.boardScope === "board"
+                      ? "bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-slate-50"
+                      : "bg-transparent text-slate-600 dark:text-slate-300"
+                  }`}
+                  aria-label="Другие доски"
+                >
+                  <option value="">Другие доски…</option>
+                  {customBoards.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.system_name ? `${b.name} (${b.system_name})` : b.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {(["summary", "overdue", "workload", "closed", "risk"] as AnalyticsTab[]).map((x) => (
+                <button
+                  key={x}
+                  type="button"
+                  onClick={() => setTab(x)}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-medium ${
+                    tab === x
+                      ? "bg-sky-600 text-white"
+                      : "bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+                  }`}
+                >
+                  {x === "summary"
+                    ? "Сводка"
+                    : x === "overdue"
+                      ? "Просрочки"
+                      : x === "workload"
+                        ? "Нагрузка"
+                        : x === "closed"
+                          ? "Закрытия"
+                          : "Риски сроков"}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -427,10 +547,11 @@ export function ManagerTeamDashboardPage() {
             </button>
             <button
               type="button"
-              onClick={() => downloadCsv("tasks_filtered.csv", taskToCsv(filtered))}
-              className="rounded-lg bg-sky-100 px-3 py-1.5 text-xs font-medium text-sky-700 dark:bg-sky-950/40 dark:text-sky-300"
+              onClick={() => void exportExcelReport()}
+              disabled={exportPending || allTasksQuery.isPending}
+              className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
             >
-              Экспорт CSV
+              {exportPending ? "Формирование…" : "Отчёт Excel"}
             </button>
           </div>
         </div>
@@ -513,7 +634,7 @@ export function ManagerTeamDashboardPage() {
         {!allTasksQuery.isPending && tab === "summary" && (
           <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-5 dark:border-slate-700 dark:bg-slate-900/60">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <h3 className="font-semibold text-slate-900 dark:text-white">Все системы (таблица)</h3>
+              <h3 className="font-semibold text-slate-900 dark:text-white">Все системы</h3>
               <div className="flex flex-wrap items-center gap-2">
                 <input
                   value={systemSearch}
@@ -567,10 +688,10 @@ export function ManagerTeamDashboardPage() {
         {!allTasksQuery.isPending && tab === "summary" && (
           <div className="grid gap-4 lg:grid-cols-2">
             <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-5 dark:border-slate-700 dark:bg-slate-900/60">
-              <h3 className="mb-2 font-semibold text-slate-900 dark:text-white">Создано vs закрыто (8 недель)</h3>
-              <p className="mb-3 text-xs text-slate-500 dark:text-slate-400">
+              <h3 className="mb-2 font-semibold text-slate-900 dark:text-white">Создано vs закрыто</h3>
+              {/* <p className="mb-3 text-xs text-slate-500 dark:text-slate-400">
                 Закрыто = задача в архиве или в колонке «Выполнено» (по дате обновления).
-              </p>
+              </p> */}
               <Suspense fallback={<ChartSkeleton className="h-56" />}>
                 <ManagerCreatedClosedChart rows={weeklyFlowRows} dark={chartDark} />
               </Suspense>
@@ -673,6 +794,133 @@ export function ManagerTeamDashboardPage() {
                 dark={chartDark}
               />
             </Suspense>
+          </div>
+        )}
+
+        {!allTasksQuery.isPending && tab === "closed" && (
+          <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-5 dark:border-slate-700 dark:bg-slate-900/60">
+            <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="font-semibold">Закрытые задачи по сотрудникам</h3>
+                <p className="mt-1 text-xs text-slate-500">
+                  Период: {closedPeriodMeta.label}. Учитываются задачи в колонке «Выполнено» или в архиве.
+                  При нескольких исполнителях задача засчитывается каждому. Срез доски и фильтры (кроме архива)
+                  применяются.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <div
+                  className="inline-flex items-center gap-0.5 rounded-lg bg-slate-100 p-0.5 dark:bg-slate-800"
+                  role="group"
+                  aria-label="Период закрытий"
+                >
+                  {(
+                    [
+                      ["week", "Неделя"],
+                      ["month", "Месяц"],
+                      ["year", "Год"],
+                    ] as Array<[ClosedPeriod, string]>
+                  ).map(([id, label]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => setClosedPeriod(id)}
+                      className={`rounded-md px-2.5 py-1.5 text-xs font-medium ${
+                        closedPeriod === id
+                          ? "bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-slate-50"
+                          : "text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-slate-100"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void exportExcelReport()}
+                  disabled={exportPending}
+                  className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-100 disabled:opacity-60 dark:border-emerald-900/50 dark:bg-emerald-950/40 dark:text-emerald-200"
+                >
+                  {exportPending ? "…" : "В отчёт Excel"}
+                </button>
+              </div>
+            </div>
+
+            <div className="mb-4 grid gap-2 sm:grid-cols-3">
+              <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs dark:bg-slate-800/60">
+                <p className="text-slate-500">Закрыто всего</p>
+                <p className="text-base font-semibold text-slate-900 dark:text-white">{closedTotal}</p>
+              </div>
+              <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs dark:bg-slate-800/60">
+                <p className="text-slate-500">Сотрудников с закрытиями</p>
+                <p className="text-base font-semibold text-slate-900 dark:text-white">
+                  {closedByAssignee.filter((r) => r.id !== "__none__" && r.closed > 0).length}
+                </p>
+              </div>
+              <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs dark:bg-slate-800/60">
+                <p className="text-slate-500">Период</p>
+                <p className="text-base font-semibold capitalize text-slate-900 dark:text-white">
+                  {closedPeriod === "week" ? "Неделя" : closedPeriod === "month" ? "Месяц" : "Год"}
+                </p>
+              </div>
+            </div>
+
+            {closedByAssignee.length > 0 && (
+              <div className="mb-4 space-y-2">
+                {closedByAssignee.slice(0, 12).map((r) => {
+                  const max = closedByAssignee[0]?.closed || 1;
+                  const pct = Math.max(4, Math.round((r.closed / max) * 100));
+                  return (
+                    <div key={r.id} className="flex items-center gap-3 text-sm">
+                      <div className="w-40 shrink-0 truncate text-slate-700 dark:text-slate-200" title={r.name}>
+                        {r.name}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="h-2.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+                          <div
+                            className="h-full rounded-full bg-emerald-500/90 dark:bg-emerald-400/80"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      </div>
+                      <div className="w-10 shrink-0 text-right font-semibold tabular-nums text-slate-900 dark:text-white">
+                        {r.closed}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="overflow-x-auto rounded-xl border border-slate-200/80 dark:border-slate-700">
+              <table className="min-w-full text-sm">
+                <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500 dark:bg-slate-800/70 dark:text-slate-400">
+                  <tr>
+                    <th className="px-3 py-2 font-medium">#</th>
+                    <th className="px-3 py-2 font-medium">Сотрудник</th>
+                    <th className="px-3 py-2 font-medium">Закрыто</th>
+                    <th className="px-3 py-2 font-medium">% от всех</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {closedByAssignee.map((r, idx) => (
+                    <tr key={r.id}>
+                      <td className="px-3 py-2 tabular-nums text-slate-400">{idx + 1}</td>
+                      <td className="px-3 py-2 font-medium text-slate-900 dark:text-white">{r.name}</td>
+                      <td className="px-3 py-2 tabular-nums font-semibold text-emerald-700 dark:text-emerald-300">
+                        {r.closed}
+                      </td>
+                      <td className="px-3 py-2 tabular-nums text-slate-600 dark:text-slate-300">
+                        {closedTotal > 0 ? `${Math.round((r.closed / closedTotal) * 100)}%` : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {closedByAssignee.length === 0 && (
+                <p className="px-3 py-6 text-sm text-slate-500">За выбранный период закрытых задач нет.</p>
+              )}
+            </div>
           </div>
         )}
 

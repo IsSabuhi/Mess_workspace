@@ -24,6 +24,7 @@ import { listBoards } from '../api/boards';
 import { useAuth } from '../context/AuthContext';
 import {
   canAdminAccess,
+  canCreateBoards,
   canViewManagerTeamDashboard,
   canViewSchedule,
   PERM,
@@ -101,7 +102,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: Props) {
               <p className='text-sm font-semibold text-slate-900 dark:text-white'>
                 Портал MES
               </p>
-              <p className="text-xs text-slate-500 dark:text-slate-400">Задачи · График · Команда</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400">Задачи · График · Отчеты</p>
             </div>
           )}
         </div>
@@ -168,7 +169,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: Props) {
                   </button>
                   {taskBoardsOpen && (
                     <>
-                      {state.user.is_superuser && (
+                      {canCreateBoards(state.user) && (
                         <NavLink
                           to={{ pathname: '/tasks', search: '?createBoard=1' }}
                           className={[
@@ -229,7 +230,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: Props) {
         {showSchedule && (
           <NavLink
             to='/schedule'
-            title={collapsed ? 'Расписание' : undefined}
+            title={collapsed ? 'График' : undefined}
             className={({ isActive }) =>
               [
                 'group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition',
@@ -240,7 +241,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: Props) {
               ].join(' ')
             }>
             <CalendarDays className='h-5 w-5 shrink-0 opacity-90' aria-hidden />
-            {!collapsed && <span>Расписание</span>}
+            {!collapsed && <span>График</span>}
           </NavLink>
         )}
         {showEmployeeDirectory && (

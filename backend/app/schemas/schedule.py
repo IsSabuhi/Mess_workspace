@@ -34,11 +34,11 @@ class ScheduleUserRow(BaseModel):
     )
     auto_row_color: str | None = Field(
         default=None,
-        description="Автоцвет по совпадению смен (только для shift), если ручной не задан",
+        description="Автоцвет по фазе цикла 11→3→8 (только shift); одна фаза — один цвет; если ручной не задан",
     )
     vacation_periods: list[dict[str, str]] = Field(
         default_factory=list,
-        description="Периоды отпуска из справочника: [{start,end,kind}], где kind=vacation|study",
+        description="Периоды из справочника: [{start,end,kind}], где kind=vacation|study|sick",
     )
 
 

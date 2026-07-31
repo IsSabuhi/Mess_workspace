@@ -149,7 +149,11 @@ export function NotificationsPage() {
                   <div className="flex items-center gap-2">
                     {n.task_id && (
                       <Link
-                        to={`/tasks?taskId=${n.task_id}`}
+                        to={
+                          n.board_id
+                            ? `/tasks?board=${n.board_id}&taskId=${n.task_id}`
+                            : `/tasks?taskId=${n.task_id}`
+                        }
                         className="text-sm font-medium text-sky-600 hover:underline dark:text-sky-400"
                       >
                         К задаче

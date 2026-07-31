@@ -11,13 +11,13 @@ from app.schemas.system import SystemBrief
 class VacationPeriodOut(BaseModel):
     start: date
     end: date
-    kind: Literal["vacation", "study"] = "vacation"
+    kind: Literal["vacation", "study", "sick"] = "vacation"
 
 
 class VacationPeriodIn(BaseModel):
     start: date
     end: date
-    kind: Literal["vacation", "study"] = "vacation"
+    kind: Literal["vacation", "study", "sick"] = "vacation"
 
     @model_validator(mode="after")
     def check_range(self) -> "VacationPeriodIn":

@@ -78,7 +78,7 @@ export function Modal({
         aria-labelledby={ariaLabelledBy}
         aria-describedby={ariaDescribedBy}
         tabIndex={-1}
-        className={`glass w-full ${sizeClass[size]} rounded-2xl border border-white/60 p-0 shadow-soft-lg outline-none dark:border-slate-700/60 ${className}`}
+        className={`modal-panel w-full ${sizeClass[size]} rounded-2xl p-0 outline-none ${className}`}
         onClick={stopPanelPointer}
       >
         {(title || description) && (

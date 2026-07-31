@@ -3,7 +3,6 @@ import { Download, Filter, SlidersHorizontal } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
-import { ApiError } from "../api/client";
 import {
   bulkEmployeeDirectoryProfile,
   listEmployeeDirectory,
@@ -26,6 +25,7 @@ import {
 } from "../lib/permissions";
 import { toastApiError, toastError, toastSuccess } from "../lib/toast";
 import { useModalLayer } from "../lib/useModalLayer";
+import { useToastQueryError } from "../lib/useToastQueryError";
 import { useAuth } from "../context/AuthContext";
 
 function asInputDate(v: string | null | undefined): string {
@@ -203,6 +203,7 @@ export function EmployeeDirectoryPage() {
   });
   const systemsQuery = useQuery({ queryKey: ["systems", "all-for-directory"], queryFn: () => listSystems(false) });
   const positionsQuery = useQuery({ queryKey: ["positions", "all-for-directory"], queryFn: () => listPositions(false) });
+  useToastQueryError(rowsQuery.error, "Ошибка загрузки справочника сотрудников");
 
   const saveComplianceMut = useMutation({
     mutationFn: ({ id, body }: { id: string; body: Parameters<typeof patchEmployeeDirectory>[1] }) =>
@@ -324,7 +325,6 @@ export function EmployeeDirectoryPage() {
 
   const rows = rowsQuery.data ?? [];
   const displayRows = useMemo(() => [...rows].sort(compareDirectoryRowsBySystems), [rows]);
-  const loadError = rowsQuery.error instanceof ApiError ? rowsQuery.error.detail : rowsQuery.isError ? "Ошибка загрузки" : null;
 
   function openComplianceEdit(row: EmployeeDirectoryRowOut) {
     setEditingCompliance(row);
@@ -748,12 +748,6 @@ export function EmployeeDirectoryPage() {
             </button>
           </div>
 
-          {loadError && (
-            <p className="mb-3 rounded-xl bg-red-50 px-4 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
-              {loadError}
-            </p>
-          )}
-
           {activeTab === "compliance" && (
             <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white/80 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
               <table className="w-full min-w-[880px] text-left text-sm">
@@ -824,7 +818,7 @@ export function EmployeeDirectoryPage() {
                     <th className="px-3 py-2">Системы</th>
                     <th className="px-3 py-2">Пол</th>
                     <th className="px-3 py-2">График (авто)</th>
-                    <th className="px-3 py-2">Отпуск в графике</th>
+                    <th className="px-3 py-2">Отпуск / больничный</th>
                     {canProfileEdit && <th className="px-3 py-2">Действия</th>}
                   </tr>
                 </thead>
@@ -878,7 +872,7 @@ export function EmployeeDirectoryPage() {
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
         >
           <div
-            className="glass max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl p-6 shadow-soft-lg"
+            className="modal-panel max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl p-6 shadow-soft-lg"
             role="dialog"
             aria-modal="true"
             onClick={compModalPanelStop}
@@ -999,7 +993,7 @@ export function EmployeeDirectoryPage() {
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
         >
           <div
-            className="glass max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl p-6 shadow-soft-lg"
+            className="modal-panel max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl p-6 shadow-soft-lg"
             role="dialog"
             aria-modal="true"
             onClick={profModalPanelStop}
@@ -1112,7 +1106,7 @@ export function EmployeeDirectoryPage() {
                   </select>
                 </label>
                 <div className="rounded-lg border border-slate-200/60 bg-white/60 px-3 py-2.5 text-[11px] leading-relaxed text-slate-500 dark:border-slate-600/60 dark:bg-slate-900/40 dark:text-slate-400">
-                  <p>Эти поля используются кнопкой «Автозаполнение» на странице «Расписание».</p>
+                  <p>Эти поля используются кнопкой «Автозаполнение» на странице «График».</p>
                   <ul className="mt-2 list-inside list-disc space-y-1">
                     <li>
                       <strong>5/2</strong> — в будни без праздника: женский пол — <span className="font-mono">7.2</span>,
@@ -1130,11 +1124,11 @@ export function EmployeeDirectoryPage() {
                 </div>
               </div>
               <div className="rounded-xl border border-slate-200/80 bg-slate-50/80 p-3 dark:border-slate-600 dark:bg-slate-800/40">
-                <p className="text-sm font-medium text-slate-800 dark:text-slate-100">Отпуск для графика</p>
+                <p className="text-sm font-medium text-slate-800 dark:text-slate-100">Отпуск и больничный для графика</p>
                 <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  Укажите периоды — при автозаполнении в расписании подставятся коды: отпуск —{" "}
-                  <span className="font-mono">о</span>, учебный отпуск — <span className="font-mono">у</span>. Можно
-                  добавить несколько интервалов.
+                  Укажите периоды — при автозаполнении в графике подставятся коды: отпуск —{" "}
+                  <span className="font-mono">о</span>, учебный отпуск — <span className="font-mono">у</span>, больничный —{" "}
+                  <span className="font-mono">б</span>. Можно добавить несколько интервалов.
                 </p>
                 <ul className="mt-3 space-y-2">
                   {profileForm.vacation_periods.map((period, idx) => (
@@ -1145,7 +1139,9 @@ export function EmployeeDirectoryPage() {
                           setProfileForm((p) => ({
                             ...p,
                             vacation_periods: p.vacation_periods.map((x, i) =>
-                              i === idx ? { ...x, kind: e.target.value as "vacation" | "study" } : x,
+                              i === idx
+                                ? { ...x, kind: e.target.value as "vacation" | "study" | "sick" }
+                                : x,
                             ),
                           }))
                         }
@@ -1153,6 +1149,7 @@ export function EmployeeDirectoryPage() {
                       >
                         <option value="vacation">Отпуск (о)</option>
                         <option value="study">Учебный отпуск (у)</option>
+                        <option value="sick">Больничный (б)</option>
                       </select>
                       <input
                         type="date"

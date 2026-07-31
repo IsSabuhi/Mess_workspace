@@ -2,7 +2,6 @@ import { useState, type FormEvent } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import { Link, Navigate } from "react-router-dom";
 
-import { ApiError } from "../api/client";
 import { toastApiError, toastSuccess } from "../lib/toast";
 import { registerUser } from "../api/auth";
 import { useAuth } from "../context/AuthContext";
@@ -13,7 +12,6 @@ export function BootstrapPage() {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [fullName, setFullName] = useState("");
-  const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
   const [loading, setLoading] = useState(false);
 
@@ -23,18 +21,12 @@ export function BootstrapPage() {
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    setError(null);
     setLoading(true);
     try {
       await registerUser(email.trim(), password, fullName.trim());
       setDone(true);
       toastSuccess("Учётная запись создана");
     } catch (err) {
-      if (err instanceof ApiError) {
-        setError(err.detail);
-      } else {
-        setError("Не удалось создать пользователя");
-      }
       toastApiError(err, "Не удалось создать пользователя");
     } finally {
       setLoading(false);
@@ -110,11 +102,6 @@ export function BootstrapPage() {
               </button>
             </div>
           </div>
-          {error && (
-            <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/50 dark:text-red-300">
-              {error}
-            </p>
-          )}
           <button
             type="submit"
             disabled={loading}

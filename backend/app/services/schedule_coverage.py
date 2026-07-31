@@ -1,4 +1,4 @@
-"""Проверка покрытия: в каждой системе для сменщиков в день должно быть ≥ N человек «на работе» (не о/у/пусто)."""
+"""Проверка покрытия: в каждой системе для сменщиков в день должно быть ≥ N человек «на работе» (не о/у/б/пусто)."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ def _is_working_cell(code: str | None) -> bool:
     c = (code or "").strip().lower()
     if not c:
         return False
-    if c in ("о", "у"):
+    if c in ("о", "у", "б"):
         return False
     return True
 

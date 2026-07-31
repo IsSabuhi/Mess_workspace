@@ -12,6 +12,7 @@ USER_VIEW_FORBIDDEN = "Нет прав на просмотр этого поль
 
 # Авторизация
 INVALID_CREDENTIALS = "Неверный email или пароль"
+INVALID_PASSWORD = "Неверный пароль"
 USER_INACTIVE = "Учётная запись отключена"
 BOOTSTRAP_DISABLED = "Регистрация через bootstrap отключена"
 USERS_ALREADY_EXIST = "Пользователи уже существуют — bootstrap недоступен"
@@ -34,3 +35,6 @@ TASK_NO_SYSTEM_MEMBERSHIP = (
 )
 TASK_PICK_SYSTEM = "Выберите производственную систему"
 TASK_SYSTEM_NOT_ALLOWED = "Нет доступа к выбранной системе"
+TASK_ASSIGNEE_NOT_ALLOWED = (
+    "Исполнитель должен быть сотрудником системы доски или участником доски"
+)

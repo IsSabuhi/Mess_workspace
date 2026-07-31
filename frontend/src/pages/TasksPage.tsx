@@ -13,7 +13,7 @@ import {
 import { arrayMove, SortableContext, horizontalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { GripVertical, Lock, LockOpen, Pencil, Plus, Tags, Trash2 } from "lucide-react";
+import { Check, GripVertical, Lock, LockOpen, MessageSquare, Paperclip, Pencil, Plus, Tags, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
@@ -35,16 +35,19 @@ import {
   createTask,
   createTaskComment,
   deleteTask,
+  deleteTaskAttachment,
   deleteTaskComment,
   getTask,
   listTaskComments,
   listTasks,
   updateTask,
   updateTaskComment,
+  uploadTaskAttachment,
 } from "../api/tasks";
-import type { TaskCommentOut, TaskCreate, TaskOut, TaskUpdate } from "../api/tasks";
+import type { ChecklistItem, TaskCommentOut, TaskCreate, TaskOut, TaskUpdate } from "../api/tasks";
 import { listAssigneeCandidates } from "../api/users";
 import { MultiAssigneePicker } from "../components/MultiAssigneePicker";
+import { TaskDetailModal } from "../components/TaskDetailModal";
 import { AppShell } from "../components/AppShell";
 import { useAuth } from "../context/AuthContext";
 import {
@@ -52,6 +55,7 @@ import {
   boardPermissionContext,
   canBypassBoardEditingLock,
   canCommentOnTask,
+  canCreateBoards as userCanCreateBoards,
   canCreateTaskOnBoard,
   canDeleteTask,
   canEditTaskDescription,
@@ -64,11 +68,36 @@ import {
   canMoveTask,
   hasPermission,
 } from "../lib/permissions";
-import { computeTaskKpis } from "../lib/taskAnalyticsFilters";
+import { computeTaskKpis, taskDueStatus } from "../lib/taskAnalyticsFilters";
 import { formatAssigneesLabel } from "../lib/taskAssignees";
 import { taskIsOverdueForDashboard } from "../lib/taskStatus";
 import { toastApiError, toastError, toastSuccess } from "../lib/toast";
+import { useToastQueryError } from "../lib/useToastQueryError";
 import { useModalLayer } from "../lib/useModalLayer";
+
+/** Ближайший срок сверху; без срока — внизу. */
+function compareTasksByDueAsc(a: TaskOut, b: TaskOut): number {
+  const ta = a.due_at ? new Date(a.due_at).getTime() : NaN;
+  const tb = b.due_at ? new Date(b.due_at).getTime() : NaN;
+  const aHas = Number.isFinite(ta);
+  const bHas = Number.isFinite(tb);
+  if (aHas && bHas && ta !== tb) return ta - tb;
+  if (aHas && !bHas) return -1;
+  if (!aHas && bHas) return 1;
+  return a.title.localeCompare(b.title, "ru");
+}
+
+function formatTaskDueShort(iso: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return null;
+  return d.toLocaleString("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 const PRIORITY_LABEL: Record<string, string> = {
   low: "Низкий",
@@ -107,15 +136,6 @@ function dropIdForColumn(columnId: string) {
   return `${DROP_COL_PREFIX}${columnId}`;
 }
 
-function formatDt(iso: string | null): string {
-  if (!iso) return "—";
-  try {
-    return new Date(iso).toLocaleString("ru-RU");
-  } catch {
-    return iso;
-  }
-}
-
 function toLocalInput(iso: string | null): string {
   if (!iso) return "";
   const d = new Date(iso);
@@ -129,12 +149,6 @@ function fromLocalInput(s: string): string | null {
   const d = new Date(s);
   if (Number.isNaN(d.getTime())) return null;
   return d.toISOString();
-}
-
-function queryErr(e: unknown): string | null {
-  if (e instanceof ApiError) return e.detail;
-  if (e) return "Ошибка загрузки";
-  return null;
 }
 
 function activeMentionToken(text: string): { query: string; start: number; end: number } | null {
@@ -183,6 +197,7 @@ function DraggableTaskCard({
   canDelete,
   onDelete,
   isOverdue,
+  isDone,
 }: {
   task: TaskOut;
   canDrag: boolean;
@@ -191,6 +206,7 @@ function DraggableTaskCard({
   canDelete?: boolean;
   onDelete?: () => void;
   isOverdue?: boolean;
+  isDone?: boolean;
 }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: task.id,
@@ -200,15 +216,29 @@ function DraggableTaskCard({
     transform: transform ? `translate3d(${transform.x}px,${transform.y}px,0)` : undefined,
   };
   const assigneesLine = formatAssigneesLabel(task);
+  const dueLabel = formatTaskDueShort(task.due_at);
+  const commentsCount = task.comments_count ?? 0;
+  const attachmentsCount = (task.attachments ?? []).length;
+  const isDueSoon = !isDone && !isOverdue && taskDueStatus(task) === "due_soon";
+  const cardTone = isDone
+    ? "border-emerald-200/90 bg-emerald-50/80 hover:border-emerald-300 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:hover:border-emerald-700"
+    : isOverdue
+      ? "border-red-200 bg-red-50/70 hover:border-red-300 dark:border-red-900/50 dark:bg-red-950/30 dark:hover:border-red-700"
+      : isDueSoon
+        ? "border-amber-300 bg-amber-50/80 hover:border-amber-400 dark:border-amber-800/60 dark:bg-amber-950/35 dark:hover:border-amber-600"
+        : "border-slate-100 bg-white hover:border-sky-200 hover:shadow-md dark:border-slate-600 dark:bg-slate-800/80 dark:hover:border-sky-700";
   return (
     <div ref={setNodeRef} style={style} className={isDragging ? "z-10 opacity-90" : ""}>
-      <div
-        className={`flex gap-1 rounded-xl border p-2 text-sm shadow-sm transition ${
-          isOverdue
-            ? "border-red-200 bg-red-50/70 hover:border-red-300 dark:border-red-900/50 dark:bg-red-950/30 dark:hover:border-red-700"
-            : "border-slate-100 bg-white hover:border-sky-200 hover:shadow-md dark:border-slate-600 dark:bg-slate-800/80 dark:hover:border-sky-700"
-        }`}
-      >
+      <div className={`relative flex gap-1 rounded-xl border p-2 text-sm shadow-sm transition ${cardTone}`}>
+        {isDone && (
+          <span
+            className="absolute -right-1 -top-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500 text-white shadow-sm ring-2 ring-white dark:ring-slate-900"
+            title="Выполнено"
+            aria-label="Выполнено"
+          >
+            <Check className="h-3 w-3" strokeWidth={3} />
+          </span>
+        )}
         {canDrag ? (
           <button
             type="button"
@@ -226,14 +256,46 @@ function DraggableTaskCard({
             onClick={() => onOpen()}
             className="min-w-0 flex-1 rounded-lg p-1 text-left"
           >
-            <p className="font-medium text-slate-900 dark:text-white">{task.title}</p>
+            <p
+              className={`font-medium ${
+                isDone
+                  ? "text-slate-600 line-through decoration-emerald-400/80 dark:text-slate-300 dark:decoration-emerald-600/80"
+                  : "text-slate-900 dark:text-white"
+              }`}
+            >
+              {task.title}
+            </p>
             {task.system && (
               <p className="mt-1 text-xs text-sky-700 dark:text-sky-300">{task.system.name}</p>
             )}
             <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-              {isOverdue && (
+              {isDone && (
+                <span className="inline-flex items-center gap-0.5 rounded-full bg-emerald-100 px-1.5 py-0.5 font-medium text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300">
+                  <Check className="h-3 w-3" strokeWidth={2.5} />
+                  Выполнено
+                </span>
+              )}
+              {isOverdue && !isDone && (
                 <span className="rounded-full bg-red-100 px-1.5 py-0.5 font-medium text-red-700 dark:bg-red-950/50 dark:text-red-300">
                   Просрочено
+                </span>
+              )}
+              {isDueSoon && (
+                <span className="rounded-full bg-amber-100 px-1.5 py-0.5 font-medium text-amber-800 dark:bg-amber-950/50 dark:text-amber-300">
+                  Скоро срок
+                </span>
+              )}
+              {dueLabel && (
+                <span
+                  className={
+                    isOverdue && !isDone
+                      ? "font-medium text-red-600 dark:text-red-300"
+                      : isDueSoon
+                        ? "font-medium text-amber-700 dark:text-amber-300"
+                        : "text-slate-500 dark:text-slate-400"
+                  }
+                >
+                  до {dueLabel}
                 </span>
               )}
               {task.archived_at && (
@@ -265,6 +327,28 @@ function DraggableTaskCard({
                 ))}
                 {task.tags.length > 4 && (
                   <span className="text-slate-500 dark:text-slate-400">+{task.tags.length - 4}</span>
+                )}
+              </div>
+            )}
+            {(commentsCount > 0 || attachmentsCount > 0) && (
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                {commentsCount > 0 && (
+                  <span
+                    className="inline-flex items-center gap-1"
+                    title={`Комментарии: ${commentsCount}`}
+                  >
+                    <MessageSquare className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />
+                    <span className="tabular-nums">{commentsCount}</span>
+                  </span>
+                )}
+                {attachmentsCount > 0 && (
+                  <span
+                    className="inline-flex items-center gap-1"
+                    title={`Вложения: ${attachmentsCount}`}
+                  >
+                    <Paperclip className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />
+                    <span className="tabular-nums">{attachmentsCount}</span>
+                  </span>
                 )}
               </div>
             )}
@@ -322,7 +406,7 @@ function SortableColumnShell({
     <div
       ref={setNodeRef}
       style={style}
-      className={`flex min-h-[calc(100vh-11rem)] w-72 shrink-0 flex-col rounded-2xl border border-slate-200/80 bg-white/70 p-3 dark:border-slate-700 dark:bg-slate-900/50 ${
+      className={`flex min-h-[calc(100vh-11rem)] min-w-[17rem] flex-1 basis-0 flex-col rounded-2xl border border-slate-200/80 bg-white/70 p-3 dark:border-slate-700 dark:bg-slate-900/50 ${
         isDragging ? "shadow-lg ring-2 ring-sky-400/40 dark:ring-sky-600/40" : ""
       }`}
     >
@@ -381,8 +465,9 @@ export function TasksPage() {
   const [editColumnId, setEditColumnId] = useState("");
   const [editAssigneeIds, setEditAssigneeIds] = useState<string[]>([]);
   const [editTagIds, setEditTagIds] = useState<string[]>([]);
+  const [editEstimateHours, setEditEstimateHours] = useState("");
+  const [editChecklist, setEditChecklist] = useState<ChecklistItem[]>([]);
 
-  const [formError, setFormError] = useState<string | null>(null);
   const [tagName, setTagName] = useState("");
   const [tagColor, setTagColor] = useState("#38bdf8");
   const [editingTagId, setEditingTagId] = useState<string | null>(null);
@@ -397,7 +482,7 @@ export function TasksPage() {
     }),
   );
 
-  const canCreateBoards = !!user?.is_superuser;
+  const canCreateBoards = !!(user && userCanCreateBoards(user));
   const canViewAllSystems = !!(
     user &&
     (user.is_superuser ||
@@ -424,12 +509,12 @@ export function TasksPage() {
   const systemsQuery = useQuery({
     queryKey: ["systems"],
     queryFn: () => listSystems(true),
-    enabled: canViewAllSystems,
+    enabled: canViewAllSystems || canCreateBoards,
   });
   const assigneeCandidatesQuery = useQuery({
-    queryKey: ["users", "assignee-candidates", user?.id],
-    queryFn: listAssigneeCandidates,
-    enabled: !!user,
+    queryKey: ["users", "assignee-candidates", user?.id, selectedBoardId],
+    queryFn: () => listAssigneeCandidates(selectedBoardId || null),
+    enabled: !!user && !!selectedBoardId,
   });
   const tagsQuery = useQuery({
     queryKey: ["task-tags"],
@@ -470,12 +555,28 @@ export function TasksPage() {
   );
   const isBoardEditingLocked = !!(board?.scope === "global" && board.is_editing_locked);
   const canManageBoardLock = !!(user && board?.scope === "global" && canManageBoardEditingLock(user));
+  /** Кастомная доска, привязанная к одной системе — фильтр «Система» не нужен. */
+  const isSystemLinkedBoard = !!(board?.scope === "system" && board.system_id);
   const tasks = tasksQuery.data ?? [];
   const boardSystems = useMemo(() => {
     if (!user) return [];
     if (canViewAllSystems) return systemsQuery.data ?? [];
     return user.systems ?? [];
   }, [user, canViewAllSystems, systemsQuery.data]);
+  const showSystemFilter = !isSystemLinkedBoard && (canViewAllSystems || boardSystems.length > 1);
+  const linkedBoardSystemLabel = useMemo(() => {
+    if (!isSystemLinkedBoard || !board?.system_id) return null;
+    if (board.system_name) return board.system_name;
+    return boardSystems.find((s) => s.id === board.system_id)?.name ?? null;
+  }, [isSystemLinkedBoard, board?.system_id, board?.system_name, boardSystems]);
+  /** Для карточки задачи на системной доске — только система доски. */
+  const taskFormSystems = useMemo(() => {
+    if (!isSystemLinkedBoard || !board?.system_id) return boardSystems;
+    const linked = boardSystems.find((s) => s.id === board.system_id);
+    if (linked) return [linked];
+    if (board.system_name) return [{ id: board.system_id, name: board.system_name }];
+    return [{ id: board.system_id, name: "Система доски" }];
+  }, [isSystemLinkedBoard, board?.system_id, board?.system_name, boardSystems]);
 
   const mentionChoices = useMemo(
     () => (assigneeCandidatesQuery.data ?? []).map((u) => ({ id: u.id, full_name: u.full_name, email: u.email })),
@@ -483,30 +584,31 @@ export function TasksPage() {
   );
   const assigneeChoices = useMemo((): { id: string; full_name: string }[] => {
     if (!user) return [];
-    const fromApi = mentionChoices.map((x) => ({
-      id: x.id,
-      full_name: x.full_name,
-    }));
-    if (fromApi.length > 0) {
-      const hasSelf = fromApi.some((u) => u.id === user.id);
-      return hasSelf ? fromApi : [{ id: user.id, full_name: `${user.full_name} (я)` }, ...fromApi];
+    const byId = new Map<string, { id: string; full_name: string }>();
+    for (const x of mentionChoices) {
+      byId.set(x.id, { id: x.id, full_name: x.full_name });
     }
-    return [{ id: user.id, full_name: `Я (${user.full_name})` }];
-  }, [user, mentionChoices]);
+    for (const a of drawerTask?.assignees ?? []) {
+      if (!byId.has(a.id)) byId.set(a.id, { id: a.id, full_name: a.full_name });
+    }
+    if (!byId.has(user.id)) {
+      byId.set(user.id, { id: user.id, full_name: `${user.full_name} (я)` });
+    }
+    return [...byId.values()].sort((a, b) => a.full_name.localeCompare(b.full_name, "ru"));
+  }, [user, mentionChoices, drawerTask]);
 
   const loading =
     boardQuery.isPending ||
     boardsQuery.isPending ||
     tasksQuery.isPending ||
     (canViewAllSystems && systemsQuery.isPending);
-  const loadError =
-    queryErr(boardQuery.error) ??
-    queryErr(boardsQuery.error) ??
-    queryErr(boardMembersQuery.error) ??
-    queryErr(tasksQuery.error) ??
-    (canViewAllSystems ? queryErr(systemsQuery.error) : null) ??
-    queryErr(assigneeCandidatesQuery.error) ??
-    queryErr(tagsQuery.error);
+  useToastQueryError(boardQuery.error, "Не удалось загрузить доску");
+  useToastQueryError(boardsQuery.error, "Не удалось загрузить список досок");
+  useToastQueryError(boardMembersQuery.error, "Не удалось загрузить участников доски");
+  useToastQueryError(tasksQuery.error, "Не удалось загрузить задачи");
+  useToastQueryError(canViewAllSystems ? systemsQuery.error : null, "Не удалось загрузить системы");
+  useToastQueryError(assigneeCandidatesQuery.error, "Не удалось загрузить исполнителей");
+  useToastQueryError(tagsQuery.error, "Не удалось загрузить теги");
 
   useEffect(() => {
     const list = boardsQuery.data ?? [];
@@ -533,13 +635,21 @@ export function TasksPage() {
   }, [canCreateBoards, searchParams, setSearchParams]);
 
   useEffect(() => {
+    if (isSystemLinkedBoard && board?.system_id) {
+      setSystemId(board.system_id);
+      return;
+    }
     if (boardSystems.length && !systemId) setSystemId(boardSystems[0].id);
-  }, [boardSystems, systemId]);
+  }, [isSystemLinkedBoard, board?.system_id, boardSystems, systemId]);
 
   useEffect(() => {
+    if (isSystemLinkedBoard) {
+      setFilterSystem("");
+      return;
+    }
     if (!filterSystem) return;
     if (!boardSystems.some((s) => s.id === filterSystem)) setFilterSystem("");
-  }, [boardSystems, filterSystem]);
+  }, [isSystemLinkedBoard, boardSystems, filterSystem]);
 
   useEffect(() => {
     const available = new Set((tagsQuery.data ?? []).map((t) => t.id));
@@ -733,10 +843,9 @@ export function TasksPage() {
         return old.map((t) => (String(t.id) === uid ? { ...t, ...updated } : t));
       });
       void qc.invalidateQueries({ queryKey: tasksQueryKey, refetchType: "none" });
+      void qc.invalidateQueries({ queryKey: ["task-history", uid] });
     },
     onError: (e: unknown) => {
-      if (e instanceof ApiError) setFormError(e.detail);
-      else setFormError("Не удалось переместить");
       toastApiError(e, "Не удалось переместить задачу");
     },
   });
@@ -756,12 +865,9 @@ export function TasksPage() {
       setTitle("");
       setTagIds([]);
       setAssigneeIds([]);
-      setFormError(null);
       toastSuccess("Задача создана");
     },
     onError: (e: unknown) => {
-      if (e instanceof ApiError) setFormError(e.detail);
-      else setFormError("Не удалось создать задачу");
       toastApiError(e, "Не удалось создать задачу");
     },
   });
@@ -770,16 +876,18 @@ export function TasksPage() {
     mutationFn: ({ id, body }: { id: string; body: TaskUpdate }) => updateTask(id, body),
     onSuccess: (data) => {
       setDrawerTask(data);
+      setEditEstimateHours(
+        data.estimate_hours === null || data.estimate_hours === undefined ? "" : String(data.estimate_hours),
+      );
+      setEditChecklist(data.checklist ?? []);
       qc.setQueriesData<TaskOut[]>({ queryKey: tasksQueryKey }, (old) =>
         old ? old.map((t) => (t.id === data.id ? { ...t, ...data } : t)) : old,
       );
       void qc.invalidateQueries({ queryKey: tasksQueryKey, refetchType: "none" });
-      setFormError(null);
+      void qc.invalidateQueries({ queryKey: ["task-history", data.id] });
       toastSuccess("Задача сохранена");
     },
     onError: (e: unknown) => {
-      if (e instanceof ApiError) setFormError(e.detail);
-      else setFormError("Не удалось сохранить");
       toastApiError(e, "Не удалось сохранить задачу");
     },
   });
@@ -788,9 +896,22 @@ export function TasksPage() {
       createTaskComment(taskId, { body }),
     onSuccess: (created) => {
       qc.setQueryData<TaskCommentOut[]>(["task-comments", created.task_id], (old) => [...(old ?? []), created]);
+      qc.setQueriesData<TaskOut[]>({ queryKey: tasksQueryKey }, (old) =>
+        old
+          ? old.map((t) =>
+              t.id === created.task_id ? { ...t, comments_count: (t.comments_count ?? 0) + 1 } : t,
+            )
+          : old,
+      );
+      setDrawerTask((prev) =>
+        prev && prev.id === created.task_id
+          ? { ...prev, comments_count: (prev.comments_count ?? 0) + 1 }
+          : prev,
+      );
       setCommentBody("");
       toastSuccess("Комментарий добавлен");
       void qc.invalidateQueries({ queryKey: ["notifications", "unread-count"], refetchType: "none" });
+      void qc.invalidateQueries({ queryKey: ["task-history", created.task_id] });
     },
     onError: (e: unknown) => toastApiError(e, "Не удалось добавить комментарий"),
   });
@@ -804,6 +925,7 @@ export function TasksPage() {
       setEditingCommentId(null);
       setEditingCommentBody("");
       toastSuccess("Комментарий обновлён");
+      void qc.invalidateQueries({ queryKey: ["task-history", updated.task_id] });
     },
     onError: (e: unknown) => toastApiError(e, "Не удалось обновить комментарий"),
   });
@@ -813,7 +935,22 @@ export function TasksPage() {
       qc.setQueryData<TaskCommentOut[]>(["task-comments", vars.taskId], (old) =>
         (old ?? []).filter((c) => c.id !== vars.commentId),
       );
+      qc.setQueriesData<TaskOut[]>({ queryKey: tasksQueryKey }, (old) =>
+        old
+          ? old.map((t) =>
+              t.id === vars.taskId
+                ? { ...t, comments_count: Math.max(0, (t.comments_count ?? 0) - 1) }
+                : t,
+            )
+          : old,
+      );
+      setDrawerTask((prev) =>
+        prev && prev.id === vars.taskId
+          ? { ...prev, comments_count: Math.max(0, (prev.comments_count ?? 0) - 1) }
+          : prev,
+      );
       toastSuccess("Комментарий удалён");
+      void qc.invalidateQueries({ queryKey: ["task-history", vars.taskId] });
     },
     onError: (e: unknown) => toastApiError(e, "Не удалось удалить комментарий"),
   });
@@ -826,9 +963,53 @@ export function TasksPage() {
       );
       if (drawerTask?.id === updated.id) setDrawerTask(updated);
       void qc.invalidateQueries({ queryKey: tasksQueryKey, refetchType: "none" });
+      void qc.invalidateQueries({ queryKey: ["task-history", updated.id] });
       toastSuccess(updated.archived_at ? "Задача отправлена в архив" : "Задача восстановлена из архива");
     },
     onError: (e: unknown) => toastApiError(e, "Не удалось изменить статус архива"),
+  });
+  const uploadAttMut = useMutation({
+    mutationFn: ({ taskId, file }: { taskId: string; file: File }) => uploadTaskAttachment(taskId, file),
+    onSuccess: (att) => {
+      setDrawerTask((prev) =>
+        prev && prev.id === att.task_id
+          ? { ...prev, attachments: [...(prev.attachments ?? []), att] }
+          : prev,
+      );
+      qc.setQueriesData<TaskOut[]>({ queryKey: tasksQueryKey }, (old) =>
+        old
+          ? old.map((t) =>
+              t.id === att.task_id ? { ...t, attachments: [...(t.attachments ?? []), att] } : t,
+            )
+          : old,
+      );
+      toastSuccess("Файл прикреплён");
+      void qc.invalidateQueries({ queryKey: ["task-history", att.task_id] });
+    },
+    onError: (e: unknown) => toastApiError(e, "Не удалось загрузить файл"),
+  });
+  const deleteAttMut = useMutation({
+    mutationFn: ({ taskId, attachmentId }: { taskId: string; attachmentId: string }) =>
+      deleteTaskAttachment(taskId, attachmentId),
+    onSuccess: (_, vars) => {
+      setDrawerTask((prev) =>
+        prev && prev.id === vars.taskId
+          ? { ...prev, attachments: (prev.attachments ?? []).filter((a) => a.id !== vars.attachmentId) }
+          : prev,
+      );
+      qc.setQueriesData<TaskOut[]>({ queryKey: tasksQueryKey }, (old) =>
+        old
+          ? old.map((t) =>
+              t.id === vars.taskId
+                ? { ...t, attachments: (t.attachments ?? []).filter((a) => a.id !== vars.attachmentId) }
+                : t,
+            )
+          : old,
+      );
+      toastSuccess("Файл удалён");
+      void qc.invalidateQueries({ queryKey: ["task-history", vars.taskId] });
+    },
+    onError: (e: unknown) => toastApiError(e, "Не удалось удалить файл"),
   });
 
   const closeDrawer = useCallback(() => {
@@ -838,15 +1019,6 @@ export function TasksPage() {
     setEditingCommentId(null);
     setEditingCommentBody("");
   }, []);
-
-  const { backdropProps: drawerBackdropProps, stopPanelPointer: drawerPanelStop } = useModalLayer(
-    !!(drawerTaskId && drawerTask && user),
-    closeDrawer,
-    {
-      closeOnBackdrop: false,
-      closeOnEscape: !saveMut.isPending,
-    },
-  );
 
   const closeNewTaskModal = useCallback(() => {
     setModalOpen(false);
@@ -903,12 +1075,13 @@ export function TasksPage() {
   );
 
   const resolveQuickCreateSystemId = useCallback((): string | null => {
+    if (isSystemLinkedBoard && board?.system_id) return board.system_id;
     if (canViewAllSystems) return filterSystem || null;
     if (filterSystem) return filterSystem;
     if (systemId) return systemId;
     if (boardSystems.length === 1) return boardSystems[0].id;
     return null;
-  }, [canViewAllSystems, filterSystem, systemId, boardSystems]);
+  }, [isSystemLinkedBoard, board?.system_id, canViewAllSystems, filterSystem, systemId, boardSystems]);
 
   const visibleTasks = useMemo(() => {
     return tasks.filter((t) => {
@@ -945,6 +1118,9 @@ export function TasksPage() {
       const arr = m.get(t.column_id);
       if (arr) arr.push(t);
     }
+    for (const [, arr] of m) {
+      arr.sort(compareTasksByDueAsc);
+    }
     return m;
   }, [visibleTasks, sortedCols]);
 
@@ -961,31 +1137,67 @@ export function TasksPage() {
   useEffect(() => {
     const taskIdFromUrl = searchParams.get("taskId");
     if (!user || !taskIdFromUrl) return;
-    const taskFromList = tasks.find((t) => t.id === taskIdFromUrl);
-    if (taskFromList) {
-      void openDrawer(taskFromList);
+
+    const boardFromUrl = searchParams.get("board");
+    const boards = boardsQuery.data ?? [];
+    // Ждём переключения на доску из URL, иначе откроем задачу на чужом канбане.
+    if (
+      boardFromUrl &&
+      boards.length > 0 &&
+      boards.some((b) => b.id === boardFromUrl) &&
+      selectedBoardId !== boardFromUrl
+    ) {
+      return;
+    }
+
+    const clearTaskParam = () => {
       setSearchParams((prev) => {
         const next = new URLSearchParams(prev);
         next.delete("taskId");
         return next;
       });
+    };
+
+    const taskFromList = tasks.find((t) => t.id === taskIdFromUrl);
+    if (taskFromList) {
+      void openDrawer(taskFromList);
+      clearTaskParam();
       return;
     }
+
+    // Пока грузится список задач нужной доски — подождём, чтобы не дёргать getTask зря.
+    if (tasksQuery.isPending || boardsQuery.isPending) return;
+
     void (async () => {
       try {
         const task = await getTask(taskIdFromUrl);
+        if (task.board_id && task.board_id !== selectedBoardId) {
+          setSelectedBoardId(task.board_id);
+          setSearchParams((prev) => {
+            const next = new URLSearchParams(prev);
+            next.set("board", task.board_id);
+            next.set("taskId", taskIdFromUrl);
+            return next;
+          });
+          return;
+        }
         await openDrawer(task);
+        clearTaskParam();
       } catch {
         toastError("Не удалось открыть задачу из уведомления");
-      } finally {
-        setSearchParams((prev) => {
-          const next = new URLSearchParams(prev);
-          next.delete("taskId");
-          return next;
-        });
+        clearTaskParam();
       }
     })();
-  }, [searchParams, setSearchParams, user, tasks]);
+  }, [
+    searchParams,
+    setSearchParams,
+    user,
+    tasks,
+    selectedBoardId,
+    boardsQuery.data,
+    boardsQuery.isPending,
+    tasksQuery.isPending,
+  ]);
 
   async function openDrawer(task: TaskOut) {
     setDrawerTaskId(task.id);
@@ -998,6 +1210,10 @@ export function TasksPage() {
     setEditColumnId(task.column_id);
     setEditAssigneeIds(task.assignees?.map((a) => a.id) ?? []);
     setEditTagIds(task.tags.map((t) => t.id));
+    setEditEstimateHours(
+      task.estimate_hours === null || task.estimate_hours === undefined ? "" : String(task.estimate_hours),
+    );
+    setEditChecklist(task.checklist ?? []);
     setCommentBody("");
     setEditingCommentId(null);
     setEditingCommentBody("");
@@ -1013,10 +1229,24 @@ export function TasksPage() {
       setEditColumnId(fresh.column_id);
       setEditAssigneeIds(fresh.assignees?.map((a) => a.id) ?? []);
       setEditTagIds(fresh.tags.map((t) => t.id));
+      setEditEstimateHours(
+        fresh.estimate_hours === null || fresh.estimate_hours === undefined
+          ? ""
+          : String(fresh.estimate_hours),
+      );
+      setEditChecklist(fresh.checklist ?? []);
     } catch {
     } finally {
       setDrawerLoading(false);
     }
+  }
+
+  function parseEstimateHours(raw: string): number | null {
+    const t = raw.trim();
+    if (!t) return null;
+    const n = Number(t.replace(",", "."));
+    if (!Number.isFinite(n) || n < 0) return null;
+    return Math.round(n * 100) / 100;
   }
 
   function saveDrawer() {
@@ -1027,6 +1257,7 @@ export function TasksPage() {
       const body: {
         description?: string | null;
         column_id?: string;
+        checklist?: ChecklistItem[];
       } = {};
       if (canEditTaskDescription(user, drawerTask, boardPermCtx)) {
         const desc = editDescription.trim() || null;
@@ -1040,7 +1271,16 @@ export function TasksPage() {
       return;
     }
 
-    if (!canFullyEditTask(user, drawerTask, boardPermCtx)) return;
+    if (!canFullyEditTask(user, drawerTask, boardPermCtx)) {
+      // Исполнитель может отмечать пункты чеклиста
+      if (drawerCanComment) {
+        saveMut.mutate({
+          id: drawerTaskId,
+          body: { checklist: editChecklist.map((x) => ({ ...x, text: x.text.trim() })).filter((x) => x.text) },
+        });
+      }
+      return;
+    }
     saveMut.mutate({
       id: drawerTaskId,
       body: {
@@ -1048,6 +1288,8 @@ export function TasksPage() {
         description: editDescription.trim() || null,
         priority: editPriority,
         due_at: fromLocalInput(editDue),
+        estimate_hours: parseEstimateHours(editEstimateHours),
+        checklist: editChecklist.map((x) => ({ ...x, text: x.text.trim() })).filter((x) => x.text),
         system_id: editSystemId,
         column_id: editColumnId,
         assignee_ids: editAssigneeIds,
@@ -1097,10 +1339,13 @@ export function TasksPage() {
   function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     if (!columnId) return;
-    if (!canViewAllSystems && boardSystems.length === 0) return;
 
     let resolvedSid: string | undefined;
-    if (!canViewAllSystems && boardSystems.length === 1) {
+    if (isSystemLinkedBoard && board?.system_id) {
+      resolvedSid = board.system_id;
+    } else if (!canViewAllSystems && boardSystems.length === 0) {
+      return;
+    } else if (!canViewAllSystems && boardSystems.length === 1) {
       resolvedSid = boardSystems[0].id;
     } else {
       if (!systemId) return;
@@ -1333,8 +1578,6 @@ export function TasksPage() {
         })
         .slice(0, 6)
     : [];
-  const displayError = formError ?? loadError;
-
   return (
     <AppShell title="Задачи" wide>
       {isBoardEditingLocked && (
@@ -1346,7 +1589,7 @@ export function TasksPage() {
         </div>
       )}
       <div className="mb-4 flex flex-wrap items-center gap-3">
-        {(canViewAllSystems || boardSystems.length > 1) && (
+        {showSystemFilter && (
           <label className="flex items-center gap-2 text-sm">
             <span className="text-slate-600 dark:text-slate-400">Система</span>
             <select
@@ -1363,7 +1606,12 @@ export function TasksPage() {
             </select>
           </label>
         )}
-        {!canViewAllSystems && boardSystems.length === 1 && (
+        {isSystemLinkedBoard && linkedBoardSystemLabel && (
+          <span className="text-sm text-slate-600 dark:text-slate-400">
+            Система: <span className="font-medium text-slate-800 dark:text-slate-200">{linkedBoardSystemLabel}</span>
+          </span>
+        )}
+        {!isSystemLinkedBoard && !canViewAllSystems && boardSystems.length === 1 && (
           <span className="text-sm text-slate-600 dark:text-slate-400">
             Система: {boardSystems[0].name}
           </span>
@@ -1493,7 +1741,13 @@ export function TasksPage() {
           </button>
           <button
             type="button"
-            onClick={() => setShowUnassignedOnly((v) => !v)}
+            onClick={() => {
+              setShowUnassignedOnly((v) => {
+                const next = !v;
+                if (next) setFilterAssigneeId("");
+                return next;
+              });
+            }}
             className={`rounded-lg px-3 py-1.5 text-xs font-medium ${
               showUnassignedOnly
                 ? "bg-violet-600 text-white"
@@ -1502,6 +1756,27 @@ export function TasksPage() {
           >
             Без исполнителя
           </button>
+          {user && (
+            <button
+              type="button"
+              onClick={() => {
+                const mine = filterAssigneeId === user.id;
+                if (mine) {
+                  setFilterAssigneeId("");
+                } else {
+                  setFilterAssigneeId(user.id);
+                  setShowUnassignedOnly(false);
+                }
+              }}
+              className={`rounded-lg px-3 py-1.5 text-xs font-medium ${
+                filterAssigneeId === user.id
+                  ? "bg-sky-600 text-white"
+                  : "bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+              }`}
+            >
+              Мои задачи
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setShowHighPriorityOnly((v) => !v)}
@@ -1589,11 +1864,6 @@ export function TasksPage() {
           )}
         </div>
       )}
-      {displayError && (
-        <p className="mb-4 rounded-xl bg-red-50 px-4 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
-          {displayError}
-        </p>
-      )}
       {loading && <p className="text-slate-500">Загрузка…</p>}
 
       {!loading && sortedCols.length > 0 && (
@@ -1608,7 +1878,7 @@ export function TasksPage() {
             items={sortedCols.map((c) => sortIdForColumn(c.id))}
             strategy={horizontalListSortingStrategy}
           >
-            <div className="-mx-1 flex gap-4 overflow-x-auto pb-2 px-1">
+            <div className="-mx-1 flex w-full min-w-0 gap-4 overflow-x-auto pb-2 px-1">
               {sortedCols.map((col) => {
                 const colTasks = tasksByColumn.get(col.id) ?? [];
                 const colCount = colTasks.length;
@@ -1643,7 +1913,6 @@ export function TasksPage() {
                           setAssigneeIds([]);
                           setTagIds([]);
                           setTitle("");
-                          setFormError(null);
                           setModalOpen(true);
                         }}
                         className="rounded-lg p-1.5 text-slate-400 hover:bg-sky-50 hover:text-sky-700 dark:hover:bg-sky-950/40 dark:hover:text-sky-300"
@@ -1688,6 +1957,7 @@ export function TasksPage() {
                       key={task.id}
                       task={task}
                       isOverdue={overdueById.has(task.id)}
+                      isDone={!!col.is_done_column || col.slug === "done"}
                       canDrag={!!user && canMoveTask(user, task, boardPermCtx)}
                       onOpen={() => void openDrawer(task)}
                       canDelete={!!user && canDeleteTask(user, boardPermCtx)}
@@ -1733,7 +2003,9 @@ export function TasksPage() {
                             const resolvedSystemId = resolveQuickCreateSystemId();
                             if (!resolvedSystemId) {
                               toastError(
-                                "Для добавления задачи выберите систему в фильтре сверху",
+                                isSystemLinkedBoard
+                                  ? "Не удалось определить систему доски"
+                                  : "Для добавления задачи выберите систему в фильтре сверху",
                               );
                               return;
                             }
@@ -1760,7 +2032,9 @@ export function TasksPage() {
                               const resolvedSystemId = resolveQuickCreateSystemId();
                               if (!resolvedSystemId) {
                                 toastError(
-                                  "Для добавления задачи выберите систему в фильтре сверху",
+                                  isSystemLinkedBoard
+                                    ? "Не удалось определить систему доски"
+                                    : "Для добавления задачи выберите систему в фильтре сверху",
                                 );
                                 return;
                               }
@@ -1844,371 +2118,86 @@ export function TasksPage() {
       )}
 
       {drawerTaskId && drawerTask && user && (
-        <div
-          {...drawerBackdropProps}
-          className="fixed inset-0 z-50 flex justify-end bg-slate-900/40 backdrop-blur-sm"
-        >
-          <button type="button" className="h-full flex-1 cursor-default" aria-label="Закрыть" onClick={closeDrawer} />
-          <div
-            className="glass flex h-full w-full max-w-lg flex-col overflow-y-auto border-l border-white/40 shadow-2xl dark:border-slate-700"
-            role="dialog"
-            aria-modal="true"
-            onClick={drawerPanelStop}
-          >
-            <div className="sticky top-0 flex items-start justify-between gap-3 border-b border-slate-200/80 bg-white/90 px-5 py-4 dark:border-slate-700 dark:bg-slate-900/90">
-              <div>
-                <p className="text-xs uppercase tracking-wide text-slate-500">Задача</p>
-                <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Карточка</h2>
-              </div>
-              <button
-                type="button"
-                onClick={closeDrawer}
-                className="rounded-lg px-3 py-1 text-sm text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
-              >
-                ✕
-              </button>
-            </div>
-            <div className="flex-1 space-y-4 px-5 py-4">
-              {drawerLoading && <p className="text-sm text-slate-500">Обновление…</p>}
-              <div>
-                <label className="mb-1 block text-xs font-medium text-slate-500">Заголовок</label>
-                <input
-                  value={editTitle}
-                  onChange={(e) => setEditTitle(e.target.value)}
-                  disabled={!drawerCanEditTitle}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-medium text-slate-500">Описание</label>
-                <textarea
-                  value={editDescription}
-                  onChange={(e) => setEditDescription(e.target.value)}
-                  disabled={!drawerCanEditDescription}
-                  rows={5}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-slate-500">Приоритет</label>
-                  <select
-                    value={editPriority}
-                    onChange={(e) => setEditPriority(e.target.value as TaskOut["priority"])}
-                    disabled={!drawerCanFullyEdit}
-                    className="w-full rounded-xl border border-slate-200 bg-white px-2 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
-                  >
-                    {(Object.keys(PRIORITY_LABEL) as TaskOut["priority"][]).map((p) => (
-                      <option key={p} value={p}>
-                        {PRIORITY_LABEL[p]}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-slate-500">Срок</label>
-                  <input
-                    type="datetime-local"
-                    value={editDue}
-                    onChange={(e) => setEditDue(e.target.value)}
-                    disabled={!drawerCanFullyEdit}
-                    className="w-full rounded-xl border border-slate-200 bg-white px-2 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-medium text-slate-500">Система</label>
-                <select
-                  value={editSystemId}
-                  onChange={(e) => setEditSystemId(e.target.value)}
-                  disabled={!drawerCanFullyEdit}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-2 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
-                >
-                  {boardSystems.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-medium text-slate-500">Колонка</label>
-                <select
-                  value={editColumnId}
-                  onChange={(e) => setEditColumnId(e.target.value)}
-                  disabled={!drawerCanChangeColumn}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-2 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
-                >
-                  {sortedCols.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              {assigneeChoices.length > 0 && (
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-slate-500">Исполнители</label>
-                  <MultiAssigneePicker
-                    value={editAssigneeIds}
-                    onChange={setEditAssigneeIds}
-                    candidates={assigneeChoices}
-                    disabled={!drawerCanFullyEdit}
-                    selfId={user?.id ?? null}
-                    selfDisplayName={user?.full_name ?? "я"}
-                  />
-                </div>
-              )}
-              {(tagsQuery.data ?? []).length > 0 && (
-                <div>
-                  <label className="mb-1 block text-xs font-medium text-slate-500">Теги</label>
-                  <div className="rounded-xl border border-slate-200 bg-white p-2 dark:border-slate-600 dark:bg-slate-800">
-                    <div className="flex flex-wrap gap-2">
-                    {(tagsQuery.data ?? []).map((tag) => {
-                      const active = editTagIds.includes(tag.id);
-                      return (
-                        <button
-                          key={tag.id}
-                          type="button"
-                          disabled={!drawerCanFullyEdit}
-                          onClick={() =>
-                            setEditTagIds((prev) =>
-                              prev.includes(tag.id)
-                                ? prev.filter((id) => id !== tag.id)
-                                : [...prev, tag.id],
-                            )
-                          }
-                          className={`rounded-full border px-2 py-1 text-xs transition ${
-                            active
-                              ? "border-transparent ring-2 ring-offset-1 dark:ring-offset-slate-900"
-                              : "border-slate-200 opacity-80 dark:border-slate-600"
-                          }`}
-                          style={{ backgroundColor: `${tag.color}22`, color: tag.color }}
-                        >
-                          {active ? "✓ " : ""}#{tag.name}
-                        </button>
-                      );
-                    })}
-                    </div>
-                    {drawerCanFullyEdit && (
-                      <div className="mt-2 flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={openTagCreateModal}
-                          className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700"
-                        >
-                          + Новый тег
-                        </button>
-                        {!!editTagIds.length && (
-                          <button
-                            type="button"
-                            onClick={() => setEditTagIds([])}
-                            className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700"
-                          >
-                            Очистить
-                          </button>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-              <div className="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900/40">
-                <div className="mb-2 flex items-center justify-between">
-                  <label className="block text-xs font-medium text-slate-500">Комментарии</label>
-                  <span className="text-xs text-slate-400">
-                    {commentsQuery.data?.length ?? 0}
-                  </span>
-                </div>
-                <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
-                  {commentsQuery.isPending && <p className="text-xs text-slate-500">Загрузка…</p>}
-                  {!commentsQuery.isPending && (commentsQuery.data?.length ?? 0) === 0 && (
-                    <p className="text-xs text-slate-500">Пока нет комментариев.</p>
-                  )}
-                  {(commentsQuery.data ?? []).map((comment) => (
-                    <div
-                      key={comment.id}
-                      className="rounded-lg border border-slate-100 bg-slate-50/80 px-2.5 py-2 text-xs dark:border-slate-700 dark:bg-slate-800/70"
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <p className="font-medium text-slate-700 dark:text-slate-200">
-                          {comment.author?.full_name ?? "Пользователь"} · {formatDt(comment.created_at)}
-                        </p>
-                        {user && (drawerCanFullyEdit || comment.author_id === user.id) && (
-                          <div className="flex gap-1">
-                            <button
-                              type="button"
-                              onClick={() => beginEditComment(comment)}
-                              className="rounded border border-slate-200 px-1.5 py-0.5 text-[11px] text-slate-600 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700"
-                            >
-                              Изменить
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => removeComment(comment)}
-                              className="rounded border border-red-200 px-1.5 py-0.5 text-[11px] text-red-600 hover:bg-red-50 dark:border-red-900/40 dark:text-red-300 dark:hover:bg-red-950/30"
-                            >
-                              Удалить
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                      {editingCommentId === comment.id ? (
-                        <div className="mt-2 space-y-2">
-                          <textarea
-                            value={editingCommentBody}
-                            onChange={(e) => setEditingCommentBody(e.target.value)}
-                            rows={3}
-                            className="w-full rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-900"
-                          />
-                          {editCommentMentionToken && editCommentMentionList.length > 0 && (
-                            <div className="rounded-lg border border-slate-200 bg-white p-1 dark:border-slate-600 dark:bg-slate-900">
-                              {editCommentMentionList.map((u) => (
-                                <button
-                                  key={u.id}
-                                  type="button"
-                                  onClick={() => insertMention(u, "edit")}
-                                  className="block w-full rounded px-2 py-1 text-left text-xs hover:bg-slate-100 dark:hover:bg-slate-700"
-                                >
-                                  {u.full_name} · {u.email}
-                                </button>
-                              ))}
-                            </div>
-                          )}
-                          <div className="flex justify-end gap-1">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEditingCommentId(null);
-                                setEditingCommentBody("");
-                              }}
-                              className="rounded border border-slate-300 px-2 py-1 text-[11px] dark:border-slate-600"
-                            >
-                              Отмена
-                            </button>
-                            <button
-                              type="button"
-                              disabled={editCommentMut.isPending || !editingCommentBody.trim()}
-                              onClick={saveEditedComment}
-                              className="rounded bg-sky-500 px-2 py-1 text-[11px] font-medium text-white disabled:opacity-60"
-                            >
-                              {editCommentMut.isPending ? "Сохранение…" : "Сохранить"}
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <p className="mt-1 whitespace-pre-wrap text-sm text-slate-800 dark:text-slate-100">{comment.body}</p>
-                      )}
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-3 space-y-2">
-                  <textarea
-                    value={commentBody}
-                    onChange={(e) => setCommentBody(e.target.value)}
-                    rows={3}
-                    placeholder="Напишите комментарий. Для упоминания введите @ и выберите человека по ФИО или email"
-                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
-                  />
-                  {newCommentMentionToken && newCommentMentionList.length > 0 && (
-                    <div className="rounded-lg border border-slate-200 bg-white p-1 dark:border-slate-600 dark:bg-slate-900">
-                      {newCommentMentionList.map((u) => (
-                        <button
-                          key={u.id}
-                          type="button"
-                          onClick={() => insertMention(u, "new")}
-                          className="block w-full rounded px-2 py-1 text-left text-xs hover:bg-slate-100 dark:hover:bg-slate-700"
-                        >
-                          {u.full_name} · {u.email}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  <div className="flex justify-end">
-                    <button
-                      type="button"
-                      disabled={addCommentMut.isPending || !commentBody.trim()}
-                      onClick={submitComment}
-                      className="rounded-lg bg-sky-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-600 disabled:opacity-60"
-                    >
-                      {addCommentMut.isPending ? "Отправка…" : "Добавить комментарий"}
-                    </button>
-                  </div>
-                </div>
-              </div>
-              <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-400">
-                <p>
-                  <span className="font-medium text-slate-700 dark:text-slate-300">Статус колонки: </span>
-                  {drawerTask.column?.name ?? "—"}
-                </p>
-                <p className="mt-1">
-                  <span className="font-medium text-slate-700 dark:text-slate-300">Создал: </span>
-                  {drawerTask.creator?.full_name ?? "—"}
-                </p>
-                <p className="mt-1">
-                  <span className="font-medium text-slate-700 dark:text-slate-300">Создано: </span>
-                  {formatDt(drawerTask.created_at)}
-                </p>
-                <p className="mt-1">
-                  <span className="font-medium text-slate-700 dark:text-slate-300">Обновлено: </span>
-                  {formatDt(drawerTask.updated_at)}
-                </p>
-              </div>
-              {drawerCanSave && (
-                <div className="flex justify-end gap-2 pb-2 pt-2">
-                  {drawerCanFullyEdit && (
-                    <button
-                      type="button"
-                      disabled={archiveMut.isPending}
-                      onClick={() => toggleArchiveTask(drawerTask)}
-                      className="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 disabled:opacity-60 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
-                    >
-                      {archiveMut.isPending
-                        ? "Обновление…"
-                        : drawerTask.archived_at
-                          ? "Восстановить"
-                          : "В архив"}
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={closeDrawer}
-                    className="rounded-xl bg-slate-200 px-4 py-2 text-sm dark:bg-slate-700"
-                  >
-                    Закрыть
-                  </button>
-                  <button
-                    type="button"
-                    disabled={saveMut.isPending}
-                    onClick={() => saveDrawer()}
-                    className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-600 disabled:opacity-60"
-                  >
-                    {saveMut.isPending ? "Сохранение…" : "Сохранить"}
-                  </button>
-                </div>
-              )}
-              {drawerCanDelete && (
-                <div className="border-t border-slate-100 pb-6 pt-4 dark:border-slate-700">
-                  <button
-                    type="button"
-                    disabled={deleteMut.isPending}
-                    onClick={() => drawerTask && confirmDeleteTask(drawerTask)}
-                    className="flex w-full items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm font-medium text-red-700 hover:bg-red-100 disabled:opacity-60 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300 dark:hover:bg-red-950/50"
-                  >
-                    <Trash2 className="h-4 w-4 shrink-0" strokeWidth={2} />
-                    {deleteMut.isPending ? "Удаление…" : "Удалить задачу"}
-                  </button>
-                </div>
-              )}
-              {!drawerCanSave && !drawerCanDelete && (
-                <p className="pb-6 text-sm text-slate-500">Нет прав на редактирование этой задачи.</p>
-              )}
-              {!drawerCanSave && drawerCanDelete && (
-                <p className="pb-2 text-sm text-slate-500">Редактирование недоступно, удаление — по кнопке ниже.</p>
-              )}
-            </div>
-          </div>
-        </div>
+        <TaskDetailModal
+          open
+          task={drawerTask}
+          loading={drawerLoading}
+          onClose={closeDrawer}
+          editTitle={editTitle}
+          setEditTitle={setEditTitle}
+          editDescription={editDescription}
+          setEditDescription={setEditDescription}
+          editPriority={editPriority}
+          setEditPriority={setEditPriority}
+          editDue={editDue}
+          setEditDue={setEditDue}
+          editSystemId={editSystemId}
+          setEditSystemId={setEditSystemId}
+          editColumnId={editColumnId}
+          setEditColumnId={setEditColumnId}
+          editAssigneeIds={editAssigneeIds}
+          setEditAssigneeIds={setEditAssigneeIds}
+          editTagIds={editTagIds}
+          setEditTagIds={setEditTagIds}
+          editEstimateHours={editEstimateHours}
+          setEditEstimateHours={setEditEstimateHours}
+          editChecklist={editChecklist}
+          setEditChecklist={setEditChecklist}
+          canEditTitle={!!drawerCanEditTitle}
+          canEditDescription={!!drawerCanEditDescription}
+          canFullyEdit={!!drawerCanFullyEdit}
+          canChangeColumn={!!drawerCanChangeColumn}
+          canSave={!!drawerCanSave || !!drawerCanComment}
+          canDelete={!!drawerCanDelete}
+          canComment={!!drawerCanComment}
+          canUploadAttachment={!!(drawerCanFullyEdit || drawerCanComment)}
+          canDeleteAttachment={!!drawerCanFullyEdit || !!drawerCanDelete}
+          columns={sortedCols}
+          systems={taskFormSystems}
+          assigneeChoices={assigneeChoices}
+          tags={tagsQuery.data ?? []}
+          selfId={user.id}
+          selfDisplayName={user.full_name ?? "я"}
+          attachments={drawerTask.attachments ?? []}
+          uploadPending={uploadAttMut.isPending}
+          onUploadAttachment={(file) => {
+            if (!drawerTaskId) return;
+            uploadAttMut.mutate({ taskId: drawerTaskId, file });
+          }}
+          onDeleteAttachment={(id) => {
+            if (!drawerTaskId) return;
+            if (!window.confirm("Удалить вложение?")) return;
+            deleteAttMut.mutate({ taskId: drawerTaskId, attachmentId: id });
+          }}
+          comments={commentsQuery.data ?? []}
+          commentsLoading={commentsQuery.isPending}
+          commentBody={commentBody}
+          setCommentBody={setCommentBody}
+          editingCommentId={editingCommentId}
+          editingCommentBody={editingCommentBody}
+          setEditingCommentBody={setEditingCommentBody}
+          newCommentMentions={newCommentMentionList}
+          editCommentMentions={editCommentMentionList}
+          onInsertMention={insertMention}
+          onSubmitComment={submitComment}
+          onBeginEditComment={beginEditComment}
+          onCancelEditComment={() => {
+            setEditingCommentId(null);
+            setEditingCommentBody("");
+          }}
+          onSaveEditComment={saveEditedComment}
+          onRemoveComment={removeComment}
+          addCommentPending={addCommentMut.isPending}
+          editCommentPending={editCommentMut.isPending}
+          onSave={saveDrawer}
+          onArchive={() => toggleArchiveTask(drawerTask)}
+          onDelete={() => confirmDeleteTask(drawerTask)}
+          onCreateTag={openTagCreateModal}
+          savePending={saveMut.isPending}
+          archivePending={archiveMut.isPending}
+          deletePending={deleteMut.isPending}
+          closeOnEscape={!saveMut.isPending}
+        />
       )}
 
       {modalOpen && canCreate && (
@@ -2217,7 +2206,7 @@ export function TasksPage() {
           className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
         >
           <div
-            className="glass w-full max-w-md rounded-2xl p-6 shadow-soft-lg"
+            className="modal-panel w-full max-w-md rounded-2xl p-6 shadow-soft-lg"
             role="dialog"
             aria-modal="true"
             onClick={newTaskPanelStop}
@@ -2233,7 +2222,7 @@ export function TasksPage() {
                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800"
                 />
               </div>
-              {(canViewAllSystems || boardSystems.length > 1) && (
+              {showSystemFilter && (
                 <div>
                   <label className="mb-1 block text-sm">Система</label>
                   <select
@@ -2251,9 +2240,14 @@ export function TasksPage() {
                   </select>
                 </div>
               )}
-              {!canViewAllSystems && boardSystems.length === 1 && (
+              {(isSystemLinkedBoard || (!canViewAllSystems && boardSystems.length === 1)) && (
                 <p className="text-sm text-slate-600 dark:text-slate-400">
-                  Система: <span className="font-medium text-slate-800 dark:text-slate-200">{boardSystems[0].name}</span>
+                  Система:{" "}
+                  <span className="font-medium text-slate-800 dark:text-slate-200">
+                    {isSystemLinkedBoard
+                      ? linkedBoardSystemLabel ?? "—"
+                      : boardSystems[0]?.name}
+                  </span>
                 </p>
               )}
               <div>
@@ -2340,10 +2334,10 @@ export function TasksPage() {
       {tagModalOpen && canManageTags && (
         <div
           {...tagModalBackdrop}
-          className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
+          className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
         >
           <div
-            className="glass w-full max-w-md rounded-2xl p-6 shadow-soft-lg"
+            className="modal-panel w-full max-w-md rounded-2xl p-6 shadow-soft-lg"
             role="dialog"
             aria-modal="true"
             onClick={tagModalPanelStop}
@@ -2434,9 +2428,11 @@ export function TasksPage() {
 
       {boardCreateModalOpen && canCreateBoards && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
-          <div className="glass w-full max-w-md rounded-2xl p-6 shadow-soft-lg" role="dialog" aria-modal="true">
+          <div className="modal-panel w-full max-w-md rounded-2xl p-6 shadow-soft-lg" role="dialog" aria-modal="true">
             <h2 className="mb-1 text-lg font-semibold text-slate-900 dark:text-white">Новая системная доска</h2>
-            <p className="mb-4 text-sm text-slate-600 dark:text-slate-400">Создание доступно только администратору.</p>
+            <p className="mb-4 text-sm text-slate-600 dark:text-slate-400">
+              Нужно право <code className="rounded bg-slate-100 px-1 text-xs dark:bg-slate-800">boards.create</code>.
+            </p>
             <form
               onSubmit={(e) => {
                 e.preventDefault();
@@ -2507,7 +2503,7 @@ export function TasksPage() {
           className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
         >
           <div
-            className="glass w-full max-w-md rounded-2xl p-6 shadow-soft-lg"
+            className="modal-panel w-full max-w-md rounded-2xl p-6 shadow-soft-lg"
             role="dialog"
             aria-modal="true"
             onClick={colCreatePanelStop}
@@ -2573,7 +2569,7 @@ export function TasksPage() {
           className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
         >
           <div
-            className="glass w-full max-w-md rounded-2xl p-6 shadow-soft-lg"
+            className="modal-panel w-full max-w-md rounded-2xl p-6 shadow-soft-lg"
             role="dialog"
             aria-modal="true"
             onClick={colEditPanelStop}

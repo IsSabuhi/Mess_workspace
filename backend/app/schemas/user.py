@@ -20,6 +20,10 @@ class UserCreate(UserBase):
     position_id: uuid.UUID | None = None
     birth_date: date | None = None
     system_ids: list[uuid.UUID] = []
+    must_change_password: bool = Field(
+        True,
+        description="Требовать смену пароля при первом входе",
+    )
 
 
 class UserUpdate(BaseModel):
@@ -33,6 +37,10 @@ class UserUpdate(BaseModel):
     birth_date: date | None = None
     system_ids: list[uuid.UUID] | None = None
     schedule_mode: str | None = Field(None, max_length=32)
+    must_change_password: bool | None = Field(
+        None,
+        description="Только вместе с password: требовать смену при следующем входе (по умолчанию True)",
+    )
 
 
 class RoleBrief(BaseModel):
@@ -53,6 +61,7 @@ class UserOut(ORMModel):
     schedule_mode: str = "manual"
     is_active: bool
     is_superuser: bool
+    must_change_password: bool = False
     created_at: datetime
     updated_at: datetime
     roles: list[RoleBrief] = []

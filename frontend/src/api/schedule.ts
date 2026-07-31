@@ -24,7 +24,7 @@ export type ScheduleUserRow = {
   /** Автоцвет по совпадению смен (только shift), если ручной цвет не задан. */
   auto_row_color?: string | null;
   /** Периоды отпуска из справочника сотрудника. */
-  vacation_periods?: Array<{ start: string; end: string; kind?: "vacation" | "study" }>;
+  vacation_periods?: Array<{ start: string; end: string; kind?: "vacation" | "study" | "sick" }>;
 };
 
 export type ScheduleGroupOut = {

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, Download, FileSpreadsheet } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, FileSpreadsheet, ImageDown } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 function scheduleRowTitle(row: {
@@ -8,7 +8,7 @@ function scheduleRowTitle(row: {
   systems_label: string;
   work_schedule_kind: string;
   gender: string;
-  vacation_periods?: Array<{ start: string; end: string; kind?: "vacation" | "study" }>;
+  vacation_periods?: Array<{ start: string; end: string; kind?: "vacation" | "study" | "sick" }>;
 }): string {
   const graph = isShiftKind(row.work_schedule_kind)
     ? row.work_schedule_kind === "two_two"
@@ -17,8 +17,13 @@ function scheduleRowTitle(row: {
     : `5/2 · ${row.gender === "female" ? "7.2 ч" : "8 ч"} (будни)`;
   const periods = (row.vacation_periods ?? [])
     .filter((p) => p?.start && p?.end)
-    .map((p) => `${p.start} — ${p.end}${p.kind === "study" ? " (учебный)" : ""}`);
-  const vacationLine = periods.length > 0 ? `Отпуск: ${periods.join("; ")}` : "Отпуск: не задан";
+    .map((p) => {
+      const kindLabel =
+        p.kind === "study" ? " (учебный)" : p.kind === "sick" ? " (больничный)" : "";
+      return `${p.start} — ${p.end}${kindLabel}`;
+    });
+  const vacationLine =
+    periods.length > 0 ? `Отпуска/больничные: ${periods.join("; ")}` : "Отпуска/больничные: не заданы";
   return `${row.full_name}\n${row.email}\nСистемы: ${row.systems_label}\nГрафик: ${graph}\n${vacationLine}`;
 }
 
@@ -36,8 +41,10 @@ import { AppShell } from "../components/AppShell";
 import { useAuth } from "../context/AuthContext";
 import { PERM, canViewSchedule, hasPermission } from "../lib/permissions";
 import { downloadScheduleExcel } from "../lib/exportScheduleExcel";
+import { downloadSchedulePng } from "../lib/exportScheduleImage";
 import { toastApiError, toastSuccess } from "../lib/toast";
 import { useModalLayer } from "../lib/useModalLayer";
+import { useToastQueryError } from "../lib/useToastQueryError";
 
 const MONTH_NAMES = [
   "Январь",
@@ -152,6 +159,7 @@ export function SchedulePage() {
   const [importFile, setImportFile] = useState<File | null>(null);
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [exportPending, setExportPending] = useState(false);
+  const [imageExportPending, setImageExportPending] = useState(false);
   const [coverageTooltip, setCoverageTooltip] = useState<{
     day: number;
     text: string;
@@ -181,6 +189,8 @@ export function SchedulePage() {
     queryFn: () => getScheduleMonth(year, month),
     enabled: canView,
   });
+  useToastQueryError(scheduleQuery.error, "Не удалось загрузить график");
+
 
   useEffect(() => {
     setRegenerateTargetUserId(null);
@@ -431,7 +441,7 @@ export function SchedulePage() {
       try {
         if (mode === "month") {
           await downloadScheduleExcel({
-            fileBaseName: `raspisanie_${String(month).padStart(2, "0")}_${year}`,
+            fileBaseName: `grafik_${String(month).padStart(2, "0")}_${year}`,
             sheets: [
               {
                 year,
@@ -455,20 +465,41 @@ export function SchedulePage() {
             });
           }
           await downloadScheduleExcel({
-            fileBaseName: `raspisanie_${year}_all_months`,
+            fileBaseName: `grafik_${year}_all_months`,
             sheets,
           });
         }
         setExportModalOpen(false);
-        toastSuccess(mode === "month" ? "Расписание за месяц выгружено в Excel" : "Расписание за год выгружено в Excel");
+        toastSuccess(mode === "month" ? "График за месяц выгружен в Excel" : "График за год выгружен в Excel");
       } catch (e) {
-        toastApiError(e, "Не удалось выгрузить расписание");
+        toastApiError(e, "Не удалось выгрузить график");
       } finally {
         setExportPending(false);
       }
     },
     [scheduleQuery.data, month, year, dayNumbers, filteredGroups, applyCurrentFiltersToGroups],
   );
+
+  const runScheduleImageExport = useCallback(async () => {
+    if (!scheduleQuery.data || filteredGroups.length === 0) return;
+    setImageExportPending(true);
+    try {
+      await downloadSchedulePng({
+        year,
+        month,
+        dayNumbers,
+        groups: filteredGroups,
+        days: scheduleQuery.data.days,
+        coverageGapDays: [...coverageGapDays],
+        scale: 3,
+      });
+      toastSuccess("График сохранён как PNG");
+    } catch (e) {
+      toastApiError(e, "Не удалось сохранить изображение графика");
+    } finally {
+      setImageExportPending(false);
+    }
+  }, [scheduleQuery.data, filteredGroups, year, month, dayNumbers, coverageGapDays]);
 
   const saveCell = useCallback(
     (userId: string, day: number, raw: string) => {
@@ -493,7 +524,7 @@ export function SchedulePage() {
 
   return (
     <AppShell
-      title="Расписание"
+      title="График"
       subtitle="Порядок блоков систем — в справочнике «Системы». Коды ячеек и кнопки заполнения — в блоке «Справка» ниже."
       wide
     >
@@ -666,13 +697,23 @@ export function SchedulePage() {
                 disabled={exportPending || !scheduleQuery.data}
                 onClick={() => setExportModalOpen(true)}
                 className="group inline-flex items-center gap-2 rounded-xl border border-emerald-200/90 bg-gradient-to-br from-emerald-500 via-teal-500 to-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-md shadow-emerald-900/15 ring-1 ring-white/25 transition hover:from-emerald-400 hover:via-teal-400 hover:to-cyan-500 hover:shadow-lg disabled:opacity-60 dark:border-emerald-400/30 dark:from-emerald-600 dark:via-teal-600 dark:to-cyan-700 dark:ring-white/10 dark:hover:from-emerald-500 dark:hover:via-teal-500 dark:hover:to-cyan-600"
-                title="Выгрузить расписание в Excel"
+                title="Выгрузить график в Excel"
               >
                 <Download className="h-4 w-4 shrink-0 opacity-95 group-hover:scale-105" aria-hidden />
                 В Excel
               </button>
             </>
           )}
+          <button
+            type="button"
+            disabled={imageExportPending || !scheduleQuery.data || filteredGroups.length === 0}
+            onClick={() => void runScheduleImageExport()}
+            className="group inline-flex items-center gap-2 rounded-xl border border-sky-200/90 bg-gradient-to-br from-sky-500 via-blue-500 to-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-md shadow-sky-900/15 ring-1 ring-white/25 transition hover:from-sky-400 hover:via-blue-400 hover:to-indigo-500 hover:shadow-lg disabled:opacity-60 dark:border-sky-400/30 dark:from-sky-600 dark:via-blue-600 dark:to-indigo-700 dark:ring-white/10 dark:hover:from-sky-500 dark:hover:via-blue-500 dark:hover:to-indigo-600"
+            title="Скачать график выбранного месяца как PNG"
+          >
+            <ImageDown className="h-4 w-4 shrink-0 opacity-95 group-hover:scale-105" aria-hidden />
+            {imageExportPending ? "PNG…" : "PNG"}
+          </button>
           {/* {!canManage && (
             <p className="text-sm text-slate-500 dark:text-slate-400">
               Только просмотр. Редактирование — право «schedule.manage».
@@ -698,7 +739,10 @@ export function SchedulePage() {
                   <span className="font-mono">о</span> — отпуск (даты задаются в кадровом справочнике)
                 </li>
                 <li>
-                  <span className="font-mono">у</span> — учёба
+                  <span className="font-mono">у</span> — учебный отпуск
+                </li>
+                <li>
+                  <span className="font-mono">б</span> — больничный
                 </li>
                 <li>
                   <span className="font-mono">8</span>, <span className="font-mono">7.2</span> — рабочие часы при графике 5/2
@@ -730,8 +774,8 @@ export function SchedulePage() {
                 <p className="font-medium text-slate-800 dark:text-slate-100">Покрытие смен</p>
                 <p className="mt-2 text-xs leading-relaxed">
                   Для сменных графиков по каждой системе проверяется, что в день «на работе» не меньше двух человек.
-                  В расчёт не входят пустые ячейки, отпуск (<span className="font-mono">о</span>) и учёба (
-                  <span className="font-mono">у</span>). Проблемные даты подсвечиваются над таблицей и розовой обводкой.
+                  В расчёт не входят пустые ячейки, отпуск (<span className="font-mono">о</span>), учёба (
+                  <span className="font-mono">у</span>) и больничный (<span className="font-mono">б</span>). Проблемные даты подсвечиваются над таблицей и розовой обводкой.
                 </p>
               </div>
             </section>
@@ -741,14 +785,16 @@ export function SchedulePage() {
                 <p className="font-medium text-slate-800 dark:text-slate-100">Автозаполнение</p>
                 <ul className="mt-2 list-inside list-disc space-y-1 text-xs leading-relaxed">
                   <li>
-                    Тип графика, пол и отпуска берутся из кадрового справочника (карточка сотрудника)
+                    Тип графика, пол, отпуска и больничные берутся из кадрового справочника (карточка сотрудника)
                   </li>
                   <li>
                     <strong>5/2</strong> — в будни без праздника: женский пол — <span className="font-mono">7.2</span>,
                     мужской или не указан — <span className="font-mono">8</span>; сб, вс и праздники РФ — пусто
                   </li>
                   <li>
-                    <strong>Сменный</strong> — цикл 11-3-8; выходные по смене — пусто, отпуск — <span className="font-mono">о</span>
+                    <strong>Сменный</strong> — цикл 11-3-8; выходные по смене — пусто; отпуск/учёба/больничный —{" "}
+                    <span className="font-mono">о</span>/<span className="font-mono">у</span>/
+                    <span className="font-mono">б</span>
                   </li>
                   <li>
                     <strong>2/2</strong> — чередование <span className="font-mono">11д</span> / <span className="font-mono">11в</span> и
@@ -780,7 +826,8 @@ export function SchedulePage() {
               <p className="font-medium text-slate-800 dark:text-slate-100">Импорт и выгрузка</p>
               <p className="mt-2 text-xs leading-relaxed">
                 «Из Excel» — загрузка листа месяца из .xlsx: строки сопоставляются с сотрудниками по ФИО. «В Excel» —
-                выгрузка текущего месяца или всего года.
+                выгрузка текущего месяца или всего года. «PNG» — картинка выбранного месяца в высоком качестве
+                (удобно для печати и мессенджеров).
               </p>
             </section>
           </div>
@@ -806,7 +853,7 @@ export function SchedulePage() {
                 Выгрузка в Excel
               </h2>
               <p className="mt-1 text-sm text-emerald-900/80 dark:text-emerald-200/80">
-                Выберите вариант выгрузки расписания.
+                Выберите вариант выгрузки графика.
               </p>
             </div>
             <div className="space-y-3 px-5 py-4">
@@ -901,7 +948,7 @@ export function SchedulePage() {
                 }}
                 className="rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2 text-sm font-semibold text-white shadow-md hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50 dark:from-emerald-500 dark:to-teal-500 dark:hover:from-emerald-400 dark:hover:to-teal-400"
               >
-                {importExcelMut.isPending ? "Загрузка…" : "Загрузить расписание"}
+                {importExcelMut.isPending ? "Загрузка…" : "Загрузить график"}
               </button>
             </div>
           </div>
@@ -984,9 +1031,6 @@ export function SchedulePage() {
       )}
 
       {scheduleQuery.isPending && <p className="text-sm text-slate-500">Загрузка…</p>}
-      {scheduleQuery.isError && (
-        <p className="text-sm text-red-600 dark:text-red-400">Не удалось загрузить расписание.</p>
-      )}
 
       {scheduleQuery.data &&
         (scheduleQuery.data.shift_staffing_notes.length > 0 ||

@@ -4,8 +4,8 @@ import enum
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, Enum, ForeignKey, Integer, String, Table, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Column, DateTime, Enum, ForeignKey, Integer, Numeric, String, Table, Text
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -45,6 +45,8 @@ class Task(Base):
         nullable=False,
     )
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    estimate_hours: Mapped[float | None] = mapped_column(Numeric(8, 2), nullable=True)
+    checklist: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -77,4 +79,10 @@ class Task(Base):
         "TaskComment",
         back_populates="task",
         cascade="all, delete-orphan",
+    )
+    attachments: Mapped[list["TaskAttachment"]] = relationship(
+        "TaskAttachment",
+        back_populates="task",
+        cascade="all, delete-orphan",
+        order_by="TaskAttachment.created_at",
     )

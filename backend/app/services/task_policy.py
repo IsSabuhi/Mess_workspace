@@ -44,6 +44,10 @@ async def can_read_task(session: AsyncSession, user: User, task: Task) -> bool:
     if board and board.scope == BOARD_SCOPE_SYSTEM:
         if user.is_superuser:
             return True
+        # Руководитель (tasks.read.all / update.all): видит задачи на всех досках,
+        # которые ему уже доступны в списке (в т.ч. через board.columns.manage).
+        if await user_sees_all_tasks(session, user):
+            return True
         role = await _board_member_role(session, board, user.id)
         return role is not None
 
@@ -62,8 +66,17 @@ async def _has_task_edit_permission(session: AsyncSession, user: User, task: Tas
     if board and board.scope == BOARD_SCOPE_SYSTEM:
         if user.is_superuser:
             return True
+        if await user_has_permission(session, user, TASKS_UPDATE_ALL):
+            return True
         role = await _board_member_role(session, board, user.id)
-        return role in {BOARD_MEMBER_ROLE_EDITOR, BOARD_MEMBER_ROLE_MANAGER}
+        if role in {BOARD_MEMBER_ROLE_EDITOR, BOARD_MEMBER_ROLE_MANAGER}:
+            return True
+        if await user_has_permission(session, user, TASKS_UPDATE_ASSIGNED):
+            if _user_in_task_assignees(task, user.id):
+                return True
+            if task.system_id in await _user_system_id_set(session, user.id):
+                return True
+        return False
 
     if user.is_superuser:
         return True
@@ -99,6 +112,8 @@ async def can_delete_task(session: AsyncSession, user: User, task: Task) -> bool
     if board and board.scope == BOARD_SCOPE_SYSTEM:
         if user.is_superuser:
             return True
+        if await user_has_permission(session, user, TASKS_DELETE):
+            return True
         role = await _board_member_role(session, board, user.id)
         return role == BOARD_MEMBER_ROLE_MANAGER
 
@@ -120,6 +135,10 @@ async def can_create_task_on_board(session: AsyncSession, user: User, board: Boa
     if board.scope == BOARD_SCOPE_SYSTEM:
         if user.is_superuser:
             return True
+        # Создавать на чужой системной доске можно при глобальном праве на создание
+        # и праве видеть все задачи (начальник отдела / руководитель).
+        if await user_has_permission(session, user, TASKS_CREATE) and await user_sees_all_tasks(session, user):
+            return True
         role = await _board_member_role(session, board, user.id)
         return role in {BOARD_MEMBER_ROLE_EDITOR, BOARD_MEMBER_ROLE_MANAGER}
     if user.is_superuser:
@@ -132,8 +151,19 @@ async def can_move_task(session: AsyncSession, user: User, task: Task) -> bool:
     if board and board.scope == BOARD_SCOPE_SYSTEM:
         if user.is_superuser:
             return True
+        if await user_has_permission(session, user, TASKS_MOVE):
+            return True
+        if await user_has_permission(session, user, TASKS_UPDATE_ALL):
+            return True
         role = await _board_member_role(session, board, user.id)
-        return role in {BOARD_MEMBER_ROLE_EDITOR, BOARD_MEMBER_ROLE_MANAGER}
+        if role in {BOARD_MEMBER_ROLE_EDITOR, BOARD_MEMBER_ROLE_MANAGER}:
+            return True
+        if await user_has_permission(session, user, TASKS_UPDATE_ASSIGNED):
+            if _user_in_task_assignees(task, user.id):
+                return True
+            if task.system_id in await _user_system_id_set(session, user.id):
+                return True
+        return False
 
     if user.is_superuser:
         return True

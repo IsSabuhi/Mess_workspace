@@ -8,6 +8,7 @@ export type NotificationOut = {
   title: string;
   body: string | null;
   task_id: string | null;
+  board_id: string | null;
   release_note_id: string | null;
   created_at: string;
   read_at: string | null;

@@ -42,6 +42,11 @@ body {
     @apply border border-white/60 bg-white/80 shadow-soft backdrop-blur-md dark:border-slate-700/60 dark:bg-slate-900/75 dark:shadow-none;
   }
 
+  /** Панель модалки: в light — чистый белый (без серого «стекла» на затемнении). */
+  .modal-panel {
+    @apply border border-slate-200/90 bg-white shadow-soft-lg dark:border-slate-700/60 dark:bg-slate-900 dark:shadow-none;
+  }
+
   .scrollbar-hide {
     -ms-overflow-style: none;
     scrollbar-width: none;
@@ -82,89 +87,111 @@ body {
   background: transparent;
 }
 
-/* TipTap / база знаний */
-.kb-editor-content .ProseMirror {
-  min-height: min(70vh, 480px);
+/* TipTap / база знаний — класс kb-editor-content висит на самом корне ProseMirror */
+.kb-editor-content.ProseMirror {
+  min-height: min(72vh, 640px);
+  width: 100%;
+  max-width: 100%;
   outline: none;
+  cursor: text;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font-size: 0.975rem;
+  line-height: 1.65;
 }
-.kb-editor-content .ProseMirror p {
+.kb-editor-content.ProseMirror p.is-editor-empty:first-child::before,
+.kb-editor-content.ProseMirror p.is-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+  color: #94a3b8;
+  font-size: 0.975rem;
+}
+.dark .kb-editor-content.ProseMirror p.is-editor-empty:first-child::before,
+.dark .kb-editor-content.ProseMirror p.is-empty:first-child::before {
+  color: #64748b;
+}
+.kb-editor-content.ProseMirror p {
   margin: 0.4em 0;
 }
-.kb-editor-content .ProseMirror h1 {
+.kb-editor-content.ProseMirror h1 {
   font-size: 1.5rem;
   font-weight: 700;
   margin: 0.75em 0 0.35em;
 }
-.kb-editor-content .ProseMirror h2 {
+.kb-editor-content.ProseMirror h2 {
   font-size: 1.25rem;
   font-weight: 600;
   margin: 0.65em 0 0.3em;
 }
-.kb-editor-content .ProseMirror h3 {
+.kb-editor-content.ProseMirror h3 {
   font-size: 1.1rem;
   font-weight: 600;
   margin: 0.5em 0 0.25em;
 }
-.kb-editor-content .ProseMirror ul,
-.kb-editor-content .ProseMirror ol {
+.kb-editor-content.ProseMirror ul,
+.kb-editor-content.ProseMirror ol {
   padding-left: 1.25rem;
 }
-.kb-editor-content .ProseMirror table {
+.kb-editor-content.ProseMirror table {
   border-collapse: collapse;
   width: 100%;
   margin: 0.5em 0;
 }
-.kb-editor-content .ProseMirror th,
-.kb-editor-content .ProseMirror td {
+.kb-editor-content.ProseMirror th,
+.kb-editor-content.ProseMirror td {
   border: 1px solid rgb(148 163 184 / 0.6);
   padding: 0.35rem 0.5rem;
 }
-.kb-editor-content .ProseMirror th {
+.kb-editor-content.ProseMirror th {
   background: rgb(241 245 249 / 0.8);
 }
-.dark .kb-editor-content .ProseMirror th {
+.dark .kb-editor-content.ProseMirror th {
   background: rgb(30 41 59 / 0.6);
 }
-.kb-editor-content .ProseMirror img {
+.kb-editor-content.ProseMirror img {
   max-width: 100%;
   height: auto;
   border-radius: 0.5rem;
 }
-.kb-editor-content .ProseMirror a {
+.kb-editor-content.ProseMirror a {
   color: rgb(14 165 233);
   text-decoration: underline;
 }
 
-.kb-editor-content .ProseMirror pre {
+.kb-editor-content.ProseMirror pre {
+  position: relative;
   background: rgb(15 23 42);
   color: rgb(226 232 240);
   border-radius: 0.75rem;
   padding: 0.85rem 1rem;
   overflow-x: auto;
+  max-width: 100%;
   margin: 0.75rem 0;
 }
 
-.kb-editor-content .ProseMirror pre code {
+.kb-editor-content.ProseMirror pre code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   font-size: 0.86rem;
   line-height: 1.5;
 }
 
-.kb-editor-content .ProseMirror .hljs-keyword,
-.kb-editor-content .ProseMirror .hljs-selector-tag,
-.kb-editor-content .ProseMirror .hljs-title {
+.kb-editor-content.ProseMirror .hljs-keyword,
+.kb-editor-content.ProseMirror .hljs-selector-tag,
+.kb-editor-content.ProseMirror .hljs-title {
   color: rgb(56 189 248);
 }
-.kb-editor-content .ProseMirror .hljs-string,
-.kb-editor-content .ProseMirror .hljs-attr {
+.kb-editor-content.ProseMirror .hljs-string,
+.kb-editor-content.ProseMirror .hljs-attr {
   color: rgb(134 239 172);
 }
-.kb-editor-content .ProseMirror .hljs-number,
-.kb-editor-content .ProseMirror .hljs-literal {
+.kb-editor-content.ProseMirror .hljs-number,
+.kb-editor-content.ProseMirror .hljs-literal {
   color: rgb(252 211 77);
 }
-.kb-editor-content .ProseMirror .hljs-comment {
+.kb-editor-content.ProseMirror .hljs-comment {
   color: rgb(148 163 184);
 }
 
@@ -173,6 +200,16 @@ body {
   font-size: 1.0625rem;
   line-height: 1.75;
   color: rgb(15 23 42);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+@media (min-width: 1536px) {
+  .kb-article-body {
+    font-size: 1.125rem;
+    line-height: 1.8;
+  }
 }
 
 .dark .kb-article-body {
@@ -264,8 +301,11 @@ body {
 .kb-article-body table {
   border-collapse: collapse;
   width: 100%;
+  max-width: 100%;
   margin: 1rem 0;
   font-size: 0.95em;
+  display: block;
+  overflow-x: auto;
 }
 
 .kb-article-body th,
@@ -284,11 +324,13 @@ body {
   background: rgb(30 41 59 / 0.75);
 }
 
-/* Оболочка pre — фон/цвет текста задаёт тема hljs на code.hljs; без рамки, на всю ширину колонки */
+/* Оболочка pre — длинные строки скроллятся внутри блока, не раздувая страницу */
 .kb-article-body pre {
+  position: relative;
   margin: 1.1rem 0;
   border-radius: 0.5rem;
-  overflow: hidden;
+  overflow-x: auto;
+  max-width: 100%;
   padding: 0;
   background: transparent;
   border: none;
@@ -298,6 +340,48 @@ body {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   font-size: 0.875rem;
   line-height: 1.55;
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+/* Кнопка «Копировать» на блоках кода (редактор + чтение) */
+.kb-code-copy {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.45rem;
+  z-index: 3;
+  border-radius: 0.4rem;
+  border: 1px solid rgb(71 85 105 / 0.9);
+  background: rgb(30 41 59 / 0.92);
+  color: rgb(226 232 240);
+  padding: 0.2rem 0.55rem;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  opacity: 0.72;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.kb-code-block:hover > .kb-code-copy,
+.kb-code-copy:focus-visible,
+.kb-code-copy.kb-code-copy--done {
+  opacity: 1;
+}
+.kb-code-copy:hover {
+  background: rgb(51 65 85);
+}
+.kb-code-copy.kb-code-copy--done {
+  border-color: rgb(52 211 153 / 0.55);
+  color: rgb(167 243 208);
+}
+@media (hover: none) {
+  .kb-code-copy {
+    opacity: 1;
+  }
 }
 
 .kb-article-body :not(pre) > code {
@@ -307,9 +391,188 @@ body {
   color: rgb(51 65 85);
   padding: 0.15em 0.4em;
   border-radius: 0.35rem;
+  word-break: break-word;
 }
 
 .dark .kb-article-body :not(pre) > code {
   background: rgb(30 41 59);
   color: rgb(226 232 240);
+}
+
+/* Автооглавление дочерних статей в родителе */
+.kb-article-body nav.kb-children-toc,
+.kb-article-body nav[data-kb-children-toc],
+.kb-editor-content.ProseMirror nav.kb-children-toc,
+.kb-editor-content.ProseMirror nav[data-kb-children-toc] {
+  margin: 1.5rem 0;
+  padding: 1.15rem 1.35rem 1.25rem;
+  border-radius: 1rem;
+  border: 1px solid rgb(186 230 253 / 0.9);
+  background:
+    linear-gradient(180deg, rgb(240 249 255 / 0.95), rgb(255 255 255 / 0.7));
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.04);
+}
+
+.dark .kb-article-body nav.kb-children-toc,
+.dark .kb-article-body nav[data-kb-children-toc],
+.dark .kb-editor-content.ProseMirror nav.kb-children-toc,
+.dark .kb-editor-content.ProseMirror nav[data-kb-children-toc] {
+  border-color: rgb(14 116 144 / 0.45);
+  background: linear-gradient(180deg, rgb(8 47 73 / 0.45), rgb(15 23 42 / 0.35));
+  box-shadow: none;
+}
+
+.kb-article-body nav.kb-children-toc > h2,
+.kb-article-body nav[data-kb-children-toc] > h2,
+.kb-editor-content.ProseMirror nav.kb-children-toc > h2,
+.kb-editor-content.ProseMirror nav[data-kb-children-toc] > h2 {
+  margin: 0 0 0.85rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgb(14 165 233);
+}
+
+.dark .kb-article-body nav.kb-children-toc > h2,
+.dark .kb-article-body nav[data-kb-children-toc] > h2,
+.dark .kb-editor-content.ProseMirror nav.kb-children-toc > h2,
+.dark .kb-editor-content.ProseMirror nav[data-kb-children-toc] > h2 {
+  color: rgb(56 189 248);
+}
+
+.kb-article-body nav.kb-children-toc > h3,
+.kb-article-body nav[data-kb-children-toc] > h3,
+.kb-article-body nav.kb-children-toc > h4,
+.kb-article-body nav[data-kb-children-toc] > h4,
+.kb-article-body nav.kb-children-toc > h5,
+.kb-article-body nav[data-kb-children-toc] > h5,
+.kb-article-body nav.kb-children-toc > h6,
+.kb-article-body nav[data-kb-children-toc] > h6,
+.kb-editor-content.ProseMirror nav.kb-children-toc > h3,
+.kb-editor-content.ProseMirror nav[data-kb-children-toc] > h3,
+.kb-editor-content.ProseMirror nav.kb-children-toc > h4,
+.kb-editor-content.ProseMirror nav[data-kb-children-toc] > h4,
+.kb-editor-content.ProseMirror nav.kb-children-toc > h5,
+.kb-editor-content.ProseMirror nav[data-kb-children-toc] > h5,
+.kb-editor-content.ProseMirror nav.kb-children-toc > h6,
+.kb-editor-content.ProseMirror nav[data-kb-children-toc] > h6 {
+  margin: 0.35rem 0;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.kb-article-body nav.kb-children-toc > h3,
+.kb-article-body nav[data-kb-children-toc] > h3,
+.kb-editor-content.ProseMirror nav.kb-children-toc > h3,
+.kb-editor-content.ProseMirror nav[data-kb-children-toc] > h3 {
+  font-size: 1.05rem;
+}
+
+.kb-article-body nav.kb-children-toc > h4,
+.kb-article-body nav[data-kb-children-toc] > h4,
+.kb-editor-content.ProseMirror nav.kb-children-toc > h4,
+.kb-editor-content.ProseMirror nav[data-kb-children-toc] > h4 {
+  margin-left: 0.75rem;
+  font-size: 0.98rem;
+}
+
+.kb-article-body nav.kb-children-toc > h5,
+.kb-article-body nav[data-kb-children-toc] > h5,
+.kb-article-body nav.kb-children-toc > h6,
+.kb-article-body nav[data-kb-children-toc] > h6,
+.kb-editor-content.ProseMirror nav.kb-children-toc > h5,
+.kb-editor-content.ProseMirror nav[data-kb-children-toc] > h5,
+.kb-editor-content.ProseMirror nav.kb-children-toc > h6,
+.kb-editor-content.ProseMirror nav[data-kb-children-toc] > h6 {
+  margin-left: 1.5rem;
+  font-size: 0.92rem;
+}
+
+.kb-article-body nav.kb-children-toc > h3 > a,
+.kb-article-body nav[data-kb-children-toc] > h3 > a,
+.kb-article-body nav.kb-children-toc > h4 > a,
+.kb-article-body nav[data-kb-children-toc] > h4 > a,
+.kb-article-body nav.kb-children-toc > h5 > a,
+.kb-article-body nav[data-kb-children-toc] > h5 > a,
+.kb-article-body nav.kb-children-toc > h6 > a,
+.kb-article-body nav[data-kb-children-toc] > h6 > a,
+.kb-editor-content.ProseMirror nav.kb-children-toc > h3 > a,
+.kb-editor-content.ProseMirror nav[data-kb-children-toc] > h3 > a,
+.kb-editor-content.ProseMirror nav.kb-children-toc > h4 > a,
+.kb-editor-content.ProseMirror nav[data-kb-children-toc] > h4 > a,
+.kb-editor-content.ProseMirror nav.kb-children-toc > h5 > a,
+.kb-editor-content.ProseMirror nav[data-kb-children-toc] > h5 > a,
+.kb-editor-content.ProseMirror nav.kb-children-toc > h6 > a,
+.kb-editor-content.ProseMirror nav[data-kb-children-toc] > h6 > a {
+  display: block;
+  padding: 0.55rem 0.75rem;
+  border-radius: 0.75rem;
+  color: rgb(15 23 42);
+  text-decoration: none;
+  background: rgb(255 255 255 / 0.75);
+  border: 1px solid rgb(226 232 240 / 0.9);
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.kb-article-body nav.kb-children-toc > h3 > a:hover,
+.kb-article-body nav[data-kb-children-toc] > h3 > a:hover,
+.kb-article-body nav.kb-children-toc > h4 > a:hover,
+.kb-article-body nav[data-kb-children-toc] > h4 > a:hover,
+.kb-article-body nav.kb-children-toc > h5 > a:hover,
+.kb-article-body nav[data-kb-children-toc] > h5 > a:hover,
+.kb-article-body nav.kb-children-toc > h6 > a:hover,
+.kb-article-body nav[data-kb-children-toc] > h6 > a:hover,
+.kb-editor-content.ProseMirror nav.kb-children-toc > h3 > a:hover,
+.kb-editor-content.ProseMirror nav[data-kb-children-toc] > h3 > a:hover,
+.kb-editor-content.ProseMirror nav.kb-children-toc > h4 > a:hover,
+.kb-editor-content.ProseMirror nav[data-kb-children-toc] > h4 > a:hover,
+.kb-editor-content.ProseMirror nav.kb-children-toc > h5 > a:hover,
+.kb-editor-content.ProseMirror nav[data-kb-children-toc] > h5 > a:hover,
+.kb-editor-content.ProseMirror nav.kb-children-toc > h6 > a:hover,
+.kb-editor-content.ProseMirror nav[data-kb-children-toc] > h6 > a:hover {
+  color: rgb(3 105 161);
+  border-color: rgb(125 211 252);
+  background: rgb(255 255 255);
+}
+
+.dark .kb-article-body nav.kb-children-toc > h3 > a,
+.dark .kb-article-body nav[data-kb-children-toc] > h3 > a,
+.dark .kb-article-body nav.kb-children-toc > h4 > a,
+.dark .kb-article-body nav[data-kb-children-toc] > h4 > a,
+.dark .kb-article-body nav.kb-children-toc > h5 > a,
+.dark .kb-article-body nav[data-kb-children-toc] > h5 > a,
+.dark .kb-article-body nav.kb-children-toc > h6 > a,
+.dark .kb-article-body nav[data-kb-children-toc] > h6 > a,
+.dark .kb-editor-content.ProseMirror nav.kb-children-toc > h3 > a,
+.dark .kb-editor-content.ProseMirror nav[data-kb-children-toc] > h3 > a,
+.dark .kb-editor-content.ProseMirror nav.kb-children-toc > h4 > a,
+.dark .kb-editor-content.ProseMirror nav[data-kb-children-toc] > h4 > a,
+.dark .kb-editor-content.ProseMirror nav.kb-children-toc > h5 > a,
+.dark .kb-editor-content.ProseMirror nav[data-kb-children-toc] > h5 > a,
+.dark .kb-editor-content.ProseMirror nav.kb-children-toc > h6 > a,
+.dark .kb-editor-content.ProseMirror nav[data-kb-children-toc] > h6 > a {
+  color: rgb(241 245 249);
+  background: rgb(15 23 42 / 0.55);
+  border-color: rgb(51 65 85 / 0.9);
+}
+
+.dark .kb-article-body nav.kb-children-toc > h3 > a:hover,
+.dark .kb-article-body nav[data-kb-children-toc] > h3 > a:hover,
+.dark .kb-article-body nav.kb-children-toc > h4 > a:hover,
+.dark .kb-article-body nav[data-kb-children-toc] > h4 > a:hover,
+.dark .kb-article-body nav.kb-children-toc > h5 > a:hover,
+.dark .kb-article-body nav[data-kb-children-toc] > h5 > a:hover,
+.dark .kb-article-body nav.kb-children-toc > h6 > a:hover,
+.dark .kb-article-body nav[data-kb-children-toc] > h6 > a:hover,
+.dark .kb-editor-content.ProseMirror nav.kb-children-toc > h3 > a:hover,
+.dark .kb-editor-content.ProseMirror nav[data-kb-children-toc] > h3 > a:hover,
+.dark .kb-editor-content.ProseMirror nav.kb-children-toc > h4 > a:hover,
+.dark .kb-editor-content.ProseMirror nav[data-kb-children-toc] > h4 > a:hover,
+.dark .kb-editor-content.ProseMirror nav.kb-children-toc > h5 > a:hover,
+.dark .kb-editor-content.ProseMirror nav[data-kb-children-toc] > h5 > a:hover,
+.dark .kb-editor-content.ProseMirror nav.kb-children-toc > h6 > a:hover,
+.dark .kb-editor-content.ProseMirror nav[data-kb-children-toc] > h6 > a:hover {
+  color: rgb(125 211 252);
+  border-color: rgb(14 165 233 / 0.55);
 }

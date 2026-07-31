@@ -23,7 +23,7 @@ class ArticleStatus(str, enum.Enum):
 
 
 class KnowledgeSpace(Base):
-    """Пространство БЗ: привязка к системе опциональна; доступ через members + суперпользователь."""
+    """Пространство БЗ: при system_id сотрудники системы получают доступ (viewer) автоматически."""
 
     __tablename__ = "knowledge_spaces"
 
@@ -96,6 +96,7 @@ class KnowledgeArticle(Base):
     )
 
     space: Mapped["KnowledgeSpace"] = relationship(back_populates="articles")
+    created_by: Mapped["User | None"] = relationship(foreign_keys=[created_by_id])
 
 
 class KnowledgeArticleRevision(Base):

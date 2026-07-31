@@ -1,11 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Eye, EyeOff, Loader2 } from "lucide-react";
+import { Eye, EyeOff, FileSpreadsheet, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Navigate, useSearchParams } from "react-router-dom";
 
 import type { UserOut } from "../api/auth";
 import { getAuditSettings, listAuditEvents, patchAuditSettings } from "../api/audit";
-import { ApiError } from "../api/client";
 import type { PermissionOut, RoleCreate, RoleOut, RoleUpdate } from "../api/roles";
 import {
   createRole,
@@ -18,13 +17,17 @@ import type { PositionOut } from "../api/positions";
 import { listPositions } from "../api/positions";
 import type { SystemOut } from "../api/systems";
 import { getTaskArchiveSettings, listSystems, updateTaskArchiveSettings } from "../api/systems";
+import { importTasksFromExcel } from "../api/tasks";
+import type { TaskExcelImportBatchOut } from "../api/tasks";
 import type { UserCreate, UserUpdate } from "../api/users";
 import { createUser, deleteUser, importUsersFromExcel, listUsers, updateUser } from "../api/users";
 import { AppShell } from "../components/AppShell";
 import { useAuth } from "../context/AuthContext";
+import { auditActionLabel, formatAuditDetails } from "../lib/auditFormat";
 import { invalidateAndRefetch } from "../lib/queryClient";
 import { PERM, canAdminAccess, hasPermission } from "../lib/permissions";
 import { toastApiError, toastError, toastSuccess } from "../lib/toast";
+import { useToastQueryError } from "../lib/useToastQueryError";
 import { useModalLayer } from "../lib/useModalLayer";
 
 type Tab = "users" | "roles" | "system-settings" | "audit-log";
@@ -45,13 +48,14 @@ function groupPermissions(perms: PermissionOut[]): Map<string, PermissionOut[]> 
 
 const PERM_GROUP_LABELS: Record<string, string> = {
   tasks: "Задачи",
-  board: "Доска и колонки",
-  systems: "Системные настройки",
+  board: "Структура доски",
+  systems: "Производственные системы",
   positions: "Должности",
-  users: "Управление пользователями",
-  roles: "Роли и права доступа",
+  users: "Пользователи",
+  roles: "Роли",
   knowledge: "База знаний",
-  employee_directory: "Сотрудники",
+  employee_directory: "Справочник сотрудников",
+  schedule: "График",
   other: "Прочее",
 };
 
@@ -198,9 +202,9 @@ function RolesPermissionsBoard({
         </div>
       </div>
 
-      <div className="flex flex-col gap-6 lg:flex-row lg:items-stretch">
-        <aside className="w-full shrink-0 rounded-2xl border border-slate-200/80 bg-white/90 shadow-soft dark:border-slate-700 dark:bg-slate-900/60 lg:w-[min(100%,280px)]">
-          <div className="border-b border-slate-200/80 px-4 py-3 dark:border-slate-700">
+      <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+        <aside className="flex h-[min(36rem,70vh)] w-full shrink-0 flex-col overflow-hidden rounded-2xl border border-slate-200/80 bg-white/90 shadow-soft dark:border-slate-700 dark:bg-slate-900/60 lg:w-72 xl:w-80">
+          <div className="shrink-0 border-b border-slate-200/80 px-4 py-3 dark:border-slate-700">
             <p className="text-sm font-semibold text-slate-900 dark:text-white">Роли системы</p>
             <input
               type="search"
@@ -210,7 +214,7 @@ function RolesPermissionsBoard({
               className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
             />
           </div>
-          <ul className="max-h-[min(420px,50vh)] space-y-1 overflow-y-auto p-2">
+          <ul className="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain p-2">
             {filteredRoles.map((r) => {
               const active = r.id === selectedId;
               return (
@@ -249,12 +253,12 @@ function RolesPermissionsBoard({
           </ul>
         </aside>
 
-        <section className="min-w-0 flex-1 rounded-2xl border border-slate-200/80 bg-white/90 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
+        <section className="flex h-[min(36rem,70vh)] min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200/80 bg-white/90 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
           {!selected ? (
-            <p className="p-8 text-center text-slate-500">Выберите роль слева</p>
+            <p className="m-auto p-8 text-center text-slate-500">Выберите роль слева</p>
           ) : (
             <>
-              <div className="border-b border-slate-200/80 px-5 py-4 dark:border-slate-700">
+              <div className="shrink-0 border-b border-slate-200/80 px-5 py-4 dark:border-slate-700">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
@@ -305,7 +309,7 @@ function RolesPermissionsBoard({
                 </div>
               </div>
 
-              <div className="max-h-[min(560px,60vh)] space-y-8 overflow-y-auto px-5 py-5">
+              <div className="min-h-0 flex-1 space-y-8 overflow-y-auto overscroll-contain px-5 py-5">
                 <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
                   Глобальные права
                 </p>
@@ -387,7 +391,8 @@ export function AdminPage() {
 
   const showUsers = hasPermission(user, PERM.USERS_MANAGE);
   const showRoles = hasPermission(user, PERM.ROLES_MANAGE);
-  const canManageTaskArchive = hasPermission(user, PERM.SYSTEMS_MANAGE);
+  // Настройки системы и журнал аудита — только у тех, кто уже в админке (users/roles).
+  const canManageTaskArchive = canAdminAccess(user);
 
   useEffect(() => {
     const visibleTabs: Tab[] = [];
@@ -480,6 +485,11 @@ function SystemSettingsSection() {
   const [auditRetentionDays, setAuditRetentionDays] = useState("180");
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importResultOpen, setImportResultOpen] = useState(false);
+  const [taskImportOpen, setTaskImportOpen] = useState(false);
+  const [taskImportFiles, setTaskImportFiles] = useState<File[]>([]);
+  const [taskImportSystemId, setTaskImportSystemId] = useState("");
+  const [taskImportSheet, setTaskImportSheet] = useState("");
+  const [taskImportResult, setTaskImportResult] = useState<TaskExcelImportBatchOut | null>(null);
   const taskArchiveQuery = useQuery({
     queryKey: ["admin", "task-archive-settings"],
     queryFn: getTaskArchiveSettings,
@@ -488,6 +498,8 @@ function SystemSettingsSection() {
     queryKey: ["admin", "audit-settings"],
     queryFn: getAuditSettings,
   });
+  useToastQueryError(taskArchiveQuery.error, "Не удалось загрузить настройки автоархивации");
+  useToastQueryError(auditSettingsQuery.error, "Не удалось загрузить настройки аудита");
   useEffect(() => {
     if (!taskArchiveQuery.data) return;
     setAutoArchiveDays(String(taskArchiveQuery.data.auto_archive_done_days));
@@ -526,6 +538,50 @@ function SystemSettingsSection() {
     },
     onError: (e: unknown) => toastApiError(e, "Не удалось импортировать сотрудников"),
   });
+
+  const systemsForImportQuery = useQuery({
+    queryKey: ["systems", "task-import"],
+    queryFn: () => listSystems(true),
+    enabled: taskImportOpen,
+  });
+
+  const importTasksMut = useMutation({
+    mutationFn: () => {
+      if (!taskImportFiles.length) {
+        return Promise.reject(new Error("Выберите файл(ы)"));
+      }
+      if (taskImportFiles.length === 1 && !taskImportSystemId) {
+        // система опциональна — бэкенд попробует сопоставить сам
+      }
+      return importTasksFromExcel({
+        files: taskImportFiles,
+        systemId: taskImportFiles.length === 1 ? taskImportSystemId || undefined : undefined,
+        sheetName: taskImportSheet || undefined,
+      });
+    },
+    onSuccess: async (data) => {
+      setTaskImportResult(data);
+      toastSuccess(
+        `Файлов: ${data.files_ok}/${data.files_total}, задач создано: ${data.created_total}` +
+          (data.files_failed ? `, ошибок: ${data.files_failed}` : ""),
+      );
+      setTaskImportFiles([]);
+      setTaskImportOpen(false);
+      await qc.invalidateQueries({ queryKey: ["tasks"] });
+    },
+    onError: (e: unknown) => toastApiError(e, "Не удалось импортировать задачи"),
+  });
+
+  const { backdropProps: taskImportBackdrop, stopPanelPointer: taskImportPanelStop } = useModalLayer(
+    taskImportOpen,
+    () => {
+      if (!importTasksMut.isPending) setTaskImportOpen(false);
+    },
+    {
+      closeOnBackdrop: !importTasksMut.isPending,
+      closeOnEscape: !importTasksMut.isPending,
+    },
+  );
 
   return (
     <div className="space-y-6">
@@ -696,6 +752,184 @@ function SystemSettingsSection() {
           )}
         </div>
       )}
+
+      <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-5 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
+        <h3 className="text-base font-semibold text-slate-900 dark:text-white">Импорт задач из задачника Excel</h3>
+        <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+          Можно загрузить <strong>несколько файлов</strong> сразу (по одному на систему). Система определяется по
+          имени файла/листа (например «Задачник СМЗиС.xlsx» → СМЗиС). Задачи — на основную доску MES: закрытые в
+          «Выполнено», остальные в «В работе».
+        </p>
+        <button
+          type="button"
+          onClick={() => {
+            setTaskImportResult(null);
+            setTaskImportFiles([]);
+            setTaskImportSystemId("");
+            setTaskImportOpen(true);
+          }}
+          className="mt-4 inline-flex items-center gap-2 rounded-xl border border-emerald-200/90 bg-gradient-to-br from-emerald-500 via-teal-500 to-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-md hover:from-emerald-400 hover:via-teal-400 hover:to-cyan-500"
+        >
+          <FileSpreadsheet className="h-4 w-4" aria-hidden />
+          Из Excel…
+        </button>
+        {taskImportResult && (
+          <div className="mt-4 space-y-3 rounded-xl border border-slate-200 bg-slate-50/80 p-3 text-sm dark:border-slate-700 dark:bg-slate-800/50">
+            <p className="font-medium text-slate-900 dark:text-white">
+              Итого: файлов ок {taskImportResult.files_ok}/{taskImportResult.files_total}, создано задач{" "}
+              {taskImportResult.created_total}, предупреждений {taskImportResult.warnings_total}
+              {taskImportResult.files_failed ? `, ошибок файлов ${taskImportResult.files_failed}` : ""}.
+            </p>
+            {taskImportResult.files.map((f) => (
+              <div
+                key={f.filename}
+                className="rounded-lg border border-slate-200 bg-white p-2 dark:border-slate-700 dark:bg-slate-900/60"
+              >
+                <p className="text-xs font-semibold text-slate-800 dark:text-slate-100">
+                  {f.filename}
+                  {f.ok && f.result
+                    ? ` → ${f.result.system_name} (лист «${f.result.sheet_name}», +${f.result.created})`
+                    : null}
+                  {!f.ok ? (
+                    <span className="font-normal text-red-600 dark:text-red-400"> — {f.error}</span>
+                  ) : null}
+                </p>
+                {f.ok && f.result && f.result.rows.length > 0 && (
+                  <div className="mt-2 max-h-40 overflow-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="sticky top-0 bg-slate-100/90 dark:bg-slate-800/90">
+                        <tr>
+                          <th className="px-2 py-1">Строка</th>
+                          <th className="px-2 py-1">Задача</th>
+                          <th className="px-2 py-1">Статус</th>
+                          <th className="px-2 py-1">Комментарий</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
+                        {f.result.rows.map((row) => (
+                          <tr key={`${f.filename}-${row.row}-${row.task_id ?? row.title}`}>
+                            <td className="px-2 py-1">{row.row}</td>
+                            <td className="px-2 py-1">{row.title}</td>
+                            <td className="px-2 py-1">{row.status}</td>
+                            <td className="px-2 py-1">{row.message ?? "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={() => setTaskImportResult(null)}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
+            >
+              Скрыть детали
+            </button>
+          </div>
+        )}
+      </div>
+
+      {taskImportOpen && (
+        <div
+          {...taskImportBackdrop}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 p-4 backdrop-blur-sm"
+        >
+          <div
+            className="modal-panel w-full max-w-md overflow-hidden rounded-2xl border border-emerald-200/60 shadow-2xl dark:border-emerald-900/40"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="task-import-title"
+            onClick={taskImportPanelStop}
+          >
+            <div className="border-b border-emerald-100 bg-gradient-to-r from-emerald-50 to-teal-50 px-5 py-4 dark:border-emerald-900/50 dark:from-emerald-950/50 dark:to-teal-950/40">
+              <h2
+                id="task-import-title"
+                className="flex items-center gap-2 text-lg font-semibold text-emerald-950 dark:text-emerald-100"
+              >
+                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-700 dark:bg-emerald-400/20 dark:text-emerald-200">
+                  <FileSpreadsheet className="h-5 w-5" aria-hidden />
+                </span>
+                Импорт задачников
+              </h2>
+              <p className="mt-1 text-sm text-emerald-900/80 dark:text-emerald-200/80">
+                Выберите один или несколько .xlsx — система подставится по имени файла/листа.
+              </p>
+            </div>
+            <div className="space-y-4 px-5 py-4">
+              <label className="block text-sm text-slate-700 dark:text-slate-200">
+                Файлы .xlsx
+                <input
+                  key={taskImportFiles.map((f) => f.name).join("|") || "task-empty"}
+                  type="file"
+                  multiple
+                  accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  className="mt-1.5 block w-full text-sm text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-emerald-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-emerald-900 dark:text-slate-300 dark:file:bg-emerald-900/40 dark:file:text-emerald-100"
+                  onChange={(e) => setTaskImportFiles(Array.from(e.target.files ?? []))}
+                />
+              </label>
+              {taskImportFiles.length > 0 && (
+                <ul className="max-h-28 list-inside list-disc overflow-auto text-xs text-slate-600 dark:text-slate-300">
+                  {taskImportFiles.map((f) => (
+                    <li key={f.name + f.size}>{f.name}</li>
+                  ))}
+                </ul>
+              )}
+              {taskImportFiles.length === 1 && (
+                <label className="block text-sm text-slate-700 dark:text-slate-200">
+                  Система (если авто-определение не сработает)
+                  <select
+                    value={taskImportSystemId}
+                    onChange={(e) => setTaskImportSystemId(e.target.value)}
+                    className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+                  >
+                    <option value="">— авто по имени файла/листа —</option>
+                    {(systemsForImportQuery.data ?? []).map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <label className="block text-sm text-slate-700 dark:text-slate-200">
+                Лист (необязательно, для всех файлов)
+                <input
+                  value={taskImportSheet}
+                  onChange={(e) => setTaskImportSheet(e.target.value)}
+                  placeholder="Иначе первый лист с данными в каждом файле"
+                  className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+                />
+              </label>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-slate-100 bg-slate-50/80 px-5 py-3 dark:border-slate-700 dark:bg-slate-800/80">
+              <button
+                type="button"
+                onClick={() => !importTasksMut.isPending && setTaskImportOpen(false)}
+                className="rounded-xl px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200/80 dark:text-slate-300 dark:hover:bg-slate-700"
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                disabled={!taskImportFiles.length || importTasksMut.isPending}
+                onClick={() => importTasksMut.mutate()}
+                className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-2 text-sm font-semibold text-white shadow-md disabled:opacity-50"
+              >
+                {importTasksMut.isPending ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Загрузка…
+                  </>
+                ) : (
+                  `Импортировать (${taskImportFiles.length || 0})`
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -714,6 +948,7 @@ function AuditLogSection() {
         q: auditFilterQuery || undefined,
       }),
   });
+  useToastQueryError(auditEventsQuery.error, "Не удалось загрузить журнал аудита");
 
   return (
     <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-5 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
@@ -754,7 +989,7 @@ function AuditLogSection() {
           </thead>
           <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
             {(auditEventsQuery.data ?? []).map((ev) => (
-              <tr key={ev.id}>
+              <tr key={ev.id} className="align-top">
                 <td className="px-3 py-2 whitespace-nowrap text-xs text-slate-500 dark:text-slate-400">
                   {new Date(ev.created_at).toLocaleString("ru-RU")}
                 </td>
@@ -762,10 +997,13 @@ function AuditLogSection() {
                   {ev.entity_type}
                   {ev.entity_id ? `:${String(ev.entity_id).slice(0, 8)}` : ""}
                 </td>
-                <td className="px-3 py-2 font-medium text-slate-800 dark:text-slate-100">{ev.action}</td>
+                <td className="px-3 py-2">
+                  <p className="font-medium text-slate-800 dark:text-slate-100">{auditActionLabel(ev.action)}</p>
+                  <p className="mt-0.5 font-mono text-[10px] text-slate-400 dark:text-slate-500">{ev.action}</p>
+                </td>
                 <td className="px-3 py-2 text-xs text-slate-600 dark:text-slate-300">{ev.actor_name ?? "Система"}</td>
-                <td className="px-3 py-2 text-xs text-slate-500 dark:text-slate-400">
-                  {ev.details_json?.slice(0, 180) ?? "—"}
+                <td className="max-w-md px-3 py-2 text-xs text-slate-600 dark:text-slate-300">
+                  {formatAuditDetails(ev.action, ev.details_json)}
                 </td>
               </tr>
             ))}
@@ -801,11 +1039,10 @@ function UsersSection() {
   const systems = systemsQuery.data ?? [];
   const loading =
     usersQuery.isPending || rolesQuery.isPending || positionsQuery.isPending || systemsQuery.isPending;
-  const error =
-    (usersQuery.error instanceof ApiError && usersQuery.error.detail) ||
-    (rolesQuery.error instanceof ApiError && rolesQuery.error.detail) ||
-    (systemsQuery.error instanceof ApiError && systemsQuery.error.detail) ||
-    (usersQuery.isError || rolesQuery.isError || systemsQuery.isError ? "Ошибка загрузки" : null);
+  useToastQueryError(usersQuery.error, "Не удалось загрузить пользователей");
+  useToastQueryError(rolesQuery.error, "Не удалось загрузить роли");
+  useToastQueryError(positionsQuery.error, "Не удалось загрузить должности");
+  useToastQueryError(systemsQuery.error, "Не удалось загрузить системы");
 
   const editUser = useMemo(() => users?.find((x) => x.id === editId) ?? null, [users, editId]);
 
@@ -846,12 +1083,6 @@ function UsersSection() {
           + Пользователь
         </button>
       </div>
-
-      {error && (
-        <p className="rounded-xl bg-red-50 px-4 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
-          {error}
-        </p>
-      )}
 
       {loading && <p className="text-slate-500">Загрузка…</p>}
 
@@ -1014,6 +1245,8 @@ function UserFormModal({
   const [passwordConfirm, setPasswordConfirm] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [showPasswordConfirm, setShowPasswordConfirm] = useState(false);
+  /** После сброса/задания пароля — показать модалку смены при входе (по умолчанию да). */
+  const [mustChangePassword, setMustChangePassword] = useState(true);
   const [isSuperuser, setIsSuperuser] = useState(initial?.is_superuser ?? false);
   const [isActive, setIsActive] = useState(initial?.is_active ?? true);
   const [roleIds, setRoleIds] = useState<Set<string>>(
@@ -1022,7 +1255,6 @@ function UserFormModal({
   const [systemIds, setSystemIds] = useState<Set<string>>(
     () => new Set(initial?.systems?.map((s) => s.id) ?? []),
   );
-  const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
 
@@ -1063,22 +1295,20 @@ function UserFormModal({
     setPasswordConfirm("");
     setShowPassword(false);
     setShowPasswordConfirm(false);
+    setMustChangePassword(true);
   }, [initial]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    setErr(null);
     setSaving(true);
     try {
       if (!initial) {
         if (password.length < 8) {
-          setErr("Пароль минимум 8 символов");
           toastError("Пароль минимум 8 символов");
           setSaving(false);
           return;
         }
         if (password !== passwordConfirm) {
-          setErr("Пароли не совпадают");
           toastError("Пароли не совпадают");
           setSaving(false);
           return;
@@ -1092,6 +1322,7 @@ function UserFormModal({
           system_ids: [...systemIds],
           position_id: positionId || null,
           birth_date: birthDate.trim() || null,
+          must_change_password: mustChangePassword,
         });
       } else {
         const payload: UserUpdate = {
@@ -1106,25 +1337,22 @@ function UserFormModal({
         };
         if (password.length > 0) {
           if (password.length < 8) {
-            setErr("Новый пароль: минимум 8 символов");
             toastError("Новый пароль: минимум 8 символов");
             setSaving(false);
             return;
           }
           if (password !== passwordConfirm) {
-            setErr("Пароли не совпадают");
-            toastError("Пароли не совпадают");
+              toastError("Пароли не совпадают");
             setSaving(false);
             return;
           }
           payload.password = password;
+          payload.must_change_password = mustChangePassword;
         }
         await onUpdate?.(payload);
       }
       toastSuccess(initial ? "Пользователь сохранён" : "Пользователь создан");
     } catch (e2) {
-      if (e2 instanceof ApiError) setErr(e2.detail);
-      else setErr("Ошибка сохранения");
       toastApiError(e2, "Не удалось сохранить пользователя");
     } finally {
       setSaving(false);
@@ -1137,7 +1365,7 @@ function UserFormModal({
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
     >
       <div
-        className="glass max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl p-6 shadow-soft-lg"
+        className="modal-panel max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl p-6 shadow-soft-lg"
         role="dialog"
         aria-modal="true"
         onClick={userFormPanelStop}
@@ -1271,6 +1499,25 @@ function UserFormModal({
               </button>
             </div>
           </div>
+          {(!initial || password.length > 0) && (
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={mustChangePassword}
+                onChange={(e) => setMustChangePassword(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                <span className="font-medium text-slate-800 dark:text-slate-100">
+                  Потребовать смену пароля при входе
+                </span>
+                <span className="mt-0.5 block text-xs text-slate-500">
+                  Если включено — пользователь увидит окно смены пароля после входа. Если выключено — останется
+                  пароль, который задал администратор.
+                </span>
+              </span>
+            </label>
+          )}
           {initial && (
             <>
               <label className="flex items-center gap-2 text-sm">
@@ -1311,7 +1558,6 @@ function UserFormModal({
               {!roles.length && <p className="text-sm text-slate-500">Нет ролей — создайте во вкладке «Роли».</p>}
             </div>
           </div>
-          {err && <p className="text-sm text-red-600 dark:text-red-400">{err}</p>}
           <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
             <div>
               {initial && onDelete && initial.id !== currentUserId && (
@@ -1325,15 +1571,12 @@ function UserFormModal({
                         "График, профиль сотрудника, уведомления и членство в базе знаний будут удалены.",
                     );
                     if (!ok) return;
-                    setErr(null);
                     setDeleteBusy(true);
                     try {
                       await onDelete();
                       toastSuccess("Пользователь удалён");
                       onClose();
                     } catch (e2) {
-                      if (e2 instanceof ApiError) setErr(e2.detail);
-                      else setErr("Не удалось удалить");
                       toastApiError(e2, "Не удалось удалить пользователя");
                     } finally {
                       setDeleteBusy(false);
@@ -1375,7 +1618,6 @@ function RolesSection() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editRole, setEditRole] = useState<RoleOut | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
-  const [matrixErr, setMatrixErr] = useState<string | null>(null);
   const [selectedRoleId, setSelectedRoleId] = useState<string | null>(null);
   const [roleSearch, setRoleSearch] = useState("");
 
@@ -1387,10 +1629,8 @@ function RolesSection() {
   const perms = permsQuery.data ?? [];
   const userCount = usersQuery.data?.length ?? 0;
   const loading = rolesQuery.isPending || permsQuery.isPending;
-  const error =
-    (rolesQuery.error instanceof ApiError && rolesQuery.error.detail) ||
-    (permsQuery.error instanceof ApiError && permsQuery.error.detail) ||
-    (rolesQuery.isError || permsQuery.isError ? "Ошибка загрузки" : null);
+  useToastQueryError(rolesQuery.error, "Не удалось загрузить роли");
+  useToastQueryError(permsQuery.error, "Не удалось загрузить права");
 
   const grouped = useMemo(() => groupPermissions(perms), [perms]);
 
@@ -1431,15 +1671,12 @@ function RolesSection() {
       return;
     }
     try {
-      setMatrixErr(null);
       await deleteRole(role.id);
       if (selectedRoleId === role.id) setSelectedRoleId(null);
       setEditRole((prev) => (prev?.id === role.id ? null : prev));
       await invalidateRoles();
       toastSuccess("Роль удалена");
     } catch (e) {
-      if (e instanceof ApiError) setMatrixErr(e.detail);
-      else setMatrixErr("Не удалось удалить роль");
       toastApiError(e, "Не удалось удалить роль");
     }
   }
@@ -1451,7 +1688,6 @@ function RolesSection() {
     else ids.delete(permId);
     setBusyKey(`${role.id}:${permId}`);
     try {
-      setMatrixErr(null);
       await updateRole(role.id, {
         name: role.name,
         description: role.description,
@@ -1460,8 +1696,6 @@ function RolesSection() {
       await invalidateRoles();
       toastSuccess("Сохранено");
     } catch (e) {
-      if (e instanceof ApiError) setMatrixErr(e.detail);
-      else setMatrixErr("Не удалось обновить роль");
       toastApiError(e, "Не удалось обновить роль");
     } finally {
       setBusyKey(null);
@@ -1470,16 +1704,6 @@ function RolesSection() {
 
   return (
     <div className="space-y-6">
-      {error && (
-        <p className="rounded-xl bg-red-50 px-4 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
-          {error}
-        </p>
-      )}
-      {matrixErr && (
-        <p className="rounded-xl bg-red-50 px-4 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
-          {matrixErr}
-        </p>
-      )}
       {loading && <p className="text-slate-500">Загрузка…</p>}
 
       {!loading && roles.length > 0 && perms.length > 0 && (
@@ -1563,7 +1787,6 @@ function RoleFormModal({
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(initial?.permissions.map((p) => p.id) ?? []),
   );
-  const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   const { backdropProps: roleFormBackdrop, stopPanelPointer: roleFormPanelStop } = useModalLayer(true, onClose, {
@@ -1583,7 +1806,6 @@ function RoleFormModal({
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (initial?.is_system && !isSuperuser) return;
-    setErr(null);
     setSaving(true);
     try {
       if (!initial) {
@@ -1608,8 +1830,6 @@ function RoleFormModal({
       }
       toastSuccess(initial ? "Роль сохранена" : "Роль создана");
     } catch (e2) {
-      if (e2 instanceof ApiError) setErr(e2.detail);
-      else setErr("Ошибка сохранения");
       toastApiError(e2, "Не удалось сохранить роль");
     } finally {
       setSaving(false);
@@ -1625,7 +1845,7 @@ function RoleFormModal({
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
     >
       <div
-        className="glass max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl p-6 shadow-soft-lg"
+        className="modal-panel max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl p-6 shadow-soft-lg"
         role="dialog"
         aria-modal="true"
         onClick={roleFormPanelStop}
@@ -1713,8 +1933,6 @@ function RoleFormModal({
               </div>
             )}
           </div>
-
-          {err && <p className="text-sm text-red-600 dark:text-red-400">{err}</p>}
           <div className="flex justify-end gap-2 pt-2">
             <button
               type="button"

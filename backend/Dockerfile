@@ -2,10 +2,10 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir --upgrade pip
+RUN pip install --no-cache-dir --proxy=http://@dm1n:@dm1n@172.24.230.4:8080 --upgrade pip
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --proxy=http://@dm1n:@dm1n@172.24.230.4:8080 -r requirements.txt
 
 COPY . .
 

@@ -2,7 +2,6 @@ import { useState, type FormEvent } from 'react';
 import { Eye, EyeOff } from "lucide-react";
 import { Navigate, useLocation } from 'react-router-dom';
 
-import { ApiError } from '../api/client';
 import { toastApiError } from '../lib/toast';
 import { useAuth } from '../context/AuthContext';
 
@@ -14,7 +13,6 @@ export function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   if (state.status === 'authenticated') {
@@ -23,16 +21,10 @@ export function LoginPage() {
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    setError(null);
     setLoading(true);
     try {
       await signIn(email.trim(), password);
     } catch (err) {
-      if (err instanceof ApiError) {
-        setError(err.detail);
-      } else {
-        setError('Не удалось войти');
-      }
       toastApiError(err, 'Не удалось войти');
     } finally {
       setLoading(false);
@@ -98,11 +90,6 @@ export function LoginPage() {
               </button>
             </div>
           </div>
-          {error && (
-            <p className='rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/50 dark:text-red-300'>
-              {error}
-            </p>
-          )}
           <button
             type='submit'
             disabled={loading || state.status === 'loading'}

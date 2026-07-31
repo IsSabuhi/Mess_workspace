@@ -26,7 +26,7 @@ from app.models.employee_work_schedule import (
 )
 from app.services.ru_calendar import is_weekend, ru_holiday_dates
 
-VACATION_CODES = frozenset({"о", "у"})
+VACATION_CODES = frozenset({"о", "у", "б"})
 
 # Недавние правки в листе месяца (по updated_at): отбор строк и граница «хвост пересчитать по циклу».
 REGENERATE_EDIT_LOOKBACK = timedelta(days=60)
@@ -134,7 +134,11 @@ def _parse_iso_date(v) -> date | None:
 
 def _vacation_code_for_period_kind(kind_raw: object) -> str:
     kind = str(kind_raw or "").strip().lower()
-    return "у" if kind == "study" else "о"
+    if kind == "study":
+        return "у"
+    if kind == "sick":
+        return "б"
+    return "о"
 
 
 def vacation_codes_in_month(year: int, month: int, periods: list | None) -> dict[int, str]:
@@ -157,8 +161,8 @@ def vacation_codes_in_month(year: int, month: int, periods: list | None) -> dict
         while cur <= end:
             if cur.year == year and cur.month == month:
                 day = cur.day
-                # Учебный отпуск приоритетнее обычного при пересечении периодов.
-                if code == "у" or day not in out:
+                # Учебный отпуск и больничный приоритетнее обычного отпуска при пересечении.
+                if code in ("у", "б") or day not in out:
                     out[day] = code
             cur += timedelta(days=1)
     return out

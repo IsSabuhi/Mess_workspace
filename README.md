@@ -2,14 +2,20 @@
 
 Корпоративный портал отдела **MES** для управления операционной работой: задачи по системам, графики смен, справочник сотрудников, база знаний, роли/права и аудит действий.
 
-Проект разрабатывался как единая внутренняя платформа для руководителей и сотрудников производственных подразделений.
+Проект — единая внутренняя платформа для руководителей и сотрудников производственных подразделений.
+
+| Документ | Содержание |
+|---|---|
+| Этот файл | продукт, архитектура репозитория, Docker Compose |
+| [frontend/README.md](frontend/README.md) | React-приложение: структура, страницы, локальный dev, `VITE_API_BASE` |
+| [backend/README.md](backend/README.md) | FastAPI: API-модули, миграции, env, хранилище файлов, скрипты |
 
 ## Что это за продукт
 
 **Портал MES** объединяет в одном интерфейсе:
 
 - Kanban-доски (глобальная + системные доски с доступом по участникам),
-- расписание смен с автогенерацией и ручными правками,
+- график смен с автогенерацией и ручными правками,
 - справочник сотрудника (профиль, системы, график, отпуска),
 - контроль сроков (экзамены/пропуска),
 - аналитику и отчеты по задачам,
@@ -19,61 +25,49 @@
 ### Для кого этот портал
 
 - **Руководители отдела MES**: контроль загрузки команд, сроков и рисков.
-- **Сотрудники**: ежедневная работа с задачами, расписанием, комментариями и уведомлениями.
+- **Сотрудники**: ежедневная работа с задачами, графиком, комментариями и уведомлениями.
 - **Администраторы**: управление доступами, ролями, системами и настройками аудита.
 
 ## Ключевые функции
 
 ### 1) Задачи и доски
 
-- Канбан с drag-and-drop, приоритетами, сроками, тегами и комментариями.
+- Канбан с drag-and-drop, приоритетами, сроками, тегами, чеклистом, оценкой часов, вложениями и комментариями.
 - Глобальная доска и системные доски.
 - Участники доски с ролями `viewer / editor / manager`.
 - Проверка доступа к задачам по системам и членству в доске.
-- Настройки системной доски на отдельной странице: участники, общие настройки, удаление, аудит.
+- Настройки системной доски: участники, общие настройки, удаление, аудит.
 
 ### 2) Аналитика задач
 
-- KPI-блоки (всего, активные, просроченные, high/urgent, без исполнителя).
+- KPI (всего, активные, просроченные, high/urgent, без исполнителя).
 - Фильтры по системам, колонкам, исполнителям, тегам, срокам и поиску.
-- Отчеты:
-  - Просроченные задачи,
-  - Нагрузка по сотрудникам,
-  - Риски по срокам,
-  - Топ систем + агрегат "Прочие",
-  - Таблица по всем системам (поиск/сортировка),
-  - "Создано vs закрыто" по неделям,
-  - "Период задач по колонкам (активные)".
+- Отчёты по нагрузке, рискам, системам, «создано vs закрыто» и др.
 - Экспорт отфильтрованного набора в CSV.
 
-### 3) Расписание смен
+### 3) График смен
 
-- Автогенерация и перегенерация расписания.
+- Автогенерация и перегенерация графика.
 - Поддержка графиков `5/2`, `Сменный`, `2/2`.
-- Ручные правки с сохранением последовательности.
-- Подсветка строк сменщиков + ручной цвет строки.
-- Импорт/экспорт расписания (Excel), включая разбивку по месяцам.
+- Ручные правки, цвет строки, импорт/экспорт Excel (в т.ч. по месяцам года).
 
 ### 4) Справочник сотрудника и контроль сроков
 
-- Две вкладки: "Экзамены и пропуска" и "Справочник сотрудника".
-- Профильные поля: дата рождения, должность, системы, пол, график, отпуска.
-- Массовое обновление кадровых полей.
-- Фильтрация по полу/графику/системам/должностям.
-- Выгрузка в Excel.
+- Вкладки «Экзамены и пропуска» и «Справочник сотрудника».
+- Профиль: дата рождения, должность, системы, пол, график, отпуска.
+- Массовое обновление, фильтры, выгрузка в Excel.
 
 ### 5) Администрирование и безопасность
 
-- Пользователи, роли, права.
-- Гибкая permission-модель.
-- Глобальные настройки системы (включая аудит и хранение).
-- Лог событий аудита по действиям на досках.
+- Пользователи, роли, права (permission-модель).
+- Глобальные настройки системы.
+- Журнал аудита.
 
 ### 6) База знаний и уведомления
 
-- Пространства и статьи (редактор на TipTap).
+- Пространства и статьи (TipTap), оглавление дочерних страниц, полнотекстовый поиск.
 - Загрузка файлов/изображений в MinIO или локально.
-- Центр уведомлений + механизм публикации release notes из CI/CD.
+- Центр уведомлений + release notes из CI/CD.
 
 ## Технологический стек
 
@@ -81,7 +75,7 @@
 |---|---|
 | Frontend | React 19, TypeScript, Vite, Tailwind CSS, TanStack Query, React Router, dnd-kit, ECharts, ExcelJS, TipTap |
 | Backend | Python 3.12, FastAPI, SQLAlchemy 2 (async), Alembic, Pydantic Settings |
-| БД | PostgreSQL |
+| БД | PostgreSQL (внешний, не в compose) |
 | Файлы | MinIO (S3), fallback на локальное хранилище |
 | Инфраструктура | Docker Compose, Nginx |
 
@@ -89,20 +83,10 @@
 
 ```text
 .
-├── backend/
-│   ├── app/
-│   │   ├── routers/          # auth, users, roles, tasks, boards, schedule, employee_directory, knowledge, ...
-│   │   ├── services/         # бизнес-логика (в т.ч. schedule/autofill/audit)
-│   │   ├── models/           # SQLAlchemy модели
-│   │   └── schemas/          # Pydantic схемы
-│   ├── alembic/              # миграции БД
-│   └── scripts/
-├── frontend/
-│   ├── src/pages/            # страницы приложения
-│   ├── src/components/       # UI-компоненты
-│   ├── src/api/              # API-клиенты
-│   └── src/lib/              # утилиты, фильтры, экспорт, permissions
-├── docker-compose.yml
+├── backend/                 # API — см. backend/README.md
+├── frontend/                # SPA — см. frontend/README.md
+├── docker-compose.yml       # web, api, minio, api-job
+├── .env.template            # env для compose
 └── README.md
 ```
 
@@ -113,120 +97,61 @@ PostgreSQL **не входит** в compose — нужна уже развёрн
 ```bash
 cp .env.template .env
 # Отредактируйте DATABASE_URL, SECRET_KEY, INITIAL_ADMIN_*, MINIO_PUBLIC_BASE_URL
+# При работе за префиксом /mes: VITE_API_BASE=/mes/api
 
 docker compose up --build -d
 ```
 
-После запуска:
+После запуска (порты из `.env`, defaults ниже):
 
-- Приложение: `http://localhost:8080` (или ваш `WEB_PORT`)
-- Swagger через прокси: `http://localhost:8080/api/docs`
-- MinIO API: `http://localhost:9000` (порт `MINIO_API_PORT`)
-- MinIO Console: `http://localhost:9001` (порт `MINIO_CONSOLE_PORT`)
+| Сервис | URL |
+|---|---|
+| Web | `http://localhost:8811` (`WEB_PORT`) |
+| API напрямую | `http://localhost:8822` (`API_PORT`) |
+| Swagger (через web nginx) | `http://localhost:8811/api/docs` |
+| MinIO API / Console | `:9000` / `:9001` |
 
-Что запускается:
+Что поднимается: `web`, `api`, `minio`, `minio-init`.
 
-- `web` (frontend + nginx),
-- `api` (FastAPI),
-- `minio`,
-- `minio-init` (создание bucket и права на скачивание).
+При старте `api`:
 
-При старте backend выполняет:
-
-1. `alembic upgrade head`
-2. запуск `uvicorn app.main:app --host 0.0.0.0 --port 8000`
-3. авто-создание первого суперпользователя при пустой БД (`INITIAL_ADMIN_*` из `.env`).
+1. `alembic upgrade head` (если `AUTO_MIGRATE_ON_STARTUP=true`);
+2. `uvicorn`;
+3. создание первого суперпользователя при пустой БД (`INITIAL_ADMIN_*`).
 
 ### Внешний PostgreSQL
 
-В `DATABASE_URL` укажите хост, доступный **из контейнера** `api`:
+В `DATABASE_URL` — хост, доступный **из контейнера** `api`:
 
-- Postgres на том же сервере: `host.docker.internal` (в compose включён `extra_hosts`) или IP сервера в LAN;
-- Postgres на отдельном хосте: его IP/имя и порт `5432`;
-- не используйте `localhost` — для контейнера это сам контейнер, не хост.
+- Postgres на том же сервере: `host.docker.internal` или IP LAN;
+- не используйте `localhost` внутри контейнера.
 
-Убедитесь, что PostgreSQL принимает подключения с Docker-сети (`pg_hba.conf`, firewall).
-
-### Одноразовые скрипты в Docker
-
-Пока `api` запущен:
+### Одноразовые скрипты
 
 ```bash
-docker compose exec api python scripts/infer_employee_genders.py
 docker compose exec api python scripts/infer_employee_genders.py --write
-```
-
-Без запущенного `api` (профиль `jobs`):
-
-```bash
 docker compose --profile jobs run --rm api-job scripts/infer_employee_genders.py --write
 ```
 
 ### Конфигурация для Docker
 
-Корневой файл `.env` (из `.env.template`) передаётся в контейнер `api` через `env_file`.
-Для локальной разработки без Docker по-прежнему используйте `backend/.env` (см. ниже).
+Корневой `.env` (из `.env.template`) → `env_file` сервиса `api`.
+Локальная разработка без Docker: `backend/.env` и `frontend/.env` — детали в README пакетов.
 
 ## Локальная разработка (без Docker)
 
-### Backend
+Кратко:
 
 ```bash
-cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-alembic upgrade head
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+# Backend
+cd backend && cp .env.example .env
+# … venv, pip, alembic, uvicorn — см. backend/README.md
+
+# Frontend
+cd frontend && npm ci && npm run dev
+# см. frontend/README.md; Vite проксирует /api и /uploads на :8000
 ```
-
-### Frontend
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Vite-прокси направляет `/api` и `/uploads` на `http://127.0.0.1:8000`.
-
-## Конфигурация окружения
-
-### Backend (`backend/.env` — локальная разработка без Docker)
-
-Для `docker compose` используйте корневой `.env` (см. `.env.template`).
-
-Минимально важные переменные:
-
-- `DATABASE_URL`
-- `SECRET_KEY`
-- `CORS_ORIGINS`
-- `INITIAL_ADMIN_EMAIL`
-- `INITIAL_ADMIN_PASSWORD`
-- `INITIAL_ADMIN_FULL_NAME`
-
-Для файлов:
-
-- `STORAGE_BACKEND=minio|local`
-- `MINIO_ENDPOINT`
-- `MINIO_ACCESS_KEY`
-- `MINIO_SECRET_KEY`
-- `MINIO_BUCKET`
-- `MINIO_PUBLIC_BASE_URL`
-
-Смотрите полный пример в `backend/.env.example`.
-
-### Frontend (`frontend/.env`)
-
-- `VITE_API_BASE` — в dev можно оставить пустым (работает через Vite proxy).
-
-Смотрите пример в `frontend/.env.example`.
 
 ## Релиз-уведомления из CI/CD
 
-В проекте есть скрипт:
-
-- `backend/scripts/publish-release-note.sh`
-
-Он позволяет автоматически публиковать "Что нового" в центр уведомлений после деплоя.
+Скрипт `backend/scripts/publish-release-note.sh` публикует «Что нового» в центр уведомлений после деплоя. Подробности — в [backend/README.md](backend/README.md).

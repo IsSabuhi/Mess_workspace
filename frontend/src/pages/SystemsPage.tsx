@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from "react";
 
-import { ApiError } from "../api/client";
 import { createSystem, deleteSystem, listSystemMembers, listSystems, updateSystem } from "../api/systems";
 import type { SystemOut } from "../api/systems";
 import { AppShell } from "../components/AppShell";
@@ -9,8 +8,9 @@ import { EmployeeDirectoryViewModal } from "../components/EmployeeDirectoryViewM
 import { useAuth } from "../context/AuthContext";
 import { invalidateAndRefetch } from "../lib/queryClient";
 import { PERM, hasPermission } from "../lib/permissions";
-import { toastApiError, toastSuccess } from "../lib/toast";
+import { toastApiError, toastError, toastSuccess } from "../lib/toast";
 import { useModalLayer } from "../lib/useModalLayer";
+import { useToastQueryError } from "../lib/useToastQueryError";
 
 export function SystemsPage() {
   const { state } = useAuth();
@@ -27,7 +27,6 @@ export function SystemsPage() {
   const [slug, setSlug] = useState("");
   const [description, setDescription] = useState("");
   const [sortOrder, setSortOrder] = useState(0);
-  const [formError, setFormError] = useState<string | null>(null);
   const [systemMembersSearchQ, setSystemMembersSearchQ] = useState("");
   const [employeeDetailUserId, setEmployeeDetailUserId] = useState<string | null>(null);
 
@@ -40,6 +39,8 @@ export function SystemsPage() {
     queryFn: () => listSystemMembers(membersModalSystem!.id),
     enabled: !!membersModalSystem,
   });
+  useToastQueryError(systemsQuery.error, "Ошибка загрузки систем");
+  useToastQueryError(membersQuery.error, "Не удалось загрузить сотрудников");
 
   const filteredSystemMembers = useMemo(() => {
     const rows = membersQuery.data ?? [];
@@ -61,12 +62,6 @@ export function SystemsPage() {
 
   const items = systemsQuery.data ?? [];
   const loading = systemsQuery.isPending;
-  const error =
-    systemsQuery.error instanceof ApiError
-      ? systemsQuery.error.detail
-      : systemsQuery.isError
-        ? "Ошибка загрузки"
-        : null;
 
   const createMut = useMutation({
     mutationFn: createSystem,
@@ -77,11 +72,9 @@ export function SystemsPage() {
       setSlug("");
       setDescription("");
       setSortOrder(0);
-      setFormError(null);
       toastSuccess("Система создана");
     },
     onError: (e: unknown) => {
-      if (e instanceof ApiError) setFormError(e.detail);
       toastApiError(e, "Не удалось создать систему");
     },
   });
@@ -133,7 +126,6 @@ export function SystemsPage() {
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
-    setFormError(null);
     const normalizedSlug = slug.trim().toLowerCase().replace(/[^a-z0-9-]/g, "");
     if (editingSystem) {
       const payload: Parameters<typeof updateSystem>[1] = {
@@ -156,7 +148,7 @@ export function SystemsPage() {
       return;
     }
     if (!normalizedSlug) {
-      setFormError("Slug обязателен и должен содержать только a-z, 0-9 и '-'");
+      toastError("Slug обязателен и должен содержать только a-z, 0-9 и '-'");
       return;
     }
     const payload = {
@@ -180,7 +172,6 @@ export function SystemsPage() {
     setDescription("");
     const maxSo = items.reduce((acc, s) => Math.max(acc, s.sort_order), 0);
     setSortOrder(maxSo + 10);
-    setFormError(null);
     setModal(true);
   }
 
@@ -190,14 +181,13 @@ export function SystemsPage() {
     setSlug(s.slug);
     setDescription(s.description ?? "");
     setSortOrder(s.sort_order);
-    setFormError(null);
     setModal(true);
   }
 
   return (
     <AppShell
       title="Системы"
-      subtitle="Порядок поля «В расписании» задаёт блоки строк на странице «Расписание» (меньше — выше). У сотрудника несколько систем — в группу попадает по системе с наименьшим порядком."
+      subtitle="Порядок поля «В графике» задаёт блоки строк на странице «График» (меньше — выше). У сотрудника несколько систем — в группу попадает по системе с наименьшим порядком."
     >
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
@@ -219,11 +209,6 @@ export function SystemsPage() {
         )}
       </div>
 
-      {(error || formError) && (
-        <p className="mb-4 rounded-xl bg-red-50 px-4 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
-          {formError ?? error}
-        </p>
-      )}
       {loading && <p className="text-slate-500">Загрузка…</p>}
 
       {!loading && (
@@ -302,7 +287,7 @@ export function SystemsPage() {
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
         >
           <div
-            className="glass w-full max-w-md rounded-2xl p-6 shadow-soft-lg"
+            className="modal-panel w-full max-w-md rounded-2xl p-6 shadow-soft-lg"
             role="dialog"
             aria-modal="true"
             onClick={systemFormPanelStop}
@@ -339,7 +324,7 @@ export function SystemsPage() {
                 />
               </div>
               <div>
-                <label className="mb-1 block text-sm">Порядок в расписании</label>
+                <label className="mb-1 block text-sm">Порядок в графике</label>
                 <input
                   type="number"
                   value={sortOrder}
@@ -347,7 +332,7 @@ export function SystemsPage() {
                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800"
                 />
                 <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  Чем меньше число, тем выше блок этой системы на странице «Расписание» (как колонка систем в Excel).
+                  Чем меньше число, тем выше блок этой системы на странице «График» (как колонка систем в Excel).
                 </p>
               </div>
               <div className="flex justify-end gap-2 pt-2">
@@ -383,7 +368,7 @@ export function SystemsPage() {
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
         >
           <div
-            className="glass flex max-h-[min(90vh,56rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl shadow-soft-lg"
+            className="modal-panel flex max-h-[min(90vh,56rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl shadow-soft-lg"
             role="dialog"
             aria-modal="true"
             aria-labelledby="system-members-title"
@@ -410,13 +395,6 @@ export function SystemsPage() {
 
             <div className="min-h-0 flex-1 overflow-hidden px-5 pb-5 pt-3">
               {membersQuery.isPending && <p className="text-sm text-slate-500">Загрузка…</p>}
-              {membersQuery.isError && (
-                <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
-                  {membersQuery.error instanceof ApiError
-                    ? membersQuery.error.detail
-                    : "Не удалось загрузить сотрудников"}
-                </p>
-              )}
               {!membersQuery.isPending && !membersQuery.isError && (
                 <>
                   {(membersQuery.data ?? []).length === 0 ? (

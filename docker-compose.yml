@@ -27,12 +27,15 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    ports:
+      - "${API_PORT:-8822}:8000"
     env_file:
       - .env
     environment:
       # В Docker MinIO доступен по имени сервиса, не localhost.
       MINIO_ENDPOINT: http://minio:9000
       STORAGE_BACKEND: ${STORAGE_BACKEND:-minio}
+      MINIO_PUBLIC_BASE_URL: ${MINIO_PUBLIC_BASE_URL:-/mes/files}
     # Postgres на хосте / в LAN: в DATABASE_URL укажите IP сервера БД или host.docker.internal
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -61,7 +64,7 @@ services:
         # В проде оставьте пустым: браузер ходит на тот же origin, nginx проксирует /api.
         VITE_API_BASE: ${VITE_API_BASE:-}
     ports:
-      - "${WEB_PORT:-8080}:80"
+      - "${WEB_PORT:-8811}:80"
     depends_on:
       api:
         condition: service_healthy

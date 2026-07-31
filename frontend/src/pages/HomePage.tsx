@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 
 import { listEmployeeDirectory } from "../api/employeeDirectory";
+import { getDefaultBoard } from "../api/boards";
 import { listTasks } from "../api/tasks";
 import { AppShell } from "../components/AppShell";
 import { ManagerHomeApprovalOverdue } from "../components/manager/ManagerHomeApprovalOverdue";
@@ -30,6 +31,7 @@ import {
   canViewManagerTeamDashboard,
   canViewSchedule,
 } from "../lib/permissions";
+import { taskDueStatus } from "../lib/taskAnalyticsFilters";
 import { taskIsActiveForDashboard, taskIsOverdueForDashboard } from "../lib/taskStatus";
 
 const EmployeePriorityChart = lazy(() => import("../components/charts/EmployeePriorityChart"));
@@ -64,6 +66,17 @@ function initialsFromName(name: string): string {
   return name.slice(0, 2).toUpperCase() || "?";
 }
 
+function formatHomeToday(d = new Date()): { weekday: string; date: string } {
+  const weekdayRaw = d.toLocaleDateString("ru-RU", { weekday: "long" });
+  const weekday = weekdayRaw.charAt(0).toUpperCase() + weekdayRaw.slice(1);
+  const date = d.toLocaleDateString("ru-RU", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+  return { weekday, date };
+}
+
 export function HomePage() {
   const { resolved: themeResolved } = useTheme();
   const chartDark = themeResolved === "dark";
@@ -71,6 +84,7 @@ export function HomePage() {
   const user = state.status === "authenticated" ? state.user : null;
   const name = user?.full_name ?? "";
   const positionLabel = user?.position?.name;
+  const today = useMemo(() => formatHomeToday(), []);
 
   const isManager = !!user && canViewManagerTeamDashboard(user);
 
@@ -80,10 +94,17 @@ export function HomePage() {
     enabled: !!user && !isManager,
   });
 
-  const allTasksQuery = useQuery({
-    queryKey: ["tasks", user?.id ?? ""],
-    queryFn: () => listTasks({ include_archived: false }),
+  const defaultBoardQuery = useQuery({
+    queryKey: ["boards", "default"],
+    queryFn: getDefaultBoard,
     enabled: !!user && isManager,
+  });
+  const mainBoardId = defaultBoardQuery.data?.id;
+
+  const allTasksQuery = useQuery({
+    queryKey: ["tasks", user?.id ?? "", "home-main-board", mainBoardId ?? ""],
+    queryFn: () => listTasks({ board_id: mainBoardId!, include_archived: false }),
+    enabled: !!user && isManager && !!mainBoardId,
   });
   const dashPrefs = user?.dashboard_preferences;
   const showBlock = (id: string) => isHomeBlockVisible(dashPrefs, id);
@@ -105,12 +126,19 @@ export function HomePage() {
       .filter((t) => taskIsActiveForDashboard(t))
       .slice()
       .sort((a, b) => {
-        const da = a.due_at ? new Date(a.due_at).getTime() : Infinity;
-        const db = b.due_at ? new Date(b.due_at).getTime() : Infinity;
-        return da - db;
+        // Сначала задачи со сроком (просроченные и ближайшие сверху), без срока — внизу.
+        const da = a.due_at ? new Date(a.due_at).getTime() : NaN;
+        const db = b.due_at ? new Date(b.due_at).getTime() : NaN;
+        const aHas = Number.isFinite(da);
+        const bHas = Number.isFinite(db);
+        if (aHas && bHas && da !== db) return da - db;
+        if (aHas && !bHas) return -1;
+        if (!aHas && bHas) return 1;
+        return a.title.localeCompare(b.title, "ru");
       });
   }, [myTasksQuery.data]);
 
+  const managerTasksPending = defaultBoardQuery.isPending || allTasksQuery.isPending;
   const totalActive = (allTasksQuery.data ?? []).filter((t) => taskIsActiveForDashboard(t)).length;
   const totalOverdue = (allTasksQuery.data ?? []).filter((t) => taskIsOverdueForDashboard(t)).length;
 
@@ -124,11 +152,7 @@ export function HomePage() {
 
   const myActiveCount = myTasksSorted.length;
   const myOverdueCount = myTasksSorted.filter((t) => taskIsOverdueForDashboard(t)).length;
-  const myDueSoonCount = myTasksSorted.filter((t) => {
-    if (!t.due_at || taskIsOverdueForDashboard(t)) return false;
-    const ms = new Date(t.due_at).getTime() - Date.now();
-    return ms >= 0 && ms <= 1000 * 60 * 60 * 24 * 3;
-  }).length;
+  const myDueSoonCount = myTasksSorted.filter((t) => taskDueStatus(t) === "due_soon").length;
   const myNoDueCount = myTasksSorted.filter((t) => !t.due_at).length;
 
   const myPriorityCounts = useMemo(() => {
@@ -154,7 +178,7 @@ export function HomePage() {
       ? [{ to: "/team-dashboard", label: "Отчеты", icon: BarChart3, description: "Сводки и графики" }]
       : []),
     ...(showScheduleQuick
-      ? [{ to: "/schedule", label: "Расписание", icon: CalendarDays, description: "График смен" }]
+      ? [{ to: "/schedule", label: "График", icon: CalendarDays, description: "График смен" }]
       : []),
     { to: "/systems", label: "Системы", icon: Server, description: "Каталог систем" },
     { to: "/knowledge", label: "База знаний", icon: BookOpen, description: "Статьи и процессы" },
@@ -176,9 +200,21 @@ export function HomePage() {
                   {name ? initialsFromName(name) : <Sparkles className="h-8 w-8" />}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-xs font-medium uppercase tracking-wide text-sky-700/90 dark:text-sky-300/90">
-                    Ваш профиль
-                  </p>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <p className="text-xs font-medium uppercase tracking-wide text-sky-700/90 dark:text-sky-300/90">
+                      Ваш профиль
+                    </p>
+                    <p className="inline-flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+                      <CalendarDays className="h-3.5 w-3.5 shrink-0 text-sky-600/80 dark:text-sky-400/80" aria-hidden />
+                      <span>
+                        <span className="font-medium text-slate-600 dark:text-slate-300">{today.weekday}</span>
+                        <span className="mx-1.5 text-slate-300 dark:text-slate-600" aria-hidden>
+                          ·
+                        </span>
+                        <time dateTime={new Date().toISOString().slice(0, 10)}>{today.date}</time>
+                      </span>
+                    </p>
+                  </div>
                   <h2 className="mt-1 text-xl font-semibold tracking-tight text-slate-900 dark:text-white sm:text-2xl">
                     {name ? `Здравствуйте, ${name}!` : "Добро пожаловать"}
                   </h2>
@@ -197,9 +233,9 @@ export function HomePage() {
                 {isManager ? (
                   <>
                     <div className="flex min-w-[8rem] flex-col rounded-2xl border border-white/80 bg-white/80 px-4 py-3 shadow-sm dark:border-slate-700/80 dark:bg-slate-800/80">
-                      <span className="text-xs font-medium text-slate-500 dark:text-slate-400">По команде</span>
+                      <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Основная доска</span>
                       <span className="mt-0.5 text-2xl font-bold tabular-nums text-slate-900 dark:text-white">
-                        {allTasksQuery.isPending ? "…" : totalActive}
+                        {managerTasksPending ? "…" : totalActive}
                       </span>
                       <span className="text-[11px] text-slate-500">активных задач</span>
                     </div>
@@ -216,9 +252,9 @@ export function HomePage() {
                           totalOverdue > 0 ? "text-red-700 dark:text-red-300" : "text-slate-900 dark:text-white"
                         }`}
                       >
-                        {allTasksQuery.isPending ? "…" : totalOverdue}
+                        {managerTasksPending ? "…" : totalOverdue}
                       </span>
-                      <span className="text-[11px] text-slate-500">по сроку</span>
+                      <span className="text-[11px] text-slate-500">на основной доске</span>
                     </div>
                     <div
                       className={`flex min-w-[8rem] flex-col rounded-2xl border px-4 py-3 shadow-sm ${
@@ -235,9 +271,9 @@ export function HomePage() {
                             : "text-slate-900 dark:text-white"
                         }`}
                       >
-                        {allTasksQuery.isPending ? "…" : managerApprovalCount}
+                        {managerTasksPending ? "…" : managerApprovalCount}
                       </span>
-                      <span className="text-[11px] text-slate-500">ожидают решения</span>
+                      <span className="text-[11px] text-slate-500">основная доска</span>
                     </div>
                   </>
                 ) : (
@@ -309,10 +345,14 @@ export function HomePage() {
         )}
 
         {!isManager && user && showBlock("my_tasks_panel") && (
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-4 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
               <p className="text-xs text-slate-500">Мои задачи</p>
               <p className="mt-1 text-2xl font-bold tabular-nums text-slate-900 dark:text-white">{myActiveCount}</p>
+            </div>
+            <div className="rounded-2xl border border-red-200/80 bg-red-50/70 p-4 shadow-soft dark:border-red-900/40 dark:bg-red-950/20">
+              <p className="text-xs text-red-700 dark:text-red-300">Просрочено</p>
+              <p className="mt-1 text-2xl font-bold tabular-nums text-red-800 dark:text-red-200">{myOverdueCount}</p>
             </div>
             <div className="rounded-2xl border border-amber-200/80 bg-amber-50/70 p-4 shadow-soft dark:border-amber-900/40 dark:bg-amber-950/20">
               <p className="text-xs text-amber-700 dark:text-amber-300">Дедлайн до 3 дней</p>
@@ -343,9 +383,12 @@ export function HomePage() {
 
         {!isManager && user && showBlock("my_tasks_panel") && (
           <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-6 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
-            <div className="mb-4 flex items-center gap-2">
-              <CalendarClock className="h-5 w-5 text-sky-600 dark:text-sky-400" />
-              <h3 className="font-semibold text-slate-900 dark:text-white">Мои задачи и сроки</h3>
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <CalendarClock className="h-5 w-5 text-sky-600 dark:text-sky-400" />
+                <h3 className="font-semibold text-slate-900 dark:text-white">Мои задачи и сроки</h3>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400">Сначала ближайшие и просроченные</p>
             </div>
             {myTasksQuery.isPending && <p className="text-sm text-slate-500">Загрузка…</p>}
             {!myTasksQuery.isPending && myTasksSorted.length === 0 && (
@@ -359,34 +402,53 @@ export function HomePage() {
             )}
             {!myTasksQuery.isPending && myTasksSorted.length > 0 && (
               <ul className="space-y-2">
-                {myTasksSorted.slice(0, 10).map((t) => (
-                  <li
-                    key={t.id}
-                    className="flex flex-wrap items-start justify-between gap-2 rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800/40"
-                  >
-                    <div>
-                      <p className="font-medium text-slate-900 dark:text-white">{t.title}</p>
-                      {t.system && (
-                        <p className="text-xs text-sky-700 dark:text-sky-300">{t.system.name}</p>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2 text-xs">
-                      {taskIsOverdueForDashboard(t) && (
-                        <span className="inline-flex items-center gap-0.5 rounded-full bg-red-100 px-2 py-0.5 font-medium text-red-800 dark:bg-red-950/50 dark:text-red-200">
-                          <AlertCircle className="h-3.5 w-3.5" />
-                          просрочено
+                {myTasksSorted.slice(0, 10).map((t) => {
+                  const dueStatus = taskDueStatus(t);
+                  const isOverdue = dueStatus === "overdue";
+                  const isDueSoon = dueStatus === "due_soon";
+                  const rowTone = isOverdue
+                    ? "border-red-200 bg-red-50/80 dark:border-red-900/50 dark:bg-red-950/30"
+                    : isDueSoon
+                      ? "border-amber-300 bg-amber-50/80 dark:border-amber-800/60 dark:bg-amber-950/30"
+                      : "border-slate-100 bg-slate-50/80 dark:border-slate-700 dark:bg-slate-800/40";
+                  return (
+                    <li
+                      key={t.id}
+                      className={`flex flex-wrap items-start justify-between gap-2 rounded-xl border px-3 py-2 text-sm ${rowTone}`}
+                    >
+                      <div>
+                        <p className="font-medium text-slate-900 dark:text-white">{t.title}</p>
+                        {t.system && (
+                          <p className="text-xs text-sky-700 dark:text-sky-300">{t.system.name}</p>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                        {isOverdue && (
+                          <span className="inline-flex items-center gap-0.5 rounded-full bg-red-100 px-2 py-0.5 font-medium text-red-800 dark:bg-red-950/50 dark:text-red-200">
+                            <AlertCircle className="h-3.5 w-3.5" />
+                            просрочено
+                          </span>
+                        )}
+                        {isDueSoon && (
+                          <span className="rounded-full bg-amber-100 px-2 py-0.5 font-medium text-amber-800 dark:bg-amber-950/50 dark:text-amber-200">
+                            скоро срок
+                          </span>
+                        )}
+                        <span
+                          className={
+                            isOverdue
+                              ? "font-medium text-red-700 dark:text-red-300"
+                              : isDueSoon
+                                ? "font-medium text-amber-700 dark:text-amber-300"
+                                : "text-slate-500 dark:text-slate-400"
+                          }
+                        >
+                          {formatDue(t.due_at)}
                         </span>
-                      )}
-                      <span
-                        className={
-                          taskIsOverdueForDashboard(t) ? "text-red-700 dark:text-red-300" : "text-slate-500"
-                        }
-                      >
-                        {formatDue(t.due_at)}
-                      </span>
-                    </div>
-                  </li>
-                ))}
+                      </div>
+                    </li>
+                  );
+                })}
               </ul>
             )}
             <div className="mt-4">

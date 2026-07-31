@@ -1,15 +1,3 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useModalLayer } from "../lib/useModalLayer";
-import { toast } from "sonner";
-import type { Editor } from "@tiptap/core";
-import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
-import { Color, FontFamily, TextStyle } from "@tiptap/extension-text-style";
-import { TableKit } from "@tiptap/extension-table";
-import { Image } from "@tiptap/extension-image";
-import { Highlight } from "@tiptap/extension-highlight";
-import { Placeholder } from "@tiptap/extension-placeholder";
-import { EditorContent, useEditor } from "@tiptap/react";
-import StarterKit from "@tiptap/starter-kit";
 import { createLowlight } from "lowlight";
 import bash from "highlight.js/lib/languages/bash";
 import javascript from "highlight.js/lib/languages/javascript";
@@ -19,6 +7,21 @@ import json from "highlight.js/lib/languages/json";
 import xml from "highlight.js/lib/languages/xml";
 import css from "highlight.js/lib/languages/css";
 import sql from "highlight.js/lib/languages/sql";
+
+import { attachCodeCopyButtons } from "../lib/kbCodeCopy";
+import { useModalLayer } from "../lib/useModalLayer";
+import { toast } from "sonner";
+import type { Editor } from "@tiptap/core";
+import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
+import { Color, FontFamily, TextStyle } from "@tiptap/extension-text-style";
+import { TableKit } from "@tiptap/extension-table";
+import { Image } from "@tiptap/extension-image";
+import { Highlight } from "@tiptap/extension-highlight";
+import { Markdown } from "@tiptap/markdown";
+import { Placeholder } from "@tiptap/extension-placeholder";
+import { EditorContent, useEditor } from "@tiptap/react";
+import StarterKit from "@tiptap/starter-kit";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const lowlight = createLowlight();
 lowlight.register("bash", bash);
@@ -96,6 +99,30 @@ function collectDataTransferImageFiles(dataTransfer: DataTransfer | null): File[
   return out;
 }
 
+/** Эвристика: похоже на Markdown (а не просто обычный текст). */
+function looksLikeMarkdown(text: string): boolean {
+  const t = text.trim();
+  if (!t || t.length < 2) return false;
+  return (
+    /^#{1,6}\s+\S/m.test(t) ||
+    /\*\*[^*\n]+\*\*/.test(t) ||
+    /__[^_\n]+__/.test(t) ||
+    /\[[^\]]+\]\([^)]+\)/.test(t) ||
+    /^[-*+]\s+\S/m.test(t) ||
+    /^\d+\.\s+\S/m.test(t) ||
+    /^>\s+\S/m.test(t) ||
+    /^```[\w+-]*/m.test(t) ||
+    /^---+$/m.test(t) ||
+    /^\|.+\|/m.test(t)
+  );
+}
+
+/** Есть ли rich HTML в буфере (Word/браузер) — тогда не трогаем, пусть TipTap сам вставит. */
+function clipboardHasRichHtml(html: string | undefined): boolean {
+  if (!html?.trim()) return false;
+  return /<(h[1-6]|ul|ol|li|table|tr|td|th|strong|em|b|i|a|pre|code|blockquote|img)\b/i.test(html);
+}
+
 export function KnowledgeRichEditor({
   articleKey,
   initialHtml,
@@ -160,8 +187,12 @@ export function KnowledgeRichEditor({
         Color,
         FontFamily.configure({ types: ["textStyle"] }),
         Highlight.configure({ multicolor: true }),
+        Markdown.configure({
+          markedOptions: { gfm: true, breaks: false },
+        }),
         Placeholder.configure({
-          placeholder: "Текст статьи: заголовки, списки, вставка изображений…",
+          placeholder: "Начните писать статью… Markdown: # заголовок, **жирный**, - список",
+          emptyEditorClass: "is-editor-empty",
         }),
       ],
       content: initialHtml || "<p></p>",
@@ -185,10 +216,21 @@ export function KnowledgeRichEditor({
         handlePaste: (_view, event) => {
           if (!editableRef.current) return false;
           const files = collectClipboardImageFiles(event);
-          if (!files.length) return false;
-          event.preventDefault();
-          void insertImagesFromFiles(files);
-          return true;
+          if (files.length) {
+            event.preventDefault();
+            void insertImagesFromFiles(files);
+            return true;
+          }
+          const ed = editorRef.current;
+          const text = event.clipboardData?.getData("text/plain") ?? "";
+          const html = event.clipboardData?.getData("text/html");
+          // Вставка Markdown из .md / чата / GitHub — только если нет rich HTML
+          if (ed && text && looksLikeMarkdown(text) && !clipboardHasRichHtml(html)) {
+            event.preventDefault();
+            ed.chain().focus().insertContent(text, { contentType: "markdown" }).run();
+            return true;
+          }
+          return false;
         },
         handleDrop: (view, event, _slice, moved) => {
           if (!editableRef.current || moved) return false;
@@ -206,6 +248,11 @@ export function KnowledgeRichEditor({
 
   useEffect(() => {
     editorRef.current = editor;
+  }, [editor]);
+
+  useEffect(() => {
+    if (!editor) return;
+    return attachCodeCopyButtons(editor.view.dom);
   }, [editor]);
 
   useEffect(() => {
@@ -372,6 +419,26 @@ export function KnowledgeRichEditor({
           </button>
           <button
             type="button"
+            title="Заголовок третьего уровня. Повторное нажатие — обычный абзац"
+            className="rounded-lg px-2 py-1 text-xs hover:bg-slate-200 dark:hover:bg-slate-700"
+            onClick={() => {
+              const chain = editor.chain().focus();
+              if (editor.isActive("heading", { level: 3 })) chain.setParagraph().run();
+              else chain.setHeading({ level: 3 }).run();
+            }}
+          >
+            H3
+          </button>
+          <button
+            type="button"
+            title="Инлайн-код (`код`)"
+            className="rounded-lg px-2 py-1 font-mono text-xs hover:bg-slate-200 dark:hover:bg-slate-700"
+            onClick={() => editor.chain().focus().toggleCode().run()}
+          >
+            {"` `"}
+          </button>
+          <button
+            type="button"
             title="Маркированный список"
             className="rounded-lg px-2 py-1 text-xs hover:bg-slate-200 dark:hover:bg-slate-700"
             onClick={() => editor.chain().focus().toggleBulletList().run()}
@@ -424,6 +491,24 @@ export function KnowledgeRichEditor({
           </select>
           <button
             type="button"
+            title="Горизонтальная линия (---)"
+            className="rounded-lg px-2 py-1 text-xs hover:bg-slate-200 dark:hover:bg-slate-700"
+            onClick={() => editor.chain().focus().setHorizontalRule().run()}
+          >
+            ―
+          </button>
+          <button
+            type="button"
+            title="Вставить таблицу 3×3"
+            className="rounded-lg px-2 py-1 text-xs hover:bg-slate-200 dark:hover:bg-slate-700"
+            onClick={() =>
+              editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
+            }
+          >
+            Табл.
+          </button>
+          <button
+            type="button"
             title="Ссылка: сначала выделите текст, затем нажмите и введите URL. Пустой URL — убрать ссылку"
             className="rounded-lg px-2 py-1 text-xs hover:bg-slate-200 dark:hover:bg-slate-700"
             onClick={() => openLinkModal()}
@@ -441,9 +526,13 @@ export function KnowledgeRichEditor({
         </div>
       )}
       {editable && (
-        <p className="border-b border-slate-100 px-3 py-1.5 text-[11px] text-slate-500 dark:border-slate-700 dark:text-slate-400">
-          Скриншот: вставьте в текст (<kbd className="rounded bg-slate-100 px-1 dark:bg-slate-800">Ctrl+V</kbd>) или перетащите файл в
-          область редактора.
+        <p className="border-b border-slate-100 px-3 py-1.5 text-[11px] leading-relaxed text-slate-500 dark:border-slate-700 dark:text-slate-400">
+          Markdown:{" "}
+          <kbd className="rounded bg-slate-100 px-1 dark:bg-slate-800">#</kbd> заголовок,{" "}
+          <kbd className="rounded bg-slate-100 px-1 dark:bg-slate-800">**</kbd>жирный,{" "}
+          <kbd className="rounded bg-slate-100 px-1 dark:bg-slate-800">-</kbd> список,{" "}
+          <kbd className="rounded bg-slate-100 px-1 dark:bg-slate-800">```</kbd> код · вставка MD из буфера · скриншот{" "}
+          <kbd className="rounded bg-slate-100 px-1 dark:bg-slate-800">Ctrl+V</kbd>
         </p>
       )}
       {!editable && (
@@ -451,7 +540,11 @@ export function KnowledgeRichEditor({
           Просмотр: редактирование в этом пространстве для вас недоступно.
         </p>
       )}
-      <EditorContent editor={editor} className="min-h-[min(70vh,520px)] bg-white px-1 dark:bg-slate-900/50" />
+      <EditorContent
+        editor={editor}
+        className="min-h-[min(72vh,640px)] cursor-text bg-white px-4 py-4 sm:px-5 sm:py-5 dark:bg-slate-900/50"
+        onClick={() => editor.chain().focus().run()}
+      />
 
       {linkModalOpen && (
         <div
@@ -459,7 +552,7 @@ export function KnowledgeRichEditor({
           className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
         >
           <div
-            className="glass w-full max-w-md rounded-2xl p-5 shadow-soft-lg dark:border-slate-600"
+            className="modal-panel w-full max-w-md rounded-2xl p-5 shadow-soft-lg dark:border-slate-600"
             role="dialog"
             aria-modal="true"
             aria-labelledby="kb-link-dialog-title"

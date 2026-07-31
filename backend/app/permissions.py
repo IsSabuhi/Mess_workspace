@@ -9,6 +9,7 @@ TASKS_DELETE = "tasks.delete"
 TASKS_MOVE = "tasks.move"
 
 BOARD_COLUMNS_MANAGE = "board.columns.manage"
+BOARDS_CREATE = "boards.create"
 
 SYSTEMS_MANAGE = "systems.manage"
 
@@ -39,6 +40,7 @@ ALL_PERMISSION_CODES: tuple[str, ...] = (
     TASKS_DELETE,
     TASKS_MOVE,
     BOARD_COLUMNS_MANAGE,
+    BOARDS_CREATE,
     SYSTEMS_MANAGE,
     POSITIONS_MANAGE,
     USERS_MANAGE,

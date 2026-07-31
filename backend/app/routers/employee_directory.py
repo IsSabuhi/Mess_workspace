@@ -80,7 +80,12 @@ def _vacation_periods_out(raw) -> list[VacationPeriodOut]:
         if s is None or e is None or e < s:
             continue
         kind_raw = str(x.get("kind") or "vacation").strip().lower()
-        kind = "study" if kind_raw == "study" else "vacation"
+        if kind_raw == "study":
+            kind = "study"
+        elif kind_raw == "sick":
+            kind = "sick"
+        else:
+            kind = "vacation"
         out.append(VacationPeriodOut(start=s, end=e, kind=kind))
     return out
 

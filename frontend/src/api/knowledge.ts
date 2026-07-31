@@ -19,6 +19,8 @@ export type SpaceMemberOut = {
   email: string;
   full_name: string;
   role: SpaceMemberRole;
+  /** Сотрудник системы пространства — нельзя удалить из участников */
+  is_system_member?: boolean;
 };
 
 export type KnowledgeDirectoryUser = {
@@ -34,10 +36,33 @@ export type KnowledgeSpaceCreate = {
   system_id?: string | null;
 };
 
+export type KnowledgeSpaceUpdate = {
+  name?: string;
+  description?: string | null;
+  system_id?: string | null;
+};
+
 export async function createKnowledgeSpace(body: KnowledgeSpaceCreate): Promise<KnowledgeSpaceOut> {
   return apiFetch<KnowledgeSpaceOut>("/api/v1/knowledge/spaces", {
     method: "POST",
     body: JSON.stringify(body),
+  });
+}
+
+export async function updateKnowledgeSpace(
+  spaceId: string,
+  body: KnowledgeSpaceUpdate,
+): Promise<KnowledgeSpaceOut> {
+  return apiFetch<KnowledgeSpaceOut>(`/api/v1/knowledge/spaces/${spaceId}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function deleteKnowledgeSpace(spaceId: string, password: string): Promise<void> {
+  await apiFetch(`/api/v1/knowledge/spaces/${spaceId}`, {
+    method: "DELETE",
+    body: JSON.stringify({ password }),
   });
 }
 
@@ -53,6 +78,7 @@ export type KnowledgeArticleOut = {
   status: ArticleStatus;
   position: number;
   created_by_id: string | null;
+  created_by: { id: string; email: string; full_name: string } | null;
   created_at: string;
   updated_at: string;
 };

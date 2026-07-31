@@ -2,10 +2,10 @@ import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 
-import { ApiError } from "../api/client";
 import type { EmployeeDirectoryRowOut, EmployeeGender, WorkScheduleKind } from "../api/employeeDirectory";
 import { getEmployeeDirectoryUser } from "../api/employeeDirectory";
 import { useModalLayer } from "../lib/useModalLayer";
+import { useToastQueryError } from "../lib/useToastQueryError";
 
 function workScheduleLabel(kind: WorkScheduleKind, gender: EmployeeGender): string {
   if (kind === "shift") return "Сменный (11-3-8)";
@@ -78,7 +78,7 @@ function DirectoryBody({ row }: { row: EmployeeDirectoryRowOut }) {
 
       <section>
         <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-          Отпуск (периоды в графике)
+          Отпуск и больничный (периоды в графике)
         </h3>
         {row.vacation_periods.length === 0 ? (
           <p className="text-sm text-slate-600 dark:text-slate-400">Не заданы</p>
@@ -88,7 +88,13 @@ function DirectoryBody({ row }: { row: EmployeeDirectoryRowOut }) {
               <li key={`${vp.start}-${vp.end}-${i}`}>
                 {fmtDate(vp.start)} — {fmtDate(vp.end)}{" "}
                 <span className="text-xs text-slate-500 dark:text-slate-400">
-                  ({(vp.kind ?? "vacation") === "study" ? "учебный отпуск (у)" : "отпуск (о)"})
+                  (
+                  {(vp.kind ?? "vacation") === "study"
+                    ? "учебный отпуск (у)"
+                    : (vp.kind ?? "vacation") === "sick"
+                      ? "больничный (б)"
+                      : "отпуск (о)"}
+                  )
                 </span>
               </li>
             ))}
@@ -138,6 +144,8 @@ export function EmployeeDirectoryViewModal({ userId, onClose }: Props) {
     queryFn: () => getEmployeeDirectoryUser(userId!),
     enabled: open,
   });
+  useToastQueryError(q.error, "Не удалось загрузить данные сотрудника");
+
 
   const { backdropProps, stopPanelPointer } = useModalLayer(open, onClose);
 
@@ -170,11 +178,6 @@ export function EmployeeDirectoryViewModal({ userId, onClose }: Props) {
 
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
           {q.isPending && <p className="text-sm text-slate-500">Загрузка…</p>}
-          {q.isError && (
-            <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
-              {q.error instanceof ApiError ? q.error.detail : "Не удалось загрузить данные"}
-            </p>
-          )}
           {q.isSuccess && q.data && <DirectoryBody row={q.data} />}
         </div>
 

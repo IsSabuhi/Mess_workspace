@@ -5,6 +5,7 @@ import { BrowserRouter } from 'react-router-dom';
 
 import App from './App';
 import { AppToaster } from './components/AppToaster';
+import { ForcePasswordChangeModal } from './components/ForcePasswordChangeModal';
 import { AuthProvider } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { queryClient } from './lib/queryClient';
@@ -14,11 +15,12 @@ import 'highlight.js/styles/vs2015.min.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <BrowserRouter>
+    <BrowserRouter basename="/mes">
       <QueryClientProvider client={queryClient}>
         <ThemeProvider>
           <AuthProvider>
             <App />
+            <ForcePasswordChangeModal />
             <AppToaster />
           </AuthProvider>
         </ThemeProvider>

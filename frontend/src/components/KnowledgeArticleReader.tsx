@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import hljs from "highlight.js/lib/core";
 import bash from "highlight.js/lib/languages/bash";
 import css from "highlight.js/lib/languages/css";
@@ -8,6 +8,8 @@ import python from "highlight.js/lib/languages/python";
 import sql from "highlight.js/lib/languages/sql";
 import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
+
+import { attachCodeCopyButtons } from "../lib/kbCodeCopy";
 
 hljs.registerLanguage("bash", bash);
 hljs.registerLanguage("javascript", javascript);
@@ -125,6 +127,7 @@ function highlightCodeBlocks(root: HTMLElement): void {
 /**
  * Подсветка и id заголовков считаются из строки HTML до вставки в DOM — тогда React не затирает разметку при ре-рендере.
  * DOMParser — без document.createElement в рендере.
+ * Блок автооглавления дочерних статей скрываем здесь: его рисует React-панель на странице.
  */
 function buildArticleDisplayHtml(raw: string): string {
   if (!raw) return "";
@@ -135,6 +138,7 @@ function buildArticleDisplayHtml(raw: string): string {
   const wrap = doc.getElementById("kb-article-build-root");
   if (!wrap) return raw;
   wrap.innerHTML = raw;
+  wrap.querySelectorAll("[data-kb-children-toc]").forEach((el) => el.remove());
   assignHeadingIds(wrap);
   highlightCodeBlocks(wrap);
   return wrap.innerHTML;
@@ -169,9 +173,13 @@ type Props = {
  */
 export function KnowledgeArticleReader({ html, className = "" }: Props) {
   const displayHtml = useMemo(() => buildArticleDisplayHtml(html), [html]);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => attachCodeCopyButtons(rootRef.current), [displayHtml]);
 
   return (
     <div
+      ref={rootRef}
       className={`kb-article-body w-full min-w-0 ${className}`}
       dangerouslySetInnerHTML={{ __html: displayHtml }}
     />

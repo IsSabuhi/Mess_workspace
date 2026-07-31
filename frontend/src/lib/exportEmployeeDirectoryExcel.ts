@@ -37,7 +37,7 @@ const PROFILE_HEADERS = [
   "Системы",
   "График работы",
   "Пол",
-  "Отпуск (периоды)",
+  "Отпуск / больничный (периоды)",
 ] as const;
 
 export async function downloadEmployeeDirectoryComplianceExcel(rows: EmployeeDirectoryRowOut[]): Promise<void> {
@@ -111,7 +111,11 @@ export async function downloadEmployeeDirectoryProfileExcel(rows: EmployeeDirect
       (r.work_schedule_kind ?? "five_two") === "shift" ? "Сменщик" : "5/2",
       genderLabel(r.gender),
       (r.vacation_periods ?? [])
-        .map((p) => `${fmtDate(p.start)}–${fmtDate(p.end)}`)
+        .map((p) => {
+          const kind =
+            p.kind === "study" ? " учебный" : p.kind === "sick" ? " больничный" : "";
+          return `${fmtDate(p.start)}–${fmtDate(p.end)}${kind}`;
+        })
         .join("; "),
     ]);
   }

@@ -1,9 +1,10 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.deps import get_current_user, require_permission
@@ -11,13 +12,15 @@ from app.http_errors import (
     DELETE_LAST_SUPERUSER,
     DELETE_USER_SELF,
     EMAIL_ALREADY_REGISTERED,
+    FORBIDDEN,
     INVALID_POSITION,
     UNKNOWN_ROLE,
     UNKNOWN_SYSTEM,
     USER_NOT_FOUND,
     USER_VIEW_FORBIDDEN,
 )
-from app.models import Position, Role, System, User, UserRole
+from app.models import Board, Position, Role, System, User, UserRole
+from app.models.board import BOARD_SCOPE_SYSTEM
 from app.models.user_system import UserSystem
 from app.permissions import USERS_MANAGE
 from app.schemas.employee_import import EmployeeImportOut
@@ -29,6 +32,7 @@ from app.services.authz import (
     user_has_permission,
     user_sees_all_tasks,
 )
+from app.services.board_members import allowed_assignee_ids_for_board, effective_board_member_role
 from app.services.employee_excel_import import parse_employee_excel_xlsx
 from app.services.employee_import_service import run_employee_import
 from app.services.users_display import user_to_out
@@ -41,20 +45,57 @@ async def _system_ids_for_user(session: AsyncSession, user_id: uuid.UUID) -> lis
     return list(r.scalars().all())
 
 
+async def _can_see_board_for_assignees(session: AsyncSession, user: User, board: Board) -> bool:
+    if user.is_superuser or await user_sees_all_tasks(session, user):
+        return not board.is_archived
+    if board.is_archived:
+        return False
+    if board.scope != BOARD_SCOPE_SYSTEM:
+        return True
+    return await effective_board_member_role(session, board, user.id) is not None
+
+
 @router.get("/assignee-candidates", response_model=list[UserOut])
 async def list_assignee_candidates(
     session: Annotated[AsyncSession, Depends(get_db)],
     current: Annotated[User, Depends(get_current_user)],
+    board_id: Annotated[uuid.UUID | None, Query()] = None,
 ) -> list[UserOut]:
-    """Кандидаты в исполнители: все сотрудники для руководителя; участники тех же производственных систем — для остальных."""
+    """Кандидаты в исполнители.
+
+    Без board_id / на глобальной доске: все сотрудники для руководителя; участники тех же
+    производственных систем — для остальных.
+    На системной доске: сотрудники системы доски ∪ явные участники доски.
+    """
     if not current.is_active:
         return []
+
+    if board_id is not None:
+        board = await session.scalar(
+            select(Board).where(Board.id == board_id).options(selectinload(Board.members))
+        )
+        if board is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Board not found")
+        if not await _can_see_board_for_assignees(session, current, board):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
+
+        allowed = await allowed_assignee_ids_for_board(session, board)
+        if allowed is not None:
+            if not allowed:
+                return []
+            stmt = (
+                select(User)
+                .where(User.id.in_(allowed), User.is_active.is_(True))
+                .options(*USER_LOAD_OPTIONS)
+                .order_by(User.full_name, User.email)
+            )
+            result = await session.execute(stmt)
+            return [user_to_out(u) for u in result.scalars().unique().all()]
 
     if await user_sees_all_tasks(session, current):
         stmt = select(User).where(User.is_active.is_(True)).options(*USER_LOAD_OPTIONS).order_by(User.email)
         result = await session.execute(stmt)
-        rows = result.scalars().unique().all()
-        return [user_to_out(u) for u in rows]
+        return [user_to_out(u) for u in result.scalars().unique().all()]
 
     system_ids = await _system_ids_for_user(session, current.id)
     if not system_ids:
@@ -68,8 +109,7 @@ async def list_assignee_candidates(
         .order_by(User.email)
     )
     result = await session.execute(stmt)
-    rows = result.scalars().unique().all()
-    return [user_to_out(u) for u in rows]
+    return [user_to_out(u) for u in result.scalars().unique().all()]
 
 
 @router.get("", response_model=list[UserOut])
@@ -106,6 +146,7 @@ async def create_user(
         hashed_password=hash_password(body.password),
         is_superuser=body.is_superuser,
         is_active=True,
+        must_change_password=bool(body.must_change_password),
     )
     session.add(user)
     await session.flush()
@@ -138,7 +179,8 @@ async def create_user(
     description=(
         "Файл .xlsx, первый лист: строка заголовков с колонками «УчетнаяЗапись», «ФИО», «Должность», "
         "дополнительно можно «Подразделение» и «Системы». "
-        "Для новых строк создаётся пользователь: email `{логин}@nornik.ru`, пароль совпадает с учётной записью. "
+        "Для новых строк создаётся пользователь: email `{логин}@nornik.ru`, пароль совпадает с учётной записью; "
+        "при первом входе потребуется смена пароля. "
         "Если пользователь уже есть, обновляются ФИО/должность/системы. "
         "Недостающие системы из колонки «Системы» создаются автоматически."
     ),
@@ -230,6 +272,10 @@ async def update_user(
         u.full_name = body.full_name
     if body.password is not None:
         u.hashed_password = hash_password(body.password)
+        # По умолчанию после сброса админом — обязательная смена при входе.
+        u.must_change_password = (
+            True if body.must_change_password is None else bool(body.must_change_password)
+        )
     if body.is_active is not None:
         u.is_active = body.is_active
     if body.is_superuser is not None:

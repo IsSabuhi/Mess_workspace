@@ -20,6 +20,12 @@ class KnowledgeSpaceUpdate(BaseModel):
     system_id: uuid.UUID | None = None
 
 
+class KnowledgeSpaceDeleteIn(BaseModel):
+    """Подтверждение удаления: пароль текущего пользователя."""
+
+    password: str = Field(..., min_length=1, max_length=128)
+
+
 class KnowledgeSpaceOut(ORMModel):
     id: uuid.UUID
     name: str
@@ -42,6 +48,8 @@ class SpaceMemberOut(BaseModel):
     email: str
     full_name: str
     role: SpaceMemberRole
+    """Сотрудник системы, к которой привязано пространство (нельзя убрать из участников)."""
+    is_system_member: bool = False
 
 
 class SpaceMemberUpdate(BaseModel):
@@ -61,7 +69,7 @@ class KnowledgeArticleCreate(BaseModel):
     slug: str = Field(..., max_length=256, pattern=r"^[a-z0-9-]+$")
     content: str | None = None
     parent_id: uuid.UUID | None = None
-    status: ArticleStatus = ArticleStatus.draft
+    status: ArticleStatus = ArticleStatus.published
     position: int = 0
 
 
@@ -71,6 +79,12 @@ class KnowledgeArticleUpdate(BaseModel):
     parent_id: uuid.UUID | None = None
     status: ArticleStatus | None = None
     position: int | None = None
+
+
+class KnowledgeUserMini(ORMModel):
+    id: uuid.UUID
+    email: str
+    full_name: str
 
 
 class KnowledgeArticleOut(ORMModel):
@@ -83,6 +97,7 @@ class KnowledgeArticleOut(ORMModel):
     status: ArticleStatus
     position: int
     created_by_id: uuid.UUID | None
+    created_by: KnowledgeUserMini | None = None
     created_at: datetime
     updated_at: datetime
 

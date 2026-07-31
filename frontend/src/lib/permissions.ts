@@ -15,6 +15,7 @@ export const PERM = {
   TASKS_MOVE: "tasks.move",
   TASKS_DELETE: "tasks.delete",
   BOARD_COLUMNS_MANAGE: "board.columns.manage",
+  BOARDS_CREATE: "boards.create",
   KNOWLEDGE_MANAGE_ALL: "knowledge.manage.all",
   KNOWLEDGE_SPACE_MANAGE: "knowledge.space.manage",
   EMPLOYEE_DIRECTORY_READ: "employee_directory.read",
@@ -29,7 +30,7 @@ export function hasPermission(user: UserMe, code: string): boolean {
   return user.is_superuser || user.permissions.includes(code);
 }
 
-/** Просмотр таблицы расписания: отдельное право или право на редактирование. */
+/** Просмотр таблицы графика: отдельное право или право на редактирование. */
 export function canViewSchedule(user: UserMe): boolean {
   return (
     user.is_superuser ||
@@ -38,11 +39,10 @@ export function canViewSchedule(user: UserMe): boolean {
   );
 }
 
+/** Раздел «Администрирование»: только управление пользователями/ролями (не systems.manage). */
 export function canAdminAccess(user: UserMe): boolean {
   return (
-    hasPermission(user, PERM.USERS_MANAGE) ||
-    hasPermission(user, PERM.ROLES_MANAGE) ||
-    hasPermission(user, PERM.SYSTEMS_MANAGE)
+    hasPermission(user, PERM.USERS_MANAGE) || hasPermission(user, PERM.ROLES_MANAGE)
   );
 }
 
@@ -54,6 +54,11 @@ export function canViewManagerTeamDashboard(user: UserMe): boolean {
     hasPermission(user, PERM.TASKS_UPDATE_ALL) ||
     hasPermission(user, PERM.USERS_MANAGE)
   );
+}
+
+/** Создание кастомных (системных) досок. */
+export function canCreateBoards(user: UserMe): boolean {
+  return user.is_superuser || hasPermission(user, PERM.BOARDS_CREATE);
 }
 
 export function canEmployeeDirectoryAccess(user: UserMe): boolean {
@@ -126,10 +131,15 @@ function globalBoardLockedBlocksFullEdit(user: UserMe, board?: BoardPermissionCo
 
 function hasTaskEditPermission(user: UserMe, task: TaskOut, board?: BoardPermissionContext): boolean {
   if (user.is_superuser) return true;
-  if (board?.scope === "system") {
-    return systemBoardAllowsEdit(board);
-  }
   if (hasPermission(user, PERM.TASKS_UPDATE_ALL)) return true;
+  if (board?.scope === "system") {
+    if (systemBoardAllowsEdit(board)) return true;
+    if (hasPermission(user, PERM.TASKS_UPDATE_ASSIGNED)) {
+      if (taskHasAssignee(task, user.id)) return true;
+      if (taskInUserSystems(user, task)) return true;
+    }
+    return false;
+  }
   if (hasPermission(user, PERM.TASKS_UPDATE_ASSIGNED)) {
     if (taskHasAssignee(task, user.id)) return true;
     if (taskInUserSystems(user, task)) return true;
@@ -141,12 +151,23 @@ function systemBoardAllowsEdit(ctx: BoardPermissionContext): boolean {
   return ctx.memberRole === "editor" || ctx.memberRole === "manager";
 }
 
+function canSeeAllTasks(user: UserMe): boolean {
+  return (
+    user.is_superuser ||
+    hasPermission(user, PERM.TASKS_READ_ALL) ||
+    hasPermission(user, PERM.TASKS_UPDATE_ALL)
+  );
+}
+
 /** Создание задачи на доске. */
 export function canCreateTaskOnBoard(user: UserMe, board?: BoardPermissionContext): boolean {
   if (globalBoardLockedBlocksFullEdit(user, board)) return false;
   if (user.is_superuser) return true;
+  if (!hasPermission(user, PERM.TASKS_CREATE) && board?.scope !== "system") return false;
   if (board?.scope === "system") {
-    return systemBoardAllowsEdit(board);
+    if (systemBoardAllowsEdit(board)) return true;
+    // Руководитель: создавать на чужих системных досках при праве на все задачи.
+    return hasPermission(user, PERM.TASKS_CREATE) && canSeeAllTasks(user);
   }
   return hasPermission(user, PERM.TASKS_CREATE);
 }
@@ -162,11 +183,11 @@ export function canManageBoardColumnsOnBoard(user: UserMe, board?: BoardPermissi
   return false;
 }
 
-/** Создание/редактирование глобальных тегов задач. */
+/** Создание/редактирование глобальных тегов задач (структура доски). */
 export function canManageTaskTags(user: UserMe, board?: BoardPermissionContext): boolean {
   if (globalBoardLockedBlocksFullEdit(user, board)) return false;
   if (user.is_superuser) return true;
-  if (hasPermission(user, PERM.TASKS_CREATE)) return true;
+  if (hasPermission(user, PERM.BOARD_COLUMNS_MANAGE)) return true;
   if (board?.scope === "system") {
     return systemBoardAllowsEdit(board);
   }
@@ -194,11 +215,17 @@ export function canUpdateTask(user: UserMe, task: TaskOut, board?: BoardPermissi
   return canFullyEditTask(user, task, board);
 }
 
-/** Перенос по доске. На системной доске — только редактор/менеджер. */
+/** Перенос по доске. На системной доске — редактор/менеджер или глобальные права. */
 export function canMoveTask(user: UserMe, task: TaskOut, board?: BoardPermissionContext): boolean {
   if (user.is_superuser) return true;
   if (board?.scope === "system") {
-    return systemBoardAllowsEdit(board);
+    if (systemBoardAllowsEdit(board)) return true;
+    if (hasPermission(user, PERM.TASKS_MOVE) || hasPermission(user, PERM.TASKS_UPDATE_ALL)) return true;
+    if (hasPermission(user, PERM.TASKS_UPDATE_ASSIGNED)) {
+      if (taskHasAssignee(task, user.id)) return true;
+      if (taskInUserSystems(user, task)) return true;
+    }
+    return false;
   }
   if (hasPermission(user, PERM.TASKS_MOVE)) return true;
   if (hasPermission(user, PERM.TASKS_UPDATE_ASSIGNED)) {
@@ -208,14 +235,15 @@ export function canMoveTask(user: UserMe, task: TaskOut, board?: BoardPermission
   return false;
 }
 
-/** Удаление задачи. На системной доске — только менеджер. */
+/** Удаление задачи. На системной доске — менеджер доски или глобальное tasks.delete. */
 export function canDeleteTask(user: UserMe, board?: BoardPermissionContext): boolean {
   if (globalBoardLockedBlocksFullEdit(user, board)) return false;
   if (user.is_superuser) return true;
+  if (hasPermission(user, PERM.TASKS_DELETE)) return true;
   if (board?.scope === "system") {
     return board.memberRole === "manager";
   }
-  return hasPermission(user, PERM.TASKS_DELETE);
+  return false;
 }
 
 /** Комментарии к задаче (доступны и при блокировке доски). */

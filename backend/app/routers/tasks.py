@@ -3,30 +3,46 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import exists, false, select
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from sqlalchemy import exists, false, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.http_errors import (
     FORBIDDEN,
+    TASK_ASSIGNEE_NOT_ALLOWED,
     TASK_NO_SYSTEM_MEMBERSHIP,
     TASK_PICK_SYSTEM,
     TASK_SYSTEM_NOT_ALLOWED,
     TASK_SYSTEM_REQUIRED,
     UNKNOWN_SYSTEM,
 )
-from app.deps import get_current_user, require_permission
-from app.models import Board, KanbanColumn, Notification, NotificationType, System, Task, TaskComment, TaskTag, User, UserSystem
+from app.deps import get_current_user, require_any_permission, require_permission
+from app.models import (
+    Board,
+    KanbanColumn,
+    Notification,
+    NotificationType,
+    System,
+    Task,
+    TaskAttachment,
+    TaskComment,
+    TaskTag,
+    User,
+    UserSystem,
+)
 from app.models.board import BOARD_SCOPE_SYSTEM
 from app.models.task import task_assignees_table
-from app.permissions import TASKS_READ_ASSIGNED
+from app.permissions import ROLES_MANAGE, TASKS_READ_ASSIGNED, USERS_MANAGE
+from app.schemas.audit import AuditEventOut
 from app.schemas.task import (
+    ChecklistItem,
     ColumnMini,
     TaskAnalyticsBucketOut,
     TaskAnalyticsKpiOut,
     TaskAnalyticsOut,
+    TaskAttachmentOut,
     TaskDueTrendPointOut,
     SystemMini,
     TagMini,
@@ -38,10 +54,14 @@ from app.schemas.task import (
     TaskUpdate,
     UserMini,
 )
+from app.schemas.task_excel_import import TaskExcelImportBatchOut
 from app.services.authz import user_has_permission, user_sees_all_tasks
-from app.services.audit import record_audit_event
+from app.services.audit import list_audit_events_for_entity, record_audit_event
 from app.services.board_lock import can_bypass_board_editing_lock, is_global_board_locked
+from app.services.board_members import allowed_assignee_ids_for_board
+from app.services.file_storage import save_task_file
 from app.services.task_archive import auto_archive_done_tasks
+from app.services.task_excel_import import import_tasks_from_excel_batch
 from app.services.task_policy import (
     can_comment_on_task,
     can_create_task_on_board,
@@ -54,6 +74,22 @@ from app.services.task_policy import (
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 _MENTION_RE = re.compile(r"@([a-zA-Z0-9_.+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})")
+_MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+_ALLOWED_ATTACHMENT_CT = {
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+    "application/pdf",
+    "text/plain",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/zip",
+    "application/x-zip-compressed",
+    "application/octet-stream",
+}
 
 
 def _task_in_done_column(task: Task) -> bool:
@@ -91,10 +127,54 @@ _TASK_LOAD = (
     selectinload(Task.column),
     selectinload(Task.board),
     selectinload(Task.tags),
+    selectinload(Task.attachments).selectinload(TaskAttachment.uploaded_by),
 )
 
 
-def _task_to_out(task: Task) -> TaskOut:
+def _normalize_checklist(items: list[ChecklistItem] | list[dict] | None) -> list[dict]:
+    if not items:
+        return []
+    out: list[dict] = []
+    for raw in items:
+        if isinstance(raw, ChecklistItem):
+            item = raw
+        else:
+            item = ChecklistItem.model_validate(raw)
+        out.append(item.model_dump())
+    return out
+
+
+def _attachment_to_out(att: TaskAttachment) -> TaskAttachmentOut:
+    return TaskAttachmentOut(
+        id=att.id,
+        task_id=att.task_id,
+        filename=att.filename,
+        content_type=att.content_type,
+        size_bytes=att.size_bytes,
+        url=att.url,
+        uploaded_by_id=att.uploaded_by_id,
+        created_at=att.created_at,
+        uploaded_by=UserMini.model_validate(att.uploaded_by) if att.uploaded_by else None,
+    )
+
+
+async def _comments_counts(
+    session: AsyncSession, task_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, int]:
+    if not task_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(TaskComment.task_id, func.count())
+            .where(TaskComment.task_id.in_(task_ids))
+            .group_by(TaskComment.task_id)
+        )
+    ).all()
+    return {tid: int(n) for tid, n in rows}
+
+
+def _task_to_out(task: Task, *, comments_count: int = 0) -> TaskOut:
+    checklist = _normalize_checklist(task.checklist or [])
     return TaskOut(
         id=task.id,
         title=task.title,
@@ -105,6 +185,8 @@ def _task_to_out(task: Task) -> TaskOut:
         creator_id=task.creator_id,
         priority=task.priority,
         due_at=task.due_at,
+        estimate_hours=task.estimate_hours,
+        checklist=[ChecklistItem.model_validate(x) for x in checklist],
         position=task.position,
         created_at=task.created_at,
         updated_at=task.updated_at,
@@ -114,7 +196,14 @@ def _task_to_out(task: Task) -> TaskOut:
         system=SystemMini.model_validate(task.system) if task.system else None,
         column=ColumnMini.model_validate(task.column) if task.column else None,
         tags=[TagMini.model_validate(t) for t in task.tags],
+        attachments=[_attachment_to_out(a) for a in (task.attachments or [])],
+        comments_count=max(0, int(comments_count)),
     )
+
+
+async def _task_to_out_with_counts(session: AsyncSession, task: Task) -> TaskOut:
+    counts = await _comments_counts(session, [task.id])
+    return _task_to_out(task, comments_count=counts.get(task.id, 0))
 
 
 async def _resolve_tags(session: AsyncSession, tag_ids: list[uuid.UUID]) -> list[TaskTag]:
@@ -128,13 +217,27 @@ async def _resolve_tags(session: AsyncSession, tag_ids: list[uuid.UUID]) -> list
     return [tags_by_id[i] for i in unique_ids]
 
 
-async def _resolve_assignee_users(session: AsyncSession, ids: list[uuid.UUID]) -> list[User]:
+async def _resolve_assignee_users(
+    session: AsyncSession,
+    ids: list[uuid.UUID],
+    *,
+    board: Board | None = None,
+    allow_existing_ids: set[uuid.UUID] | None = None,
+) -> list[User]:
     uniq = list(dict.fromkeys(ids))
+    allowed: set[uuid.UUID] | None = None
+    if board is not None:
+        allowed = await allowed_assignee_ids_for_board(session, board)
     out: list[User] = []
     for uid in uniq:
         u = await session.get(User, uid)
         if not u or not u.is_active:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid assignee")
+        if allowed is not None and uid not in allowed:
+            if not allow_existing_ids or uid not in allow_existing_ids:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail=TASK_ASSIGNEE_NOT_ALLOWED
+                )
         out.append(u)
     return out
 
@@ -244,11 +347,12 @@ async def list_tasks(
 
     result = await session.execute(stmt)
     tasks = result.scalars().unique().all()
-    out: list[TaskOut] = []
+    allowed: list[Task] = []
     for t in tasks:
         if await can_read_task(session, user, t):
-            out.append(_task_to_out(t))
-    return out
+            allowed.append(t)
+    counts = await _comments_counts(session, [t.id for t in allowed])
+    return [_task_to_out(t, comments_count=counts.get(t.id, 0)) for t in allowed]
 
 
 @router.get("/analytics", response_model=TaskAnalyticsOut)
@@ -373,7 +477,7 @@ async def get_task(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
     if not await can_read_task(session, user, task):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
-    return _task_to_out(task)
+    return await _task_to_out_with_counts(session, task)
 
 
 @router.post("", response_model=TaskOut, status_code=status.HTTP_201_CREATED)
@@ -418,7 +522,7 @@ async def create_task(
     if not sys or not sys.is_active:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=UNKNOWN_SYSTEM)
 
-    assignees = await _resolve_assignee_users(session, body.assignee_ids)
+    assignees = await _resolve_assignee_users(session, body.assignee_ids, board=board)
 
     task = Task(
         title=body.title,
@@ -429,6 +533,8 @@ async def create_task(
         creator_id=user.id,
         priority=body.priority,
         due_at=body.due_at,
+        estimate_hours=body.estimate_hours,
+        checklist=_normalize_checklist(body.checklist),
         position=body.position,
     )
     task.tags = await _resolve_tags(session, body.tag_ids)
@@ -445,6 +551,7 @@ async def create_task(
             "title": task.title,
             "board_id": str(task.board_id),
             "column_id": str(task.column_id),
+            "column_name": col.name if col else None,
             "system_id": str(task.system_id),
             "assignees_count": len(task.assignees or []),
         },
@@ -452,7 +559,71 @@ async def create_task(
     await session.commit()
 
     t = (await session.execute(select(Task).where(Task.id == task.id).options(*_TASK_LOAD))).scalar_one()
-    return _task_to_out(t)
+    return await _task_to_out_with_counts(session, t)
+
+
+@router.post(
+    "/import-excel",
+    response_model=TaskExcelImportBatchOut,
+    summary="Импорт задачника Excel на основную доску (один или несколько файлов)",
+)
+async def import_tasks_excel(
+    session: Annotated[AsyncSession, Depends(get_db)],
+    editor: Annotated[User, Depends(require_any_permission(USERS_MANAGE, ROLES_MANAGE))],
+    files: Annotated[list[UploadFile], File(..., description="Один или несколько .xlsx задачника")],
+    system_id: Annotated[uuid.UUID | None, Form()] = None,
+    sheet_name: str | None = Form(None),
+) -> TaskExcelImportBatchOut:
+    if not files:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Добавьте хотя бы один файл")
+
+    payloads: list[tuple[str, bytes]] = []
+    for f in files:
+        fname = f.filename or "file.xlsx"
+        if not fname.lower().endswith(".xlsx"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Ожидается .xlsx: {fname}",
+            )
+        content = await f.read()
+        if len(content) > 20 * 1024 * 1024:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Файл больше 20 МБ: {fname}",
+            )
+        payloads.append((fname, content))
+
+    if system_id is not None and len(payloads) > 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="При загрузке нескольких файлов систему указывать нельзя — она определяется по имени файла/листа",
+        )
+
+    batch = await import_tasks_from_excel_batch(
+        session,
+        files=payloads,
+        creator_id=editor.id,
+        system_id=system_id,
+        sheet_name=sheet_name,
+    )
+    await record_audit_event(
+        session,
+        entity_type="task",
+        entity_id=None,
+        action="task.import_excel.ran",
+        actor_user_id=editor.id,
+        details={
+            "files_total": batch.files_total,
+            "files_ok": batch.files_ok,
+            "files_failed": batch.files_failed,
+            "created_total": batch.created_total,
+            "warnings_total": batch.warnings_total,
+            "system_id": str(system_id) if system_id else None,
+            "filenames": [x.filename for x in batch.files],
+        },
+    )
+    await session.commit()
+    return batch
 
 
 @router.patch("/{task_id}", response_model=TaskOut)
@@ -472,6 +643,7 @@ async def update_task(
     move_only_fields = {"column_id", "position"}
     locked_allowed_fields = {"column_id", "position", "description"}
     is_move_only = bool(requested_fields) and requested_fields.issubset(move_only_fields)
+    is_checklist_only = bool(requested_fields) and requested_fields.issubset({"checklist"})
 
     if board and is_global_board_locked(board) and not await can_bypass_board_editing_lock(session, user):
         if not requested_fields.issubset(locked_allowed_fields):
@@ -486,12 +658,20 @@ async def update_task(
     elif is_move_only:
         if not await can_move_task(session, user, task):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
+    elif is_checklist_only:
+        if not await can_comment_on_task(session, user, task):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
     elif not await can_update_task(session, user, task):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
 
     changed_fields = sorted(list(requested_fields))
     old_column_id = task.column_id
     old_system_id = task.system_id
+    old_title = task.title
+    old_column_name: str | None = None
+    if task.column_id is not None:
+        old_col = await session.get(KanbanColumn, task.column_id)
+        old_column_name = old_col.name if old_col else None
     if body.title is not None:
         task.title = body.title
     if body.description is not None:
@@ -511,11 +691,22 @@ async def update_task(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=UNKNOWN_SYSTEM)
         task.system_id = body.system_id
     if body.assignee_ids is not None:
-        task.assignees = await _resolve_assignee_users(session, body.assignee_ids)
+        board = await session.get(Board, task.board_id)
+        existing_ids = {a.id for a in (task.assignees or [])}
+        task.assignees = await _resolve_assignee_users(
+            session,
+            body.assignee_ids,
+            board=board,
+            allow_existing_ids=existing_ids,
+        )
     if body.priority is not None:
         task.priority = body.priority
     if body.due_at is not None:
         task.due_at = body.due_at
+    if "estimate_hours" in body.model_fields_set:
+        task.estimate_hours = body.estimate_hours
+    if body.checklist is not None:
+        task.checklist = _normalize_checklist(body.checklist)
     if body.position is not None:
         task.position = body.position
     if "archived_at" in body.model_fields_set:
@@ -524,6 +715,10 @@ async def update_task(
         task.tags = await _resolve_tags(session, body.tag_ids)
 
     await session.flush()
+    new_column_name: str | None = None
+    if old_column_id != task.column_id and task.column_id is not None:
+        new_col = await session.get(KanbanColumn, task.column_id)
+        new_column_name = new_col.name if new_col else None
     await record_audit_event(
         session,
         entity_type="task",
@@ -531,15 +726,19 @@ async def update_task(
         action="task.updated",
         actor_user_id=user.id,
         details={
+            "title": task.title,
+            "old_title": old_title if "title" in requested_fields and old_title != task.title else None,
             "changed_fields": changed_fields,
             "old_column_id": str(old_column_id) if old_column_id != task.column_id else None,
             "new_column_id": str(task.column_id) if old_column_id != task.column_id else None,
+            "old_column_name": old_column_name if old_column_id != task.column_id else None,
+            "new_column_name": new_column_name if old_column_id != task.column_id else None,
             "old_system_id": str(old_system_id) if old_system_id != task.system_id else None,
             "new_system_id": str(task.system_id) if old_system_id != task.system_id else None,
         },
     )
     t = (await session.execute(select(Task).where(Task.id == task_id).options(*_TASK_LOAD))).scalar_one()
-    return _task_to_out(t)
+    return await _task_to_out_with_counts(session, t)
 
 
 @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -563,6 +762,43 @@ async def delete_task(
         details={"title": task.title},
     )
     await session.delete(task)
+
+
+@router.get("/{task_id}/history", response_model=list[AuditEventOut])
+async def get_task_history(
+    task_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+) -> list[AuditEventOut]:
+    """История изменений задачи (аудит): смена колонки/статуса, поля, комментарии, вложения."""
+    task = (await session.execute(select(Task).where(Task.id == task_id).options(*_TASK_LOAD))).scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    if not await can_read_task(session, user, task):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
+
+    rows = await list_audit_events_for_entity(
+        session, entity_type="task", entity_id=task_id, limit=limit
+    )
+    user_ids = {r.actor_user_id for r in rows if r.actor_user_id is not None}
+    names_by_id: dict[uuid.UUID, str] = {}
+    if user_ids:
+        users = await session.execute(select(User.id, User.full_name).where(User.id.in_(user_ids)))
+        names_by_id = {uid: name for uid, name in users.all()}
+    return [
+        AuditEventOut(
+            id=r.id,
+            entity_type=r.entity_type,
+            entity_id=r.entity_id,
+            action=r.action,
+            actor_user_id=r.actor_user_id,
+            actor_name=names_by_id.get(r.actor_user_id) if r.actor_user_id else None,
+            details_json=r.details_json,
+            created_at=r.created_at,
+        )
+        for r in rows
+    ]
 
 
 @router.get("/{task_id}/comments", response_model=list[TaskCommentOut])
@@ -696,4 +932,91 @@ async def delete_task_comment(
         details={"comment_id": str(comment.id)},
     )
     await session.delete(comment)
+    await session.commit()
+
+
+@router.post("/{task_id}/attachments", response_model=TaskAttachmentOut, status_code=status.HTTP_201_CREATED)
+async def upload_task_attachment(
+    task_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+    file: Annotated[UploadFile, File()],
+) -> TaskAttachmentOut:
+    task = (await session.execute(select(Task).where(Task.id == task_id).options(*_TASK_LOAD))).scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    if not await can_update_task(session, user, task) and not await can_comment_on_task(session, user, task):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
+
+    ct = (file.content_type or "application/octet-stream").split(";")[0].strip().lower()
+    if ct not in _ALLOWED_ATTACHMENT_CT:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported file type")
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file")
+    if len(raw) > _MAX_ATTACHMENT_BYTES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File too large (max 20MB)")
+
+    filename = (file.filename or "file").strip()[:512] or "file"
+    url = save_task_file(raw, ct, filename)
+    att = TaskAttachment(
+        task_id=task.id,
+        filename=filename,
+        content_type=ct,
+        size_bytes=len(raw),
+        url=url,
+        uploaded_by_id=user.id,
+    )
+    session.add(att)
+    await session.flush()
+    await record_audit_event(
+        session,
+        entity_type="task",
+        entity_id=task.id,
+        action="task.attachment.uploaded",
+        actor_user_id=user.id,
+        details={"attachment_id": str(att.id), "filename": filename},
+    )
+    await session.commit()
+    loaded = (
+        await session.execute(
+            select(TaskAttachment)
+            .where(TaskAttachment.id == att.id)
+            .options(selectinload(TaskAttachment.uploaded_by))
+        )
+    ).scalar_one()
+    return _attachment_to_out(loaded)
+
+
+@router.delete("/{task_id}/attachments/{attachment_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_task_attachment(
+    task_id: uuid.UUID,
+    attachment_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
+) -> None:
+    task = (await session.execute(select(Task).where(Task.id == task_id).options(*_TASK_LOAD))).scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    if not await can_update_task(session, user, task) and not await can_delete_task(session, user, task):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
+
+    att = (
+        await session.execute(
+            select(TaskAttachment)
+            .where(TaskAttachment.id == attachment_id)
+            .where(TaskAttachment.task_id == task_id)
+        )
+    ).scalar_one_or_none()
+    if not att:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attachment not found")
+    await record_audit_event(
+        session,
+        entity_type="task",
+        entity_id=task.id,
+        action="task.attachment.deleted",
+        actor_user_id=user.id,
+        details={"attachment_id": str(att.id), "filename": att.filename},
+    )
+    await session.delete(att)
     await session.commit()

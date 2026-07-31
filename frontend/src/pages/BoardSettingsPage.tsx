@@ -15,6 +15,7 @@ import {
 import { AppShell } from "../components/AppShell";
 import { Modal } from "../components/Modal";
 import { useAuth } from "../context/AuthContext";
+import { auditActionLabel, formatAuditDetails } from "../lib/auditFormat";
 import { canManageBoardColumns } from "../lib/permissions";
 import { toastApiError, toastSuccess } from "../lib/toast";
 
@@ -220,13 +221,25 @@ export function BoardSettingsPage() {
 
       {tab === "audit" && (
         <div className="max-w-3xl space-y-2">
+          {auditQuery.isPending && <p className="text-sm text-slate-500">Загрузка…</p>}
           {(auditQuery.data ?? []).map((ev) => (
-            <div key={ev.id} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-900/50">
-              <p className="font-medium text-slate-700 dark:text-slate-200">{ev.action}</p>
-              <p className="text-slate-500 dark:text-slate-400">{ev.actor_name ?? "Система"} • {new Date(ev.created_at).toLocaleString("ru-RU")}</p>
+            <div
+              key={ev.id}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm dark:border-slate-700 dark:bg-slate-900/50"
+            >
+              <p className="font-medium text-slate-800 dark:text-slate-100">{auditActionLabel(ev.action)}</p>
+              <p className="mt-0.5 text-xs text-slate-600 dark:text-slate-300">
+                {formatAuditDetails(ev.action, ev.details_json)}
+              </p>
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                {ev.actor_name ?? "Система"} · {new Date(ev.created_at).toLocaleString("ru-RU")}
+                <span className="ml-2 font-mono text-[10px] text-slate-400 dark:text-slate-500">{ev.action}</span>
+              </p>
             </div>
           ))}
-          {!auditQuery.isPending && (auditQuery.data ?? []).length === 0 && <p className="text-sm text-slate-500">Событий пока нет.</p>}
+          {!auditQuery.isPending && (auditQuery.data ?? []).length === 0 && (
+            <p className="text-sm text-slate-500">Событий пока нет.</p>
+          )}
         </div>
       )}
 

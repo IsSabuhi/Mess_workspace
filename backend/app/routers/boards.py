@@ -15,7 +15,8 @@ from app.models.board import (
     BOARD_SCOPE_GLOBAL,
     BOARD_SCOPE_SYSTEM,
 )
-from app.permissions import BOARD_COLUMNS_MANAGE
+from app.permissions import BOARD_COLUMNS_MANAGE, BOARDS_CREATE
+from app.schemas.audit import AuditEventOut
 from app.schemas.board import (
     BoardCreate,
     BoardDeletePreviewOut,
@@ -28,8 +29,7 @@ from app.schemas.board import (
     KanbanColumnOut,
     KanbanColumnUpdate,
 )
-from app.schemas.audit import AuditEventOut
-from app.services.authz import user_has_permission
+from app.services.authz import user_has_permission, user_sees_all_tasks
 from app.services.audit import list_audit_events_for_entity, record_audit_event
 from app.services.board_lock import can_bypass_board_editing_lock, can_manage_board_editing_lock, is_global_board_locked
 from app.services.board_members import (
@@ -72,6 +72,9 @@ def _board_to_out(board: Board, system_name: str | None = None) -> BoardOut:
 async def _board_visible_for_user(session: AsyncSession, user: User, board: Board) -> bool:
     if user.is_superuser or await user_has_permission(session, user, BOARD_COLUMNS_MANAGE):
         return True
+    # Руководитель с tasks.read.all видит доски (в т.ч. чужие системные), но без управления структурой.
+    if await user_sees_all_tasks(session, user):
+        return not board.is_archived
     if board.is_archived:
         return False
     if board.scope == BOARD_SCOPE_GLOBAL:
@@ -164,8 +167,11 @@ async def create_board(
     session: Annotated[AsyncSession, Depends(get_db)],
     creator: Annotated[User, Depends(get_current_user)],
 ) -> BoardOut:
-    if not creator.is_superuser:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Только администратор может создавать доски")
+    if not creator.is_superuser and not await user_has_permission(session, creator, BOARDS_CREATE):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Недостаточно прав для создания досок",
+        )
     if body.system_id is not None:
         sys_row = await session.get(System, body.system_id)
         if not sys_row or not sys_row.is_active:
@@ -315,7 +321,11 @@ async def update_board(
     session: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
 ) -> BoardOut:
-    board = await session.get(Board, board_id)
+    board = (
+        await session.execute(
+            select(Board).where(Board.id == board_id).options(selectinload(Board.columns))
+        )
+    ).scalar_one_or_none()
     if not board:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Board not found")
     if board.scope != BOARD_SCOPE_SYSTEM:
@@ -380,7 +390,12 @@ async def add_column(
         entity_id=board_id,
         action="board.column.created",
         actor_user_id=user.id,
-        details={"column_id": str(col.id), "name": col.name},
+        details={
+            "column_id": str(col.id),
+            "board_name": board.name,
+            "name": col.name,
+            "is_done_column": col.is_done_column,
+        },
     )
     return KanbanColumnOut.model_validate(col)
 
@@ -401,6 +416,8 @@ async def update_column(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Board not found")
     if not await _can_manage_board_columns(session, user, board):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Недостаточно прав для управления колонками")
+    old_name = col.name
+    old_is_done = col.is_done_column
     if body.name is not None:
         col.name = body.name
     if body.sort_order is not None:
@@ -418,7 +435,16 @@ async def update_column(
         entity_id=board_id,
         action="board.column.updated",
         actor_user_id=user.id,
-        details={"column_id": str(col.id), "name": col.name},
+        details={
+            "column_id": str(col.id),
+            "board_name": board.name,
+            "name": col.name,
+            "old_name": old_name if body.name is not None and body.name != old_name else None,
+            "is_done_column": col.is_done_column,
+            "old_is_done_column": (
+                old_is_done if body.is_done_column is not None and body.is_done_column != old_is_done else None
+            ),
+        },
     )
     return KanbanColumnOut.model_validate(col)
 
@@ -450,7 +476,7 @@ async def delete_column(
         entity_id=board_id,
         action="board.column.deleted",
         actor_user_id=user.id,
-        details={"column_id": str(col_id), "name": col_name},
+        details={"column_id": str(col_id), "board_name": board.name, "name": col_name},
     )
 
 

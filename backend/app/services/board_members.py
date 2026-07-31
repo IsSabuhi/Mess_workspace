@@ -151,3 +151,23 @@ async def _user_names(session: AsyncSession, user_ids: list[uuid.UUID]) -> dict[
         return {}
     rows = await session.execute(select(User.id, User.full_name).where(User.id.in_(user_ids)))
     return {uid: name for uid, name in rows.all()}
+
+
+async def allowed_assignee_ids_for_board(session: AsyncSession, board: Board) -> set[uuid.UUID] | None:
+    """Кто может быть исполнителем на доске.
+
+    Для системной доски — сотрудники системы ∪ явные участники доски.
+    Для глобальной — None (без доп. ограничения на уровне доски).
+    """
+    if board.scope != BOARD_SCOPE_SYSTEM or board.system_id is None:
+        return None
+    ids: set[uuid.UUID] = set()
+    for u in await _active_system_users(session, board.system_id):
+        ids.add(u.id)
+    member_rows = await session.execute(
+        select(BoardMember.user_id)
+        .join(User, User.id == BoardMember.user_id)
+        .where(BoardMember.board_id == board.id, User.is_active.is_(True))
+    )
+    ids.update(member_rows.scalars().all())
+    return ids

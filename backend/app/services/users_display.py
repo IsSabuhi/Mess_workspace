@@ -21,6 +21,7 @@ def user_to_out(user: User) -> UserOut:
         schedule_mode=user.schedule_mode,
         is_active=user.is_active,
         is_superuser=user.is_superuser,
+        must_change_password=bool(user.must_change_password),
         created_at=user.created_at,
         updated_at=user.updated_at,
         roles=roles,

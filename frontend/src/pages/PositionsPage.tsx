@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from "react";
 
-import { ApiError } from "../api/client";
 import { toastApiError, toastSuccess } from "../lib/toast";
 import {
   createPosition,
@@ -17,6 +16,7 @@ import { useAuth } from "../context/AuthContext";
 import { invalidateAndRefetch } from "../lib/queryClient";
 import { PERM, hasPermission } from "../lib/permissions";
 import { useModalLayer } from "../lib/useModalLayer";
+import { useToastQueryError } from "../lib/useToastQueryError";
 
 export function PositionsPage() {
   const { state } = useAuth();
@@ -30,7 +30,6 @@ export function PositionsPage() {
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
   const [description, setDescription] = useState("");
-  const [formError, setFormError] = useState<string | null>(null);
   const [membersModalPosition, setMembersModalPosition] = useState<PositionOut | null>(null);
   const [membersSearchQ, setMembersSearchQ] = useState("");
   const [employeeDetailUserId, setEmployeeDetailUserId] = useState<string | null>(null);
@@ -45,6 +44,8 @@ export function PositionsPage() {
     queryFn: () => listPositionMembers(membersModalPosition!.id),
     enabled: !!membersModalPosition,
   });
+  useToastQueryError(q.error, "Ошибка загрузки должностей");
+  useToastQueryError(membersQuery.error, "Не удалось загрузить сотрудников");
 
   const filteredPositionMembers = useMemo(() => {
     const rows = membersQuery.data ?? [];
@@ -69,12 +70,9 @@ export function PositionsPage() {
       setName("");
       setSlug("");
       setDescription("");
-      setFormError(null);
       toastSuccess("Должность создана");
     },
     onError: (e: unknown) => {
-      if (e instanceof ApiError) setFormError(e.detail);
-      else setFormError("Ошибка");
       toastApiError(e, "Не удалось создать должность");
     },
   });
@@ -120,7 +118,6 @@ export function PositionsPage() {
 
   function handleCreate(e: React.FormEvent) {
     e.preventDefault();
-    setFormError(null);
     createMut.mutate({
       name: name.trim(),
       slug: slug.trim().toLowerCase().replace(/[^a-z0-9-]/g, "") || "position",
@@ -133,14 +130,13 @@ export function PositionsPage() {
     if (!canManage) return;
     try {
       await updateMut.mutateAsync({ id: p.id, body: { is_active: !p.is_active } });
-    } catch (e) {
-      if (e instanceof ApiError) setFormError(e.detail);
+    } catch {
+      // handled by mutation
     }
   }
 
   const items = q.data ?? [];
   const loading = q.isPending;
-  const loadError = q.error instanceof ApiError ? q.error.detail : q.isError ? "Ошибка загрузки" : null;
 
   return (
     <AppShell title="Должности" subtitle="Справочник должностей для назначения сотрудникам">
@@ -164,11 +160,6 @@ export function PositionsPage() {
         )}
       </div>
 
-      {(loadError || formError) && (
-        <p className="mb-4 rounded-xl bg-red-50 px-4 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
-          {formError ?? loadError}
-        </p>
-      )}
       {loading && <p className="text-slate-500">Загрузка…</p>}
 
       {!loading && (
@@ -236,7 +227,7 @@ export function PositionsPage() {
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
         >
           <div
-            className="glass w-full max-w-md rounded-2xl p-6 shadow-soft-lg"
+            className="modal-panel w-full max-w-md rounded-2xl p-6 shadow-soft-lg"
             role="dialog"
             aria-modal="true"
             onClick={positionModalPanelStop}
@@ -297,7 +288,7 @@ export function PositionsPage() {
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm"
         >
           <div
-            className="glass flex max-h-[min(90vh,56rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl shadow-soft-lg"
+            className="modal-panel flex max-h-[min(90vh,56rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl shadow-soft-lg"
             role="dialog"
             aria-modal="true"
             aria-labelledby="position-members-title"
@@ -324,13 +315,6 @@ export function PositionsPage() {
 
             <div className="min-h-0 flex-1 overflow-hidden px-5 pb-5 pt-3">
               {membersQuery.isPending && <p className="text-sm text-slate-500">Загрузка…</p>}
-              {membersQuery.isError && (
-                <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
-                  {membersQuery.error instanceof ApiError
-                    ? membersQuery.error.detail
-                    : "Не удалось загрузить сотрудников"}
-                </p>
-              )}
               {!membersQuery.isPending && !membersQuery.isError && (
                 <>
                   {(membersQuery.data ?? []).length === 0 ? (

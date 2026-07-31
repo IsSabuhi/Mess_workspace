@@ -6,7 +6,7 @@ export function normalizeScheduleCellForMatch(raw: string | null | undefined): s
   const s = String(raw).trim();
   if (!s) return null;
   const lower = s.toLowerCase();
-  if (lower === "о" || lower === "у") return null;
+  if (lower === "о" || lower === "у" || lower === "б") return null;
   return lower;
 }
 
