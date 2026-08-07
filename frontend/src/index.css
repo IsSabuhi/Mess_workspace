@@ -133,7 +133,20 @@ body {
 }
 .kb-editor-content.ProseMirror ul,
 .kb-editor-content.ProseMirror ol {
+  margin: 0.55em 0;
   padding-left: 1.25rem;
+}
+.kb-editor-content.ProseMirror ul {
+  list-style-type: disc;
+}
+.kb-editor-content.ProseMirror ol {
+  list-style-type: decimal;
+}
+.kb-editor-content.ProseMirror li {
+  margin: 0.2em 0;
+}
+.kb-editor-content.ProseMirror li > p {
+  margin: 0;
 }
 .kb-editor-content.ProseMirror table {
   border-collapse: collapse;
@@ -258,6 +271,15 @@ body {
 .kb-article-body ol {
   margin: 0.75em 0;
   padding-left: 1.35rem;
+}
+.kb-article-body ul {
+  list-style-type: disc;
+}
+.kb-article-body ol {
+  list-style-type: decimal;
+}
+.kb-article-body li {
+  margin: 0.25em 0;
 }
 
 .kb-article-body li {

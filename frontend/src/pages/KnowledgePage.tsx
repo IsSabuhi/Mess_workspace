@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, Eye, EyeOff, Settings, Users } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import {
@@ -135,7 +135,17 @@ export function KnowledgePage() {
   /** Пользователь правил slug вручную — больше не перезаписываем из заголовка */
   const [slugManual, setSlugManual] = useState(false);
   const [status, setStatus] = useState<"draft" | "published">("published");
-  const [html, setHtml] = useState("<p></p>");
+  const [html, setHtmlState] = useState("<p></p>");
+  /** Актуальный HTML для сохранения (редактор отдаёт его с debounce / transition). */
+  const htmlRef = useRef(html);
+  const setHtml = useCallback((next: string) => {
+    htmlRef.current = next;
+    setHtmlState(next);
+  }, []);
+  const onEditorHtmlChange = useCallback((next: string) => {
+    htmlRef.current = next;
+    startTransition(() => setHtmlState(next));
+  }, []);
   const [memberSearchQ, setMemberSearchQ] = useState("");
   const [newMemberRole, setNewMemberRole] = useState<SpaceMemberRole>("viewer");
   const [parentId, setParentId] = useState<string>("");
@@ -553,7 +563,7 @@ export function KnowledgePage() {
           body: {
             title: t,
             slug: sl,
-            content: html,
+            content: htmlRef.current,
             status,
             parent_id: parentId || null,
             position: nextArticlePosition(articles, parentId || null),
@@ -567,7 +577,7 @@ export function KnowledgePage() {
           aid: articleId,
           body: {
             title: t,
-            content: html,
+            content: htmlRef.current,
             status,
             parent_id: parentId || null,
           },
@@ -1516,7 +1526,7 @@ export function KnowledgePage() {
                   createTemplateMut.mutate({
                     name: newTemplateName.trim(),
                     slug: (newTemplateSlug.trim() || slugifyTitle(newTemplateName, "template")).toLowerCase(),
-                    content: html,
+                    content: htmlRef.current,
                     space_id: spaceId ?? null,
                   });
                 }}
@@ -1707,7 +1717,7 @@ export function KnowledgePage() {
                 articleKey={knowledgeEditorKey}
                 initialHtml={html}
                 editable={canEdit}
-                onHtmlChange={setHtml}
+                onHtmlChange={onEditorHtmlChange}
                 onUploadImage={uploadImage}
                 onHeadingsChange={setTocHeadings}
               />
@@ -2082,7 +2092,7 @@ export function KnowledgePage() {
                       articleKey={knowledgeEditorKey}
                       initialHtml={html}
                       editable={canEdit}
-                      onHtmlChange={setHtml}
+                      onHtmlChange={onEditorHtmlChange}
                       onUploadImage={uploadImage}
                       onHeadingsChange={setTocHeadings}
                     />
@@ -2253,7 +2263,7 @@ export function KnowledgePage() {
         loading={revisionsQuery.isPending}
         current={{
           title,
-          content: html,
+          content: htmlRef.current,
           status,
           parent_id: parentId || null,
         }}

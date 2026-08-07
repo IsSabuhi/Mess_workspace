@@ -8,7 +8,6 @@ import xml from "highlight.js/lib/languages/xml";
 import css from "highlight.js/lib/languages/css";
 import sql from "highlight.js/lib/languages/sql";
 
-import { attachCodeCopyButtons } from "../lib/kbCodeCopy";
 import { useModalLayer } from "../lib/useModalLayer";
 import { toast } from "sonner";
 import type { Editor } from "@tiptap/core";
@@ -99,22 +98,78 @@ function collectDataTransferImageFiles(dataTransfer: DataTransfer | null): File[
   return out;
 }
 
+/** Слишком большой MD-parse в TipTap блокирует главный поток — выше порога идём обычной вставкой. */
+const MARKDOWN_PASTE_MAX_CHARS = 12_000;
+/** Гигантский HTML из Word/Docs тоже вешает редактор — режем до plain text. */
+const HUGE_HTML_PASTE_CHARS = 120_000;
+
+function isSafeImageSrc(src: string): boolean {
+  const s = src.trim();
+  return (
+    /^https?:\/\//i.test(s) ||
+    s.startsWith("data:image/") ||
+    s.startsWith("/mes/files/") ||
+    s.startsWith("/files/") ||
+    s.startsWith("/uploads/") ||
+    s.startsWith("/mes/uploads/")
+  );
+}
+
+/** `![](Pasted image …)` / file:// — не URL нашего хранилища; TipTap+браузер на них зависают. */
+function sanitizeMarkdownImages(text: string): string {
+  return text.replace(/!\[([^\]]*)\]\(([^)\n]+)\)/g, (full, alt: string, rawSrc: string) => {
+    const src = rawSrc.trim().replace(/^<|>$/g, "").replace(/^"|"$/g, "").replace(/^'|'$/g, "");
+    if (isSafeImageSrc(src)) return full;
+    let name = src;
+    try {
+      name = decodeURIComponent(src.split(/[/\\]/).pop() || src);
+    } catch {
+      /* keep */
+    }
+    const label = alt?.trim() ? `${alt.trim()} (${name})` : name;
+    return `\n\n> 📎 Изображение: «${label}» — вставьте скрин кнопкой «Изображение» (из файла в буфере не подхватывается как URL).\n\n`;
+  });
+}
+
+function stripUnsafeImagesFromHtml(html: string): string {
+  return html.replace(/<img\b[^>]*>/gi, (tag) => {
+    const srcMatch = tag.match(/\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
+    const src = (srcMatch?.[1] ?? srcMatch?.[2] ?? srcMatch?.[3] ?? "").trim();
+    if (src && isSafeImageSrc(src)) return tag;
+    const altMatch = tag.match(/\balt\s*=\s*(?:"([^"]*)"|'([^']*)')/i);
+    const alt = (altMatch?.[1] ?? altMatch?.[2] ?? "").trim() || "изображение";
+    return `<p><em>📎 ${alt} — вставьте скрин через «Изображение»</em></p>`;
+  });
+}
+
+function htmlHasUnsafeImages(html: string): boolean {
+  if (!/<img\b/i.test(html)) return false;
+  const re = /<img\b[^>]*>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    const srcMatch = m[0].match(/\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
+    const src = (srcMatch?.[1] ?? srcMatch?.[2] ?? srcMatch?.[3] ?? "").trim();
+    if (!src || !isSafeImageSrc(src)) return true;
+  }
+  return false;
+}
+
 /** Эвристика: похоже на Markdown (а не просто обычный текст). */
 function looksLikeMarkdown(text: string): boolean {
   const t = text.trim();
-  if (!t || t.length < 2) return false;
-  return (
-    /^#{1,6}\s+\S/m.test(t) ||
-    /\*\*[^*\n]+\*\*/.test(t) ||
-    /__[^_\n]+__/.test(t) ||
-    /\[[^\]]+\]\([^)]+\)/.test(t) ||
-    /^[-*+]\s+\S/m.test(t) ||
-    /^\d+\.\s+\S/m.test(t) ||
-    /^>\s+\S/m.test(t) ||
-    /^```[\w+-]*/m.test(t) ||
-    /^---+$/m.test(t) ||
-    /^\|.+\|/m.test(t)
-  );
+  if (!t || t.length < 2 || t.length > MARKDOWN_PASTE_MAX_CHARS) return false;
+  // Сильные маркеры — достаточно одного
+  if (/^#{1,6}\s+\S/m.test(t) || /^```[\w+-]*/m.test(t) || /^\|.+\|/m.test(t)) return true;
+  if (/!\[[^\]]*\]\([^)\n]+\)/.test(t)) return true;
+  // Слабые (списки, жирный) — нужны хотя бы два, иначе обычный текст с «-» вешает MD-парсер
+  let score = 0;
+  if (/\*\*[^*\n]+\*\*/.test(t) || /__[^_\n]+__/.test(t)) score += 1;
+  if (/\[[^\]]+\]\([^)]+\)/.test(t)) score += 1;
+  if ((t.match(/^[-*+]\s+\S/gm) ?? []).length >= 2) score += 1;
+  if ((t.match(/^\d+\.\s+\S/gm) ?? []).length >= 2) score += 1;
+  if (/^>\s+\S/m.test(t)) score += 1;
+  if (/^---+$/m.test(t)) score += 1;
+  return score >= 2;
 }
 
 /** Есть ли rich HTML в буфере (Word/браузер) — тогда не трогаем, пусть TipTap сам вставит. */
@@ -135,8 +190,32 @@ export function KnowledgeRichEditor({
   const linkInputRef = useRef<HTMLInputElement>(null);
   const uploadRef = useRef(onUploadImage);
   const editableRef = useRef(editable);
+  const onHtmlChangeRef = useRef(onHtmlChange);
+  const onHeadingsChangeRef = useRef(onHeadingsChange);
+  const headingsTimerRef = useRef<number | null>(null);
+  const htmlTimerRef = useRef<number | null>(null);
   uploadRef.current = onUploadImage;
   editableRef.current = editable;
+  onHtmlChangeRef.current = onHtmlChange;
+  onHeadingsChangeRef.current = onHeadingsChange;
+
+  const flushHtmlChange = useCallback((ed: Editor) => {
+    if (ed.isDestroyed) return;
+    if (htmlTimerRef.current !== null) {
+      window.clearTimeout(htmlTimerRef.current);
+      htmlTimerRef.current = null;
+    }
+    onHtmlChangeRef.current(ed.getHTML());
+  }, []);
+
+  const scheduleHtmlChange = useCallback((ed: Editor) => {
+    if (ed.isDestroyed) return;
+    if (htmlTimerRef.current !== null) window.clearTimeout(htmlTimerRef.current);
+    htmlTimerRef.current = window.setTimeout(() => {
+      htmlTimerRef.current = null;
+      if (!ed.isDestroyed) onHtmlChangeRef.current(ed.getHTML());
+    }, 250);
+  }, []);
 
   const [linkModalOpen, setLinkModalOpen] = useState(false);
   const [linkUrlDraft, setLinkUrlDraft] = useState("");
@@ -147,12 +226,13 @@ export function KnowledgeRichEditor({
   );
 
   const insertImagesFromFiles = useCallback(async (files: File[], insertPos?: number | null) => {
-    const ed = editorRef.current;
-    if (!ed || !files.length) return;
+    if (!files.length) return;
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       try {
         const url = await uploadRef.current(file);
+        const ed = editorRef.current;
+        if (!ed || ed.isDestroyed) return;
         const chain = ed.chain().focus();
         if (i === 0 && insertPos != null) {
           chain.insertContentAt(insertPos, { type: "image", attrs: { src: url } });
@@ -169,6 +249,8 @@ export function KnowledgeRichEditor({
   const editor = useEditor(
     {
       immediatelyRender: false,
+      // Иначе каждый transaction (в т.ч. большая вставка) синхронно перерисовывает React-дерево.
+      shouldRerenderOnTransaction: false,
       editable,
       extensions: [
         StarterKit.configure({
@@ -197,16 +279,22 @@ export function KnowledgeRichEditor({
       ],
       content: initialHtml || "<p></p>",
       onUpdate: ({ editor: ed }) => {
-        const html = ed.getHTML();
-        onHtmlChange(html);
-        if (onHeadingsChange) {
-          const doc = new DOMParser().parseFromString(html, "text/html");
-          const hs = [...doc.querySelectorAll("h1, h2, h3")].map((el, idx) => ({
-            id: `toc-${idx}`,
-            text: (el.textContent || "").trim(),
-            level: Number(el.tagName.slice(1)),
-          }));
-          onHeadingsChange(hs.filter((x) => x.text));
+        if (ed.isDestroyed) return;
+        scheduleHtmlChange(ed);
+        if (onHeadingsChangeRef.current) {
+          if (headingsTimerRef.current !== null) window.clearTimeout(headingsTimerRef.current);
+          headingsTimerRef.current = window.setTimeout(() => {
+            headingsTimerRef.current = null;
+            if (ed.isDestroyed || !onHeadingsChangeRef.current) return;
+            const headings: { id: string; text: string; level: number }[] = [];
+            ed.state.doc.descendants((node) => {
+              const level = node.type.name === "heading" ? Number(node.attrs.level) : 0;
+              if (level < 1 || level > 3) return;
+              const text = node.textContent.trim();
+              if (text) headings.push({ id: `toc-${headings.length}`, text, level });
+            });
+            onHeadingsChangeRef.current(headings);
+          }, 300);
         }
       },
       editorProps: {
@@ -215,19 +303,78 @@ export function KnowledgeRichEditor({
         },
         handlePaste: (_view, event) => {
           if (!editableRef.current) return false;
+          const ed = editorRef.current;
+          if (!ed || ed.isDestroyed) return false;
+
+          const text = event.clipboardData?.getData("text/plain") ?? "";
+          const html = event.clipboardData?.getData("text/html") ?? "";
           const files = collectClipboardImageFiles(event);
+          const trimmed = text.trim();
+          const substantialText =
+            trimmed.length >= 40 || looksLikeMarkdown(trimmed) || /```[\w+-]*/.test(trimmed);
+
+          // в буфере и текст заметки, и файлы скринов.
+          // Раньше при files.length>0 текст отбрасывался, а local ![](...)/img вешали TipTap.
+          if (substantialText) {
+            event.preventDefault();
+            const md = sanitizeMarkdownImages(text);
+            try {
+              if (looksLikeMarkdown(md) || /```/.test(md)) {
+                ed.chain().focus().insertContent(md, { contentType: "markdown" }).run();
+              } else if (html && html.length < HUGE_HTML_PASTE_CHARS) {
+                ed.chain().focus().insertContent(stripUnsafeImagesFromHtml(html)).run();
+              } else {
+                ed.chain().focus().insertContent(md).run();
+              }
+            } catch (err) {
+              console.error("[KnowledgeRichEditor] paste failed, plain text fallback", err);
+              ed.chain().focus().insertContent(trimmed).run();
+            }
+            if (files.length) {
+              // Скрины из буфера — загрузить в MinIO и вставить после текста.
+              void insertImagesFromFiles(files);
+            } else if (/!\[[^\]]*\]\((?!https?:)/i.test(text) || htmlHasUnsafeImages(html)) {
+              toast.info("Скриншоты", {
+                description:
+                  "Текст вставлен. Локальные картинки сюда не подтягиваются — вставьте их кнопкой «Изображение».",
+                duration: 7000,
+              });
+            }
+            return true;
+          }
+
           if (files.length) {
             event.preventDefault();
             void insertImagesFromFiles(files);
             return true;
           }
-          const ed = editorRef.current;
-          const text = event.clipboardData?.getData("text/plain") ?? "";
-          const html = event.clipboardData?.getData("text/html");
-          // Вставка Markdown из .md / чата / GitHub — только если нет rich HTML
-          if (ed && text && looksLikeMarkdown(text) && !clipboardHasRichHtml(html)) {
+
+          // Word/Docs иногда кладут огромный HTML со стилями — парсинг вешает вкладку.
+          if (html.length >= HUGE_HTML_PASTE_CHARS && text) {
             event.preventDefault();
-            ed.chain().focus().insertContent(text, { contentType: "markdown" }).run();
+            ed.chain().focus().insertContent(sanitizeMarkdownImages(text)).run();
+            return true;
+          }
+
+          // HTML со «битыми» img (/file://) без длинного plain text
+          if (html && htmlHasUnsafeImages(html)) {
+            event.preventDefault();
+            if (trimmed && looksLikeMarkdown(trimmed)) {
+              ed.chain().focus().insertContent(sanitizeMarkdownImages(text), { contentType: "markdown" }).run();
+            } else {
+              ed.chain().focus().insertContent(stripUnsafeImagesFromHtml(html)).run();
+            }
+            toast.info("Скриншоты пропущены", {
+              description: "Вставьте изображения кнопкой «Изображение».",
+              duration: 5500,
+            });
+            return true;
+          }
+
+          // Вставка Markdown из .md / чата / GitHub — только если нет rich HTML и текст умеренный
+          if (text && looksLikeMarkdown(text) && !clipboardHasRichHtml(html)) {
+            event.preventDefault();
+            ed.chain().focus().insertContent(sanitizeMarkdownImages(text), { contentType: "markdown" }).run();
             return true;
           }
           return false;
@@ -243,26 +390,33 @@ export function KnowledgeRichEditor({
         },
       },
     },
-    [articleKey, insertImagesFromFiles],
+    // Не завязывать на articleKey: иначе useEditor destroy'ит инстанс, а эффект ещё зовёт
+    // editor.commands → TypeError: Cannot read properties of null (reading 'commands').
+    [insertImagesFromFiles, scheduleHtmlChange],
   );
 
   useEffect(() => {
-    editorRef.current = editor;
+    editorRef.current = editor && !editor.isDestroyed ? editor : null;
   }, [editor]);
 
-  useEffect(() => {
-    if (!editor) return;
-    return attachCodeCopyButtons(editor.view.dom);
-  }, [editor]);
+  useEffect(
+    () => () => {
+      if (headingsTimerRef.current !== null) window.clearTimeout(headingsTimerRef.current);
+      const ed = editorRef.current;
+      if (ed && !ed.isDestroyed) flushHtmlChange(ed);
+      else if (htmlTimerRef.current !== null) window.clearTimeout(htmlTimerRef.current);
+    },
+    [flushHtmlChange],
+  );
 
   useEffect(() => {
-    if (!editor) return;
+    if (!editor || editor.isDestroyed) return;
     editor.setEditable(editable);
   }, [editor, editable]);
 
-  /** Только при смене статьи / remount ключа — не при каждом обновлении html из родителя (иначе сбрасывается курсор). */
+  /** Только при смене статьи — не при каждом обновлении html из родителя (иначе сбрасывается курсор). */
   useEffect(() => {
-    if (!editor) return;
+    if (!editor || editor.isDestroyed) return;
     editor.commands.setContent(initialHtml || "<p></p>", { emitUpdate: false });
   }, [editor, articleKey]);
 
@@ -280,7 +434,7 @@ export function KnowledgeRichEditor({
 
   const openLinkModal = useCallback(() => {
     const ed = editorRef.current;
-    if (!ed) return;
+    if (!ed || ed.isDestroyed) return;
     if (ed.state.selection.empty) {
       toast.info("Выделите текст для ссылки", {
         description: "Затем снова нажмите «Ссылка» и укажите адрес (URL).",
@@ -295,7 +449,7 @@ export function KnowledgeRichEditor({
 
   const confirmLink = useCallback(() => {
     const ed = editorRef.current;
-    if (!ed) return;
+    if (!ed || ed.isDestroyed) return;
     const t = linkUrlDraft.trim();
     const chain = ed.chain().focus();
     if (!t) {
@@ -314,7 +468,7 @@ export function KnowledgeRichEditor({
     return () => window.clearTimeout(t);
   }, [linkModalOpen]);
 
-  if (!editor) {
+  if (!editor || editor.isDestroyed) {
     return <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-500 dark:border-slate-700">Загрузка редактора…</div>;
   }
 
@@ -543,7 +697,9 @@ export function KnowledgeRichEditor({
       <EditorContent
         editor={editor}
         className="min-h-[min(72vh,640px)] cursor-text bg-white px-4 py-4 sm:px-5 sm:py-5 dark:bg-slate-900/50"
-        onClick={() => editor.chain().focus().run()}
+        onClick={() => {
+          if (!editor.isDestroyed) editor.chain().focus().run();
+        }}
       />
 
       {linkModalOpen && (

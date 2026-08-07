@@ -40,6 +40,7 @@ _COMPLIANCE_PATCH_FIELDS = frozenset({
     "exam_electrical_passed",
     "exam_electrical_date",
     "exam_electrical_valid_to",
+    "exam_electrical_group",
     "pass_has",
     "pass_number",
     "pass_valid_from",
@@ -53,6 +54,11 @@ _PROFILE_PATCH_FIELDS = frozenset({
     "birth_date",
     "position_id",
     "system_ids",
+    "is_remote",
+    "work_address",
+    "is_field_worker",
+    "position_assigned_at",
+    "personnel_number",
 })
 _BULK_PROFILE_KEYS = frozenset({"work_schedule_kind", "gender", "position_id", "system_ids"})
 
@@ -105,6 +111,7 @@ def _row_to_out(user: User) -> EmployeeDirectoryRowOut:
         exam_electrical_passed=bool(p.exam_electrical_passed) if p else False,
         exam_electrical_date=p.exam_electrical_date if p else None,
         exam_electrical_valid_to=p.exam_electrical_valid_to if p else None,
+        exam_electrical_group=p.exam_electrical_group if p else None,
         pass_has=bool(p.pass_has) if p else False,
         pass_number=p.pass_number if p else None,
         pass_valid_from=p.pass_valid_from if p else None,
@@ -113,6 +120,11 @@ def _row_to_out(user: User) -> EmployeeDirectoryRowOut:
         vacation_periods=_vacation_periods_out(p.vacation_periods) if p else [],
         work_schedule_kind=wk,
         gender=gs,
+        is_remote=bool(p.is_remote) if p else False,
+        work_address=p.work_address if p else None,
+        is_field_worker=bool(p.is_field_worker) if p else False,
+        position_assigned_at=p.position_assigned_at if p else None,
+        personnel_number=p.personnel_number if p else None,
     )
 
 

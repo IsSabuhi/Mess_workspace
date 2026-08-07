@@ -18,6 +18,11 @@ import { listSystems } from "../api/systems";
 import { AppShell } from "../components/AppShell";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import {
+  summarizeComplianceRows,
+  validityInfo,
+  type ValidityStatus,
+} from "../lib/employeeComplianceStatus";
+import {
   canEmployeeDirectoryComplianceEdit,
   canEmployeeDirectoryProfileEdit,
   PERM,
@@ -65,13 +70,29 @@ function compareDirectoryRowsBySystems(a: EmployeeDirectoryRowOut, b: EmployeeDi
   return a.full_name.localeCompare(b.full_name, "ru");
 }
 
-type TabId = "compliance" | "profile";
+type TabId = "compliance" | "profile" | "report";
 
 /** Трёхпозиционный фильтр да/нет для API (все = параметр не передаётся). */
 type YesNoFilter = "all" | "yes" | "no";
 
 const filterBarSelect =
   "h-9 w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-800 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100";
+
+const dateFilterInput =
+  "h-9 w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-800 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100";
+
+function statusBadgeClass(status: ValidityStatus): string {
+  if (status === "expired") {
+    return "bg-rose-100 text-rose-800 dark:bg-rose-950/50 dark:text-rose-200";
+  }
+  if (status === "expiring") {
+    return "bg-amber-100 text-amber-900 dark:bg-amber-950/40 dark:text-amber-200";
+  }
+  if (status === "ok") {
+    return "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200";
+  }
+  return "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300";
+}
 
 export function EmployeeDirectoryPage() {
   const { state } = useAuth();
@@ -84,11 +105,15 @@ export function EmployeeDirectoryPage() {
   const tabParam = searchParams.get("tab");
 
   const activeTab: TabId =
-    tabParam === "profile" && showProfileTab ? "profile" : "compliance";
+    tabParam === "report"
+      ? "report"
+      : tabParam === "profile" && showProfileTab
+        ? "profile"
+        : "compliance";
 
   useEffect(() => {
     if (tabParam === "profile" && !showProfileTab) {
-      setSearchParams({ tab: "compliance" }, { replace: true });
+      setSearchParams({}, { replace: true });
     }
   }, [tabParam, showProfileTab, setSearchParams]);
 
@@ -103,6 +128,10 @@ export function EmployeeDirectoryPage() {
   const [filterSchedule, setFilterSchedule] = useState<"" | WorkScheduleKind>("");
   const [filterExamElectrical, setFilterExamElectrical] = useState<YesNoFilter>("all");
   const [filterPassHas, setFilterPassHas] = useState<YesNoFilter>("all");
+  const [examValidFrom, setExamValidFrom] = useState("");
+  const [examValidTo, setExamValidTo] = useState("");
+  const [passValidFrom, setPassValidFrom] = useState("");
+  const [passValidTo, setPassValidTo] = useState("");
   const [filtersPanelOpen, setFiltersPanelOpen] = useState(false);
 
   const [bulkExpanded, setBulkExpanded] = useState(false);
@@ -120,6 +149,7 @@ export function EmployeeDirectoryPage() {
     exam_electrical_passed: false,
     exam_electrical_date: "",
     exam_electrical_valid_to: "",
+    exam_electrical_group: "",
     pass_has: false,
     pass_number: "",
     pass_valid_from: "",
@@ -135,6 +165,11 @@ export function EmployeeDirectoryPage() {
     vacation_periods: [] as VacationPeriod[],
     work_schedule_kind: "five_two" as WorkScheduleKind,
     gender: "unspecified" as EmployeeGender,
+    is_remote: false,
+    work_address: "",
+    is_field_worker: false,
+    position_assigned_at: "",
+    personnel_number: "",
   });
 
   const filters = useMemo(
@@ -149,8 +184,13 @@ export function EmployeeDirectoryPage() {
       exam_electrical_passed:
         filterExamElectrical === "all" ? undefined : filterExamElectrical === "yes",
       pass_has: filterPassHas === "all" ? undefined : filterPassHas === "yes",
+      exam_valid_to_from: activeTab === "report" && examValidFrom ? examValidFrom : undefined,
+      exam_valid_to_to: activeTab === "report" && examValidTo ? examValidTo : undefined,
+      pass_valid_to_from: activeTab === "report" && passValidFrom ? passValidFrom : undefined,
+      pass_valid_to_to: activeTab === "report" && passValidTo ? passValidTo : undefined,
     }),
     [
+      activeTab,
       search,
       filterSystemIds,
       filterPositionIds,
@@ -160,6 +200,10 @@ export function EmployeeDirectoryPage() {
       filterSchedule,
       filterExamElectrical,
       filterPassHas,
+      examValidFrom,
+      examValidTo,
+      passValidFrom,
+      passValidTo,
     ],
   );
 
@@ -171,6 +215,10 @@ export function EmployeeDirectoryPage() {
     if (filterSchedule) n++;
     if (filterExamElectrical !== "all") n++;
     if (filterPassHas !== "all") n++;
+    if (examValidFrom) n++;
+    if (examValidTo) n++;
+    if (passValidFrom) n++;
+    if (passValidTo) n++;
     return n;
   }, [
     filterSystemIds,
@@ -181,20 +229,29 @@ export function EmployeeDirectoryPage() {
     filterSchedule,
     filterExamElectrical,
     filterPassHas,
+    examValidFrom,
+    examValidTo,
+    passValidFrom,
+    passValidTo,
   ]);
 
   useEffect(() => {
-    if (!showProfileTab) return;
-    if (activeTab === "compliance") {
+    if (activeTab === "compliance" || activeTab === "report") {
       setFilterGender("");
       setFilterSchedule("");
-    } else {
+      return;
+    }
+    if (activeTab === "profile") {
       setFilterExamElectrical("all");
       setFilterPassHas("all");
       setExpiredOnly(false);
       setExpiringDays("");
+      setExamValidFrom("");
+      setExamValidTo("");
+      setPassValidFrom("");
+      setPassValidTo("");
     }
-  }, [activeTab, showProfileTab]);
+  }, [activeTab]);
 
   const rowsQuery = useQuery({
     queryKey: ["employee-directory", filters],
@@ -267,6 +324,22 @@ export function EmployeeDirectoryPage() {
     setFilterPositionIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   }
 
+  function clearAllFilters() {
+    setSearch("");
+    setFilterSystemIds([]);
+    setFilterPositionIds([]);
+    setExpiredOnly(false);
+    setExpiringDays("");
+    setFilterGender("");
+    setFilterSchedule("");
+    setFilterExamElectrical("all");
+    setFilterPassHas("all");
+    setExamValidFrom("");
+    setExamValidTo("");
+    setPassValidFrom("");
+    setPassValidTo("");
+  }
+
   function toggleBulkSystem(id: string) {
     setBulkSystemIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   }
@@ -325,6 +398,7 @@ export function EmployeeDirectoryPage() {
 
   const rows = rowsQuery.data ?? [];
   const displayRows = useMemo(() => [...rows].sort(compareDirectoryRowsBySystems), [rows]);
+  const reportSummary = useMemo(() => summarizeComplianceRows(displayRows), [displayRows]);
 
   function openComplianceEdit(row: EmployeeDirectoryRowOut) {
     setEditingCompliance(row);
@@ -332,6 +406,7 @@ export function EmployeeDirectoryPage() {
       exam_electrical_passed: row.exam_electrical_passed,
       exam_electrical_date: asInputDate(row.exam_electrical_date),
       exam_electrical_valid_to: asInputDate(row.exam_electrical_valid_to),
+      exam_electrical_group: row.exam_electrical_group ?? "",
       pass_has: row.pass_has,
       pass_number: row.pass_number ?? "",
       pass_valid_from: asInputDate(row.pass_valid_from),
@@ -353,46 +428,45 @@ export function EmployeeDirectoryPage() {
       })),
       work_schedule_kind: row.work_schedule_kind ?? "five_two",
       gender: row.gender ?? "unspecified",
+      is_remote: row.is_remote ?? false,
+      work_address: row.work_address ?? "",
+      is_field_worker: row.is_field_worker ?? false,
+      position_assigned_at: asInputDate(row.position_assigned_at),
+      personnel_number: row.personnel_number ?? "",
     });
   }
 
   function setTab(tab: TabId) {
-    setSearchParams(tab === "compliance" ? {} : { tab: "profile" });
+    if (tab === "compliance") setSearchParams({});
+    else setSearchParams({ tab });
   }
 
   const noReadAccess =
     user && !hasPermission(user, PERM.EMPLOYEE_DIRECTORY_READ) && (canComplianceEdit || canProfileEdit);
 
+  const tabBtn = (tab: TabId, label: string) => (
+    <button
+      type="button"
+      onClick={() => setTab(tab)}
+      className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
+        activeTab === tab
+          ? "bg-sky-500 text-white shadow-sm"
+          : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+      }`}
+    >
+      {label}
+    </button>
+  );
+
   return (
     <AppShell
       title="Сотрудники"
-      subtitle="Две вкладки: контроль экзамена по ЭБ и пропусков; справочник сотрудника (график, отпуск, система, должность, дата рождения). Права на вкладки задаются отдельно в роли."
+      subtitle="Экзамены и пропуска, справочник сотрудника и отчётность по срокам. Права на редактирование задаются в роли."
     >
       <div className="mb-4 flex flex-wrap gap-2 border-b border-slate-200 pb-2 dark:border-slate-700">
-        <button
-          type="button"
-          onClick={() => setTab("compliance")}
-          className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
-            activeTab === "compliance"
-              ? "bg-sky-500 text-white shadow-sm"
-              : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
-          }`}
-        >
-          Экзамены и пропуска
-        </button>
-        {showProfileTab && (
-          <button
-            type="button"
-            onClick={() => setTab("profile")}
-            className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
-              activeTab === "profile"
-                ? "bg-sky-500 text-white shadow-sm"
-                : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
-            }`}
-          >
-            Справочник сотрудника
-          </button>
-        )}
+        {tabBtn("compliance", "Экзамены и пропуска")}
+        {showProfileTab && tabBtn("profile", "Справочник сотрудника")}
+        {tabBtn("report", "Отчётность")}
       </div>
 
       {noReadAccess && (
@@ -427,19 +501,24 @@ export function EmployeeDirectoryPage() {
                   </span>
                 )}
               </button>
+              {(activeFilterCount > 0 || search.trim()) && (
+                <button
+                  type="button"
+                  onClick={clearAllFilters}
+                  className="inline-flex items-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+                >
+                  Сбросить фильтры
+                </button>
+              )}
             </div>
             {filtersPanelOpen && (
               <div className="mt-3 border-t border-slate-200/80 pt-3 dark:border-slate-700/80">
                 <p className="mb-2 max-w-xl text-[10px] leading-snug text-slate-500 dark:text-slate-400">
                   Системы и должности: без выбора — все; несколько отмеченных — подходит сотрудник с{" "}
                   <span className="font-medium text-slate-600 dark:text-slate-300">любой</span> из них.
-                  {showProfileTab && (
-                    <>
-                      {" "}
-                      Пол и график — на вкладке «Справочник сотрудника»; экзамен, пропуск и сроки — на «Экзамены и
-                      пропуска».
-                    </>
-                  )}
+                  {" "}
+                  Пол и график — на «Справочник сотрудника»; экзамен, пропуск и сроки — на «Экзамены и пропуска» и
+                  «Отчётность».
                 </p>
                 <div className="flex flex-wrap items-end gap-2">
                   <div className="w-[10.75rem] max-w-full shrink-0">
@@ -466,7 +545,7 @@ export function EmployeeDirectoryPage() {
                   </div>
                 </div>
 
-                {activeTab === "compliance" && (
+                {(activeTab === "compliance" || activeTab === "report") && (
                   <div className="mt-2.5 flex flex-wrap items-end gap-2 border-t border-dashed border-slate-200/90 pt-2.5 dark:border-slate-600/80">
                     <label
                       className="flex w-[7.5rem] max-w-full shrink-0 flex-col gap-0.5"
@@ -526,6 +605,54 @@ export function EmployeeDirectoryPage() {
                         className="w-12 border-0 bg-transparent p-0 text-center text-xs tabular-nums text-slate-800 outline-none placeholder:text-slate-400 disabled:opacity-50 dark:text-slate-100"
                       />
                     </div>
+                    {activeTab === "report" && (
+                      <>
+                        <label className="flex w-[9.5rem] max-w-full shrink-0 flex-col gap-0.5">
+                          <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                            ЭБ до с
+                          </span>
+                          <input
+                            type="date"
+                            value={examValidFrom}
+                            onChange={(e) => setExamValidFrom(e.target.value)}
+                            className={dateFilterInput}
+                          />
+                        </label>
+                        <label className="flex w-[9.5rem] max-w-full shrink-0 flex-col gap-0.5">
+                          <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                            ЭБ до по
+                          </span>
+                          <input
+                            type="date"
+                            value={examValidTo}
+                            onChange={(e) => setExamValidTo(e.target.value)}
+                            className={dateFilterInput}
+                          />
+                        </label>
+                        <label className="flex w-[9.5rem] max-w-full shrink-0 flex-col gap-0.5">
+                          <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                            Пропуск до с
+                          </span>
+                          <input
+                            type="date"
+                            value={passValidFrom}
+                            onChange={(e) => setPassValidFrom(e.target.value)}
+                            className={dateFilterInput}
+                          />
+                        </label>
+                        <label className="flex w-[9.5rem] max-w-full shrink-0 flex-col gap-0.5">
+                          <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                            Пропуск до по
+                          </span>
+                          <input
+                            type="date"
+                            value={passValidTo}
+                            onChange={(e) => setPassValidTo(e.target.value)}
+                            className={dateFilterInput}
+                          />
+                        </label>
+                      </>
+                    )}
                   </div>
                 )}
 
@@ -732,6 +859,9 @@ export function EmployeeDirectoryPage() {
                   if (activeTab === "compliance") {
                     const { downloadEmployeeDirectoryComplianceExcel } = await import("../lib/exportEmployeeDirectoryExcel");
                     await downloadEmployeeDirectoryComplianceExcel(displayRows);
+                  } else if (activeTab === "report") {
+                    const { downloadEmployeeDirectoryReportExcel } = await import("../lib/exportEmployeeDirectoryExcel");
+                    await downloadEmployeeDirectoryReportExcel(displayRows);
                   } else {
                     const { downloadEmployeeDirectoryProfileExcel } = await import("../lib/exportEmployeeDirectoryExcel");
                     await downloadEmployeeDirectoryProfileExcel(displayRows);
@@ -773,6 +903,7 @@ export function EmployeeDirectoryPage() {
                       <td className="px-3 py-2 text-xs">{r.systems.map((s) => s.name).join(", ") || "—"}</td>
                       <td className="px-3 py-2 text-xs">
                         {r.exam_electrical_passed ? "Сдан" : "Нет"}
+                        {r.exam_electrical_group ? ` · гр. ${r.exam_electrical_group}` : ""}
                         <br />
                         до: {r.exam_electrical_valid_to ? asInputDate(r.exam_electrical_valid_to) : "—"}
                       </td>
@@ -807,17 +938,105 @@ export function EmployeeDirectoryPage() {
             </div>
           )}
 
+          {activeTab === "report" && (
+            <>
+              <div className="mb-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+                {[
+                  { label: "Всего", value: reportSummary.total, tone: "bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-100" },
+                  { label: "ЭБ просрочен", value: reportSummary.examExpired, tone: "bg-rose-100 text-rose-800 dark:bg-rose-950/40 dark:text-rose-200" },
+                  { label: "ЭБ ≤3 дн.", value: reportSummary.examExpiring3, tone: "bg-amber-100 text-amber-900 dark:bg-amber-950/40 dark:text-amber-200" },
+                  { label: "ЭБ нет/без даты", value: reportSummary.examNone, tone: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300" },
+                  { label: "Пропуск просрочен", value: reportSummary.passExpired, tone: "bg-rose-100 text-rose-800 dark:bg-rose-950/40 dark:text-rose-200" },
+                  { label: "Пропуск ≤3 дн.", value: reportSummary.passExpiring3, tone: "bg-amber-100 text-amber-900 dark:bg-amber-950/40 dark:text-amber-200" },
+                  { label: "Пропуск нет/без даты", value: reportSummary.passNone, tone: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300" },
+                ].map((card) => (
+                  <div
+                    key={card.label}
+                    className={`rounded-2xl border border-slate-200/70 px-3 py-3 shadow-soft dark:border-slate-700 ${card.tone}`}
+                  >
+                    <p className="text-[10px] font-medium uppercase tracking-wide opacity-80">{card.label}</p>
+                    <p className="mt-1 text-2xl font-semibold tabular-nums">{card.value}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white/80 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
+                <table className="w-full min-w-[980px] text-left text-sm">
+                  <thead className="bg-slate-50 dark:bg-slate-800/70">
+                    <tr>
+                      <th className="px-3 py-2">Сотрудник</th>
+                      <th className="px-3 py-2">Должность</th>
+                      <th className="px-3 py-2">Системы</th>
+                      <th className="px-3 py-2">Экзамен ЭБ</th>
+                      <th className="px-3 py-2">Статус ЭБ</th>
+                      <th className="px-3 py-2">Пропуск</th>
+                      <th className="px-3 py-2">Статус пропуска</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
+                    {displayRows.map((r) => {
+                      const exam = validityInfo(r.exam_electrical_valid_to, r.exam_electrical_passed);
+                      const pass = validityInfo(r.pass_valid_to, r.pass_has);
+                      return (
+                        <tr key={r.id}>
+                          <td className="px-3 py-2">
+                            <p className="font-medium text-slate-900 dark:text-white">{r.full_name}</p>
+                            <p className="text-xs text-slate-500">{r.email}</p>
+                          </td>
+                          <td className="px-3 py-2">{r.position?.name ?? "—"}</td>
+                          <td className="px-3 py-2 text-xs">{r.systems.map((s) => s.name).join(", ") || "—"}</td>
+                          <td className="px-3 py-2 text-xs">
+                            {r.exam_electrical_passed ? "Сдан" : "Нет"}
+                            {r.exam_electrical_group ? ` · гр. ${r.exam_electrical_group}` : ""}
+                            <br />
+                            до: {r.exam_electrical_valid_to ? asInputDate(r.exam_electrical_valid_to) : "—"}
+                          </td>
+                          <td className="px-3 py-2">
+                            <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${statusBadgeClass(exam.status)}`}>
+                              {exam.label}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-xs">
+                            {r.pass_has ? `Есть (${r.pass_number ?? "без №"})` : "Нет"}
+                            <br />
+                            до: {r.pass_valid_to ? asInputDate(r.pass_valid_to) : "—"}
+                          </td>
+                          <td className="px-3 py-2">
+                            <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${statusBadgeClass(pass.status)}`}>
+                              {pass.label}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {!rowsQuery.isPending && rows.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="px-3 py-6 text-center text-sm text-slate-500">
+                          По выбранным фильтрам данных нет.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+
           {activeTab === "profile" && showProfileTab && (
             <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white/80 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
-              <table className="w-full min-w-[960px] text-left text-sm">
+              <table className="w-full min-w-[1280px] text-left text-sm">
                 <thead className="bg-slate-50 dark:bg-slate-800/70">
                   <tr>
                     <th className="px-3 py-2">Сотрудник</th>
+                    <th className="px-3 py-2">Табельный №</th>
                     <th className="px-3 py-2">Дата рождения</th>
                     <th className="px-3 py-2">Должность</th>
+                    <th className="px-3 py-2">Дата должности</th>
                     <th className="px-3 py-2">Системы</th>
                     <th className="px-3 py-2">Пол</th>
                     <th className="px-3 py-2">График (авто)</th>
+                    <th className="px-3 py-2">Удалёнщик</th>
+                    <th className="px-3 py-2">Адрес работы</th>
+                    <th className="px-3 py-2">Выездной</th>
                     <th className="px-3 py-2">Отпуск / больничный</th>
                     {canProfileEdit && <th className="px-3 py-2">Действия</th>}
                   </tr>
@@ -829,11 +1048,22 @@ export function EmployeeDirectoryPage() {
                         <p className="font-medium text-slate-900 dark:text-white">{r.full_name}</p>
                         <p className="text-xs text-slate-500">{r.email}</p>
                       </td>
+                      <td className="px-3 py-2 font-mono text-xs">{r.personnel_number?.trim() || "—"}</td>
                       <td className="px-3 py-2 text-xs">{r.birth_date ? asInputDate(r.birth_date) : "—"}</td>
                       <td className="px-3 py-2">{r.position?.name ?? "—"}</td>
+                      <td className="px-3 py-2 text-xs">
+                        {r.position_assigned_at ? asInputDate(r.position_assigned_at) : "—"}
+                      </td>
                       <td className="px-3 py-2 text-xs">{r.systems.map((s) => s.name).join(", ") || "—"}</td>
                       <td className="px-3 py-2 text-xs">{formatGenderCell(r.gender)}</td>
                       <td className="px-3 py-2 text-xs">{formatScheduleSummary(r)}</td>
+                      <td className="px-3 py-2 text-xs">{r.is_remote ? "Да" : "Нет"}</td>
+                      <td className="max-w-[18rem] px-3 py-2 text-xs">
+                        <span className="line-clamp-2" title={r.work_address ?? ""}>
+                          {r.work_address?.trim() || "—"}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-xs">{r.is_field_worker ? "Да" : "Нет"}</td>
                       <td className="px-3 py-2 text-xs">
                         {(r.vacation_periods?.length ?? 0) > 0
                           ? `${r.vacation_periods!.length} период(ов)`
@@ -854,7 +1084,7 @@ export function EmployeeDirectoryPage() {
                   ))}
                   {!rowsQuery.isPending && rows.length === 0 && (
                     <tr>
-                      <td colSpan={canProfileEdit ? 8 : 7} className="px-3 py-6 text-center text-sm text-slate-500">
+                      <td colSpan={canProfileEdit ? 13 : 12} className="px-3 py-6 text-center text-sm text-slate-500">
                         По выбранным фильтрам данных нет.
                       </td>
                     </tr>
@@ -891,6 +1121,7 @@ export function EmployeeDirectoryPage() {
                     exam_electrical_passed: complianceForm.exam_electrical_passed,
                     exam_electrical_date: complianceForm.exam_electrical_date || null,
                     exam_electrical_valid_to: complianceForm.exam_electrical_valid_to || null,
+                    exam_electrical_group: complianceForm.exam_electrical_group || null,
                     pass_has: complianceForm.pass_has,
                     pass_number: complianceForm.pass_number.trim() || null,
                     pass_valid_from: complianceForm.pass_valid_from || null,
@@ -908,6 +1139,21 @@ export function EmployeeDirectoryPage() {
                   onChange={(e) => setComplianceForm((p) => ({ ...p, exam_electrical_passed: e.target.checked }))}
                 />
                 Экзамен по электробезопасности сдан
+              </label>
+              <label className="block text-sm">
+                <span className="mb-1 block text-xs text-slate-500 dark:text-slate-400">Группа по электробезопасности</span>
+                <select
+                  value={complianceForm.exam_electrical_group}
+                  onChange={(e) => setComplianceForm((p) => ({ ...p, exam_electrical_group: e.target.value }))}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+                >
+                  <option value="">Не указана</option>
+                  <option value="I">I группа</option>
+                  <option value="II">II группа</option>
+                  <option value="III">III группа</option>
+                  <option value="IV">IV группа</option>
+                  <option value="V">V группа</option>
+                </select>
               </label>
               <div className="grid grid-cols-2 gap-2 text-xs text-slate-500 dark:text-slate-400">
                 <span>Дата сдачи</span>
@@ -1018,11 +1264,27 @@ export function EmployeeDirectoryPage() {
                     vacation_periods,
                     work_schedule_kind: profileForm.work_schedule_kind,
                     gender: profileForm.gender,
+                    is_remote: profileForm.is_remote,
+                    work_address: profileForm.work_address.trim() || null,
+                    is_field_worker: profileForm.is_field_worker,
+                    position_assigned_at: profileForm.position_assigned_at || null,
+                    personnel_number: profileForm.personnel_number.trim() || null,
                   },
                 });
               }}
               className="space-y-3"
             >
+              <label className="block text-xs text-slate-500 dark:text-slate-400">
+                Табельный номер
+                <input
+                  type="text"
+                  maxLength={64}
+                  value={profileForm.personnel_number}
+                  onChange={(e) => setProfileForm((p) => ({ ...p, personnel_number: e.target.value }))}
+                  placeholder="Например: 00123"
+                  className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 font-mono text-sm dark:border-slate-600 dark:bg-slate-800"
+                />
+              </label>
               <label className="block text-xs text-slate-500 dark:text-slate-400">
                 Дата рождения
                 <input
@@ -1047,6 +1309,45 @@ export function EmployeeDirectoryPage() {
                   ))}
                 </select>
               </label>
+              <label className="block text-xs text-slate-500 dark:text-slate-400">
+                Дата должности
+                <input
+                  type="date"
+                  value={profileForm.position_assigned_at}
+                  onChange={(e) => setProfileForm((p) => ({ ...p, position_assigned_at: e.target.value }))}
+                  className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+                />
+                <span className="mt-1 block text-[11px] text-slate-400">Когда сотрудник получил текущую должность</span>
+              </label>
+              <div className="grid gap-3 rounded-xl border border-slate-200/80 bg-slate-50/80 p-3 sm:grid-cols-2 dark:border-slate-600 dark:bg-slate-800/40">
+                <label className="flex items-center gap-2 text-sm text-slate-800 dark:text-slate-100">
+                  <input
+                    type="checkbox"
+                    checked={profileForm.is_remote}
+                    onChange={(e) => setProfileForm((p) => ({ ...p, is_remote: e.target.checked }))}
+                  />
+                  Удалёнщик
+                </label>
+                <label className="flex items-center gap-2 text-sm text-slate-800 dark:text-slate-100">
+                  <input
+                    type="checkbox"
+                    checked={profileForm.is_field_worker}
+                    onChange={(e) => setProfileForm((p) => ({ ...p, is_field_worker: e.target.checked }))}
+                  />
+                  Выездной
+                </label>
+                <label className="block text-xs text-slate-500 sm:col-span-2 dark:text-slate-400">
+                  Адрес работы
+                  <input
+                    type="text"
+                    maxLength={512}
+                    value={profileForm.work_address}
+                    onChange={(e) => setProfileForm((p) => ({ ...p, work_address: e.target.value }))}
+                    placeholder="Например: г. Москва, ул. Примерная, 1"
+                    className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+                  />
+                </label>
+              </div>
               <div className="rounded-xl border border-slate-200/80 bg-slate-50/80 p-3 dark:border-slate-600 dark:bg-slate-800/40">
                 <p className="text-sm font-medium text-slate-800 dark:text-slate-100">Производственные системы</p>
                 <div className="mt-2 flex max-h-40 flex-col gap-2 overflow-y-auto">

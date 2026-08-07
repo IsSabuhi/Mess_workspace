@@ -36,6 +36,9 @@ export async function listAuditEvents(params?: {
   entity_type?: string;
   action?: string;
   q?: string;
+  actor_user_id?: string;
+  actor_q?: string;
+  system_only?: boolean;
 }): Promise<AuditEventOut[]> {
   const sp = new URLSearchParams();
   if (typeof params?.limit === "number") sp.set("limit", String(params.limit));
@@ -43,6 +46,9 @@ export async function listAuditEvents(params?: {
   if (params?.entity_type?.trim()) sp.set("entity_type", params.entity_type.trim());
   if (params?.action?.trim()) sp.set("action", params.action.trim());
   if (params?.q?.trim()) sp.set("q", params.q.trim());
+  if (params?.actor_user_id?.trim()) sp.set("actor_user_id", params.actor_user_id.trim());
+  if (params?.actor_q?.trim()) sp.set("actor_q", params.actor_q.trim());
+  if (params?.system_only) sp.set("system_only", "true");
   const qs = sp.toString();
   return apiFetch<AuditEventOut[]>(`/api/v1/audit/events${qs ? `?${qs}` : ""}`);
 }

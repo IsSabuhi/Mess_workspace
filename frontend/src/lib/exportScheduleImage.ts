@@ -185,19 +185,34 @@ export async function downloadSchedulePng(input: ScheduleImageInput): Promise<vo
   ctx.fillStyle = COLORS.headerBg;
   ctx.fillRect(ox, oy, tableW, headerH);
 
-  // Колонка ФИО
+  const systemX = ox;
+  const nameX = ox + systemW;
+  const daysX = nameX + nameW;
+  const hoursX = daysX + colCount * dayW;
+
+  // Система
+  ctx.fillStyle = COLORS.headerBg;
+  ctx.fillRect(systemX, oy, systemW, headerH);
   ctx.strokeStyle = COLORS.border;
   ctx.lineWidth = 1;
-  ctx.strokeRect(ox + 0.5, oy + 0.5, nameW - 1, headerH - 1);
+  ctx.strokeRect(systemX + 0.5, oy + 0.5, systemW - 1, headerH - 1);
+  ctx.fillStyle = COLORS.headerText;
+  ctx.font = '600 10px "Segoe UI", system-ui, sans-serif';
+  ctx.textAlign = "center";
+  ctx.fillText("Система", systemX + systemW / 2, oy + headerH / 2);
+
+  // Колонка ФИО
+  ctx.strokeStyle = COLORS.border;
+  ctx.strokeRect(nameX + 0.5, oy + 0.5, nameW - 1, headerH - 1);
   ctx.fillStyle = COLORS.headerText;
   ctx.font = '600 11px "Segoe UI", system-ui, sans-serif';
   ctx.textAlign = "left";
-  ctx.fillText("ФИО", ox + 10, oy + headerH / 2);
+  ctx.fillText("ФИО", nameX + 10, oy + headerH / 2);
 
   // Дни: верх — weekday, низ — число
   for (let i = 0; i < dayNumbers.length; i += 1) {
     const d = dayNumbers[i]!;
-    const x = ox + nameW + i * dayW;
+    const x = daysX + i * dayW;
     const fill = dayColumnFill(d, dayByNum, gapSet);
     if (fill !== COLORS.bg) {
       ctx.fillStyle = fill;
@@ -215,7 +230,6 @@ export async function downloadSchedulePng(input: ScheduleImageInput): Promise<vo
   }
 
   // Часы
-  const hoursX = ox + nameW + colCount * dayW;
   ctx.fillStyle = COLORS.headerBg;
   ctx.fillRect(hoursX, oy, hoursW, headerH);
   ctx.strokeStyle = COLORS.border;
@@ -225,17 +239,7 @@ export async function downloadSchedulePng(input: ScheduleImageInput): Promise<vo
   ctx.textAlign = "center";
   ctx.fillText("Часы", hoursX + hoursW / 2, oy + headerH / 2);
 
-  // Система
-  const systemX = hoursX + hoursW;
-  ctx.fillStyle = COLORS.headerBg;
-  ctx.fillRect(systemX, oy, systemW, headerH);
-  ctx.strokeStyle = COLORS.border;
-  ctx.strokeRect(systemX + 0.5, oy + 0.5, systemW - 1, headerH - 1);
-  ctx.fillStyle = COLORS.headerText;
-  ctx.font = '600 10px "Segoe UI", system-ui, sans-serif';
-  ctx.fillText("Система", systemX + systemW / 2, oy + headerH / 2);
-
-  // Строки + объединённая колонка «Система»
+  // Строки + объединённая колонка «Система» слева
   let rowIndex = 0;
   for (const group of groups) {
     const groupStart = rowIndex;
@@ -248,9 +252,9 @@ export async function downloadSchedulePng(input: ScheduleImageInput): Promise<vo
 
       // ФИО
       ctx.fillStyle = baseFill;
-      ctx.fillRect(ox, y, nameW, rowH);
+      ctx.fillRect(nameX, y, nameW, rowH);
       ctx.strokeStyle = COLORS.border;
-      ctx.strokeRect(ox + 0.5, y + 0.5, nameW - 1, rowH - 1);
+      ctx.strokeRect(nameX + 0.5, y + 0.5, nameW - 1, rowH - 1);
       ctx.fillStyle = COLORS.text;
       ctx.font = '600 12px "Segoe UI", system-ui, sans-serif';
       ctx.textAlign = "left";
@@ -259,12 +263,12 @@ export async function downloadSchedulePng(input: ScheduleImageInput): Promise<vo
       while (ctx.measureText(drawName).width > nameW - 16 && drawName.length > 1) {
         drawName = `${drawName.slice(0, -2)}…`;
       }
-      ctx.fillText(drawName, ox + 8, y + rowH / 2);
+      ctx.fillText(drawName, nameX + 8, y + rowH / 2);
 
       // Дни
       for (let i = 0; i < dayNumbers.length; i += 1) {
         const d = dayNumbers[i]!;
-        const x = ox + nameW + i * dayW;
+        const x = daysX + i * dayW;
         const colTint = dayColumnFill(d, dayByNum, gapSet);
         ctx.fillStyle = color ? baseFill : colTint;
         ctx.fillRect(x, y, dayW, rowH);

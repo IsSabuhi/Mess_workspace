@@ -70,6 +70,7 @@ class User(Base):
     notifications: Mapped[list["Notification"]] = relationship(
         "Notification",
         back_populates="user",
+        foreign_keys="Notification.user_id",
         cascade="all, delete-orphan",
     )
     task_comments: Mapped[list["TaskComment"]] = relationship(

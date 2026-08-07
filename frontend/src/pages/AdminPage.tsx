@@ -19,7 +19,7 @@ import type { SystemOut } from "../api/systems";
 import { getTaskArchiveSettings, listSystems, updateTaskArchiveSettings } from "../api/systems";
 import { importTasksFromExcel } from "../api/tasks";
 import type { TaskExcelImportBatchOut } from "../api/tasks";
-import type { UserCreate, UserUpdate } from "../api/users";
+import type { UserCreate, UserListOut, UserUpdate } from "../api/users";
 import { createUser, deleteUser, importUsersFromExcel, listUsers, updateUser } from "../api/users";
 import { AppShell } from "../components/AppShell";
 import { useAuth } from "../context/AuthContext";
@@ -676,8 +676,7 @@ function SystemSettingsSection() {
         <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-5 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
           <h3 className="text-base font-semibold text-slate-900 dark:text-white">Импорт сотрудников из Excel</h3>
           <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-            Загрузите файл `xlsx` с колонками «УчетнаяЗапись», «ФИО», «Должность» (опционально «Системы»). Для новых
-            сотрудников пароль по умолчанию будет равен их учётной записи.
+            Загрузите файл `xlsx` с колонками «УчетнаяЗапись», «ФИО», «Должность» (опционально «Системы»).
           </p>
           <form
             className="mt-4 flex flex-wrap items-center gap-3"
@@ -757,8 +756,7 @@ function SystemSettingsSection() {
         <h3 className="text-base font-semibold text-slate-900 dark:text-white">Импорт задач из задачника Excel</h3>
         <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
           Можно загрузить <strong>несколько файлов</strong> сразу (по одному на систему). Система определяется по
-          имени файла/листа (например «Задачник СМЗиС.xlsx» → СМЗиС). Задачи — на основную доску MES: закрытые в
-          «Выполнено», остальные в «В работе».
+          имени файла/листа (например «Задачник СМЗиС.xlsx» → СМЗиС).
         </p>
         <button
           type="button"
@@ -938,23 +936,55 @@ function AuditLogSection() {
   const [auditFilterEntityType, setAuditFilterEntityType] = useState("");
   const [auditFilterAction, setAuditFilterAction] = useState("");
   const [auditFilterQuery, setAuditFilterQuery] = useState("");
+  /** "" = все, "__system__" = без автора, иначе UUID пользователя */
+  const [auditFilterActor, setAuditFilterActor] = useState("");
+  const [auditFilterActorQ, setAuditFilterActorQ] = useState("");
+
+  const usersQuery = useQuery({
+    queryKey: ["admin", "users", "audit-filter"],
+    queryFn: () => listUsers({ limit: 500, offset: 0 }),
+  });
+  const actorUsers = useMemo(() => {
+    const rows = usersQuery.data?.items ?? [];
+    return [...rows].sort((a, b) => a.full_name.localeCompare(b.full_name, "ru"));
+  }, [usersQuery.data]);
+
   const auditEventsQuery = useQuery({
-    queryKey: ["admin", "audit-events", auditFilterEntityType, auditFilterAction, auditFilterQuery],
+    queryKey: [
+      "admin",
+      "audit-events",
+      auditFilterEntityType,
+      auditFilterAction,
+      auditFilterQuery,
+      auditFilterActor,
+      auditFilterActorQ,
+    ],
     queryFn: () =>
       listAuditEvents({
         limit: 200,
         entity_type: auditFilterEntityType || undefined,
         action: auditFilterAction || undefined,
         q: auditFilterQuery || undefined,
+        actor_user_id:
+          auditFilterActor && auditFilterActor !== "__system__" ? auditFilterActor : undefined,
+        system_only: auditFilterActor === "__system__" || undefined,
+        actor_q: auditFilterActorQ || undefined,
       }),
   });
   useToastQueryError(auditEventsQuery.error, "Не удалось загрузить журнал аудита");
+
+  const hasAuditFilters =
+    !!auditFilterEntityType.trim() ||
+    !!auditFilterAction.trim() ||
+    !!auditFilterQuery.trim() ||
+    !!auditFilterActor ||
+    !!auditFilterActorQ.trim();
 
   return (
     <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-5 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
       <h3 className="text-base font-semibold text-slate-900 dark:text-white">Журнал аудита</h3>
       <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-        Общий журнал событий по системе. Используйте фильтры для поиска нужных действий.
+        Общий журнал событий по системе. Используйте фильтры для поиска нужных действий и авторов.
       </p>
       <div className="mt-4 mb-3 flex flex-wrap items-center gap-2">
         <input
@@ -969,12 +999,47 @@ function AuditLogSection() {
           placeholder="Действие (например board.updated)"
           className="w-64 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
         />
+        <select
+          value={auditFilterActor}
+          onChange={(e) => setAuditFilterActor(e.target.value)}
+          className="min-w-[14rem] max-w-xs rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+          title="Фильтр по столбцу «Кто»"
+        >
+          <option value="">Кто: все</option>
+          <option value="__system__">Кто: Система</option>
+          {actorUsers.map((u) => (
+            <option key={u.id} value={u.id}>
+              {u.full_name} ({u.email})
+            </option>
+          ))}
+        </select>
+        <input
+          value={auditFilterActorQ}
+          onChange={(e) => setAuditFilterActorQ(e.target.value)}
+          placeholder="Кто: поиск по ФИО / email"
+          className="w-56 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+        />
         <input
           value={auditFilterQuery}
           onChange={(e) => setAuditFilterQuery(e.target.value)}
           placeholder="Поиск по действию/деталям"
-          className="min-w-[16rem] flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+          className="min-w-[14rem] flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
         />
+        {hasAuditFilters && (
+          <button
+            type="button"
+            onClick={() => {
+              setAuditFilterEntityType("");
+              setAuditFilterAction("");
+              setAuditFilterQuery("");
+              setAuditFilterActor("");
+              setAuditFilterActorQ("");
+            }}
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+          >
+            Сбросить
+          </button>
+        )}
       </div>
       <div className="max-h-96 overflow-auto rounded-xl border border-slate-200 dark:border-slate-700">
         <table className="w-full min-w-[860px] text-left text-sm">
@@ -1020,52 +1085,71 @@ function AuditLogSection() {
   );
 }
 
+const USERS_PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
+
 function UsersSection() {
   const { state: authState } = useAuth();
   const currentUserId = authState.status === "authenticated" ? authState.user.id : "";
   const qc = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
-  const [editId, setEditId] = useState<string | null>(null);
+  const [editUser, setEditUser] = useState<UserOut | null>(null);
   const [userSearch, setUserSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState<(typeof USERS_PAGE_SIZE_OPTIONS)[number]>(50);
 
-  const usersQuery = useQuery({ queryKey: ["admin", "users"], queryFn: listUsers });
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedSearch(userSearch.trim()), 300);
+    return () => window.clearTimeout(t);
+  }, [userSearch]);
+
+  useEffect(() => {
+    setPage(0);
+  }, [debouncedSearch, pageSize]);
+
+  const usersQuery = useQuery({
+    queryKey: ["admin", "users", page, pageSize, debouncedSearch],
+    queryFn: () =>
+      listUsers({
+        limit: pageSize,
+        offset: page * pageSize,
+        q: debouncedSearch || undefined,
+      }),
+    placeholderData: (prev) => prev,
+  });
   const rolesQuery = useQuery({ queryKey: ["admin", "roles"], queryFn: listRoles });
   const positionsQuery = useQuery({ queryKey: ["positions", "dropdown"], queryFn: () => listPositions(true) });
   const systemsQuery = useQuery({ queryKey: ["systems", "admin-users"], queryFn: () => listSystems(true) });
 
-  const users = usersQuery.data ?? null;
+  const pageData: UserListOut | undefined = usersQuery.data;
+  const users = pageData?.items ?? [];
+  const total = pageData?.total ?? 0;
   const roles = rolesQuery.data ?? [];
   const positions = positionsQuery.data ?? [];
   const systems = systemsQuery.data ?? [];
-  const loading =
-    usersQuery.isPending || rolesQuery.isPending || positionsQuery.isPending || systemsQuery.isPending;
+  const bootLoading =
+    (usersQuery.isPending && !pageData) ||
+    rolesQuery.isPending ||
+    positionsQuery.isPending ||
+    systemsQuery.isPending;
   useToastQueryError(usersQuery.error, "Не удалось загрузить пользователей");
   useToastQueryError(rolesQuery.error, "Не удалось загрузить роли");
   useToastQueryError(positionsQuery.error, "Не удалось загрузить должности");
   useToastQueryError(systemsQuery.error, "Не удалось загрузить системы");
 
-  const editUser = useMemo(() => users?.find((x) => x.id === editId) ?? null, [users, editId]);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const rangeFrom = total === 0 ? 0 : page * pageSize + 1;
+  const rangeTo = Math.min(total, (page + 1) * pageSize);
 
-  const filteredUsers = useMemo(() => {
-    if (!users) return [];
-    const q = userSearch.trim().toLowerCase();
-    if (!q) return users;
-    return users.filter((u) => {
-      const name = (u.full_name ?? "").toLowerCase();
-      const email = (u.email ?? "").toLowerCase();
-      return name.includes(q) || email.includes(q);
-    });
-  }, [users, userSearch]);
+  useEffect(() => {
+    if (page > 0 && page >= totalPages) {
+      setPage(totalPages - 1);
+    }
+  }, [page, totalPages]);
 
-  const mergeUserIntoListCache = (u: UserOut) => {
-    qc.setQueryData<UserOut[]>(["admin", "users"], (prev) => {
-      if (!prev) return [u];
-      const i = prev.findIndex((x) => x.id === u.id);
-      if (i === -1) return [...prev, u].sort((a, b) => a.email.localeCompare(b.email));
-      const next = [...prev];
-      next[i] = u;
-      return next;
-    });
+  const refreshUsers = async () => {
+    await invalidateAndRefetch(qc, ["admin", "users"]);
+    await qc.invalidateQueries({ queryKey: ["admin", "users", "audit-filter"] });
   };
 
   return (
@@ -1084,84 +1168,129 @@ function UsersSection() {
         </button>
       </div>
 
-      {loading && <p className="text-slate-500">Загрузка…</p>}
+      {bootLoading && <p className="text-slate-500">Загрузка…</p>}
 
-      {!loading && users && (
+      {!bootLoading && (
         <div className="space-y-2">
-          <input
-            type="search"
-            value={userSearch}
-            onChange={(e) => setUserSearch(e.target.value)}
-            placeholder="Поиск по ФИО или email…"
-            className="w-full max-w-md rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
-            autoComplete="off"
-          />
+          <div className="flex flex-wrap items-center gap-3">
+            <input
+              type="search"
+              value={userSearch}
+              onChange={(e) => setUserSearch(e.target.value)}
+              placeholder="Поиск по ФИО или email…"
+              className="w-full max-w-md rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+              autoComplete="off"
+            />
+            <label className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+              На странице
+              <select
+                value={pageSize}
+                onChange={(e) => setPageSize(Number(e.target.value) as (typeof USERS_PAGE_SIZE_OPTIONS)[number])}
+                className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-800 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+              >
+                {USERS_PAGE_SIZE_OPTIONS.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {usersQuery.isFetching && !usersQuery.isPending && (
+              <span className="text-xs text-slate-400">Обновление…</span>
+            )}
+          </div>
           <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white/80 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
-          <table className="w-full text-left text-sm">
-            <thead className="border-b border-slate-200 bg-slate-50/80 dark:border-slate-700 dark:bg-slate-800/50">
-              <tr>
-                <th className="px-4 py-3 font-semibold">Сотрудник</th>
-                <th className="px-4 py-3 font-semibold">Должность</th>
-                <th className="px-4 py-3 font-semibold">Системы</th>
-                <th className="px-4 py-3 font-semibold">Роли</th>
-                <th className="px-4 py-3 font-semibold">Статус</th>
-                <th className="px-4 py-3 font-semibold text-right">Действия</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-              {filteredUsers.length === 0 && (
+            <table className="w-full text-left text-sm">
+              <thead className="border-b border-slate-200 bg-slate-50/80 dark:border-slate-700 dark:bg-slate-800/50">
                 <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
-                    Ничего не найдено по запросу.
-                  </td>
+                  <th className="px-4 py-3 font-semibold">Сотрудник</th>
+                  <th className="px-4 py-3 font-semibold">Должность</th>
+                  <th className="px-4 py-3 font-semibold">Системы</th>
+                  <th className="px-4 py-3 font-semibold">Роли</th>
+                  <th className="px-4 py-3 font-semibold">Статус</th>
+                  <th className="px-4 py-3 font-semibold text-right">Действия</th>
                 </tr>
-              )}
-              {filteredUsers.map((u) => (
-                <tr key={u.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40">
-                  <td className="px-4 py-3">
-                    <div className="font-medium text-slate-900 dark:text-white">{u.full_name}</div>
-                    <div className="text-xs text-slate-500">{u.email}</div>
-                  </td>
-                  <td className="px-4 py-3 text-sm text-slate-600 dark:text-slate-300">
-                    {u.position?.name ?? "—"}
-                  </td>
-                  <td className="max-w-[14rem] px-4 py-3 text-sm text-slate-600 dark:text-slate-300">
-                    {u.systems?.length
-                      ? u.systems.map((s) => s.name).join(", ")
-                      : "—"}
-                  </td>
-                  <td className="px-4 py-3 text-slate-600 dark:text-slate-300">
-                    {u.roles.length ? u.roles.map((r) => r.name).join(", ") : "—"}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span
-                      className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
-                        u.is_active
-                          ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200"
-                          : "bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300"
-                      }`}
-                    >
-                      {u.is_active ? "активен" : "выкл"}
-                    </span>
-                    {u.is_superuser && (
-                      <span className="ml-2 inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900 dark:bg-amber-900/40 dark:text-amber-200">
-                        superuser
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
+                {users.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
+                      {debouncedSearch ? "Ничего не найдено по запросу." : "Пользователей пока нет."}
+                    </td>
+                  </tr>
+                )}
+                {users.map((u) => (
+                  <tr key={u.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40">
+                    <td className="px-4 py-3">
+                      <div className="font-medium text-slate-900 dark:text-white">{u.full_name}</div>
+                      <div className="text-xs text-slate-500">{u.email}</div>
+                    </td>
+                    <td className="px-4 py-3 text-sm text-slate-600 dark:text-slate-300">
+                      {u.position?.name ?? "—"}
+                    </td>
+                    <td className="max-w-[14rem] px-4 py-3 text-sm text-slate-600 dark:text-slate-300">
+                      {u.systems?.length ? u.systems.map((s) => s.name).join(", ") : "—"}
+                    </td>
+                    <td className="px-4 py-3 text-slate-600 dark:text-slate-300">
+                      {u.roles.length ? u.roles.map((r) => r.name).join(", ") : "—"}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span
+                        className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
+                          u.is_active
+                            ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200"
+                            : "bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300"
+                        }`}
+                      >
+                        {u.is_active ? "активен" : "выкл"}
                       </span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <button
-                      type="button"
-                      onClick={() => setEditId(u.id)}
-                      className="text-sm font-medium text-sky-600 hover:underline dark:text-sky-400"
-                    >
-                      Изменить
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                      {u.is_superuser && (
+                        <span className="ml-2 inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900 dark:bg-amber-900/40 dark:text-amber-200">
+                          superuser
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <button
+                        type="button"
+                        onClick={() => setEditUser(u)}
+                        className="text-sm font-medium text-sky-600 hover:underline dark:text-sky-400"
+                      >
+                        Изменить
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-slate-600 dark:text-slate-400">
+            <p>
+              {total === 0
+                ? "Нет записей"
+                : `Показано ${rangeFrom}–${rangeTo} из ${total}`}
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={page <= 0 || usersQuery.isFetching}
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+              >
+                Назад
+              </button>
+              <span className="tabular-nums text-xs">
+                стр. {Math.min(page + 1, totalPages)} / {totalPages}
+              </span>
+              <button
+                type="button"
+                disabled={page + 1 >= totalPages || usersQuery.isFetching}
+                onClick={() => setPage((p) => p + 1)}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+              >
+                Вперёд
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1174,10 +1303,10 @@ function UsersSection() {
           systems={systems}
           onClose={() => setCreateOpen(false)}
           onCreate={async (data) => {
-            const created = await createUser(data);
+            await createUser(data);
             setCreateOpen(false);
-            mergeUserIntoListCache(created);
-            await invalidateAndRefetch(qc, ["admin", "users"]);
+            setPage(0);
+            await refreshUsers();
           }}
         />
       )}
@@ -1190,17 +1319,16 @@ function UsersSection() {
           systems={systems}
           initial={editUser}
           currentUserId={currentUserId}
-          onClose={() => setEditId(null)}
+          onClose={() => setEditUser(null)}
           onUpdate={async (data) => {
-            const updated = await updateUser(editUser.id, data);
-            setEditId(null);
-            mergeUserIntoListCache(updated);
-            await invalidateAndRefetch(qc, ["admin", "users"]);
+            await updateUser(editUser.id, data);
+            setEditUser(null);
+            await refreshUsers();
           }}
           onDelete={async () => {
             await deleteUser(editUser.id);
-            setEditId(null);
-            qc.setQueryData<UserOut[]>(["admin", "users"], (prev) => prev?.filter((x) => x.id !== editUser.id) ?? []);
+            setEditUser(null);
+            await refreshUsers();
             await qc.invalidateQueries({ queryKey: ["employee-directory"] });
             await qc.invalidateQueries({ queryKey: ["schedule"] });
             await qc.invalidateQueries({ queryKey: ["users", "assignee-candidates"] });
@@ -1623,11 +1751,14 @@ function RolesSection() {
 
   const rolesQuery = useQuery({ queryKey: ["admin", "roles"], queryFn: listRoles });
   const permsQuery = useQuery({ queryKey: ["admin", "permissions"], queryFn: listPermissionsCatalog });
-  const usersQuery = useQuery({ queryKey: ["admin", "users"], queryFn: listUsers });
+  const usersCountQuery = useQuery({
+    queryKey: ["admin", "users", "count"],
+    queryFn: () => listUsers({ limit: 1, offset: 0 }),
+  });
 
   const roles = rolesQuery.data ?? [];
   const perms = permsQuery.data ?? [];
-  const userCount = usersQuery.data?.length ?? 0;
+  const userCount = usersCountQuery.data?.total ?? 0;
   const loading = rolesQuery.isPending || permsQuery.isPending;
   useToastQueryError(rolesQuery.error, "Не удалось загрузить роли");
   useToastQueryError(permsQuery.error, "Не удалось загрузить права");

@@ -59,7 +59,7 @@ from app.services.authz import user_has_permission, user_sees_all_tasks
 from app.services.audit import list_audit_events_for_entity, record_audit_event
 from app.services.board_lock import can_bypass_board_editing_lock, is_global_board_locked
 from app.services.board_members import allowed_assignee_ids_for_board
-from app.services.file_storage import save_task_file
+from app.services.file_storage import rewrite_stored_media_urls, save_task_file
 from app.services.task_archive import auto_archive_done_tasks
 from app.services.task_excel_import import import_tasks_from_excel_batch
 from app.services.task_policy import (
@@ -145,13 +145,15 @@ def _normalize_checklist(items: list[ChecklistItem] | list[dict] | None) -> list
 
 
 def _attachment_to_out(att: TaskAttachment) -> TaskAttachmentOut:
+    # Старые записи хранят http://host:9000/... — в браузере за HTTPS это blocked / недоступно.
+    public_url = rewrite_stored_media_urls(att.url) or att.url
     return TaskAttachmentOut(
         id=att.id,
         task_id=att.task_id,
         filename=att.filename,
         content_type=att.content_type,
         size_bytes=att.size_bytes,
-        url=att.url,
+        url=public_url,
         uploaded_by_id=att.uploaded_by_id,
         created_at=att.created_at,
         uploaded_by=UserMini.model_validate(att.uploaded_by) if att.uploaded_by else None,

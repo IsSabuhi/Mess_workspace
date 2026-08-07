@@ -52,7 +52,6 @@ class DashboardPreferencesUpdate(BaseModel):
 class ProfileUpdate(BaseModel):
     full_name: str | None = Field(None, max_length=255)
     birth_date: date | None = None
-    position_id: uuid.UUID | None = None
     dashboard_preferences: DashboardPreferencesUpdate | None = None
     # Текущий пароль обязателен на бэкенде, если new_password непустой.
     current_password: str | None = Field(None, max_length=128)

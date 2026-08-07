@@ -61,7 +61,6 @@ export type LoginAuditOut = {
 export type ProfilePatch = {
   full_name?: string;
   birth_date?: string | null;
-  position_id?: string | null;
   dashboard_preferences?: DashboardPreferences;
   /** При must_change_password можно не передавать */
   current_password?: string;

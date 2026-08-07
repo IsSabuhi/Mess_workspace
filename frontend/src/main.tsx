@@ -13,6 +13,28 @@ import 'sonner/dist/styles.css';
 import './index.css';
 import 'highlight.js/styles/vs2015.min.css';
 
+// После деплоя старый main-бандл может тянуть несуществующие lazy-чанки.
+// Один раз перезагружаем страницу, чтобы подтянуть новый index.html с актуальными хэшами.
+const CHUNK_RELOAD_KEY = "mess-chunk-reload";
+function isChunkLoadError(reason: unknown): boolean {
+  const msg = String(
+    reason instanceof Error ? reason.message : (reason as { message?: string })?.message ?? reason ?? "",
+  );
+  return /Failed to fetch dynamically imported module|Importing a module script failed|Loading chunk \d+ failed|Expected a JavaScript-or-Wasm module script/i.test(
+    msg,
+  );
+}
+window.addEventListener("unhandledrejection", (event) => {
+  if (!isChunkLoadError(event.reason)) return;
+  if (sessionStorage.getItem(CHUNK_RELOAD_KEY)) {
+    sessionStorage.removeItem(CHUNK_RELOAD_KEY);
+    return;
+  }
+  sessionStorage.setItem(CHUNK_RELOAD_KEY, "1");
+  event.preventDefault();
+  window.location.reload();
+});
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter basename="/mes">

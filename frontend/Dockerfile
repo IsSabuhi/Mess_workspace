@@ -2,11 +2,11 @@ FROM node:20-alpine AS build
 
 WORKDIR /app
 
-# Прокси настройки
-ARG PROXY_HOST=172.24.230.4
+# Прокси настройки (как в backend/Dockerfile)
+ARG PROXY_HOST=172.24.231.86
 ARG PROXY_PORT=8080
-ARG PROXY_USER=@dm1n
-ARG PROXY_PASS=@dm1n
+ARG PROXY_USER=mes
+ARG PROXY_PASS=0proscon
 
 ENV HTTP_PROXY=http://${PROXY_USER}:${PROXY_PASS}@${PROXY_HOST}:${PROXY_PORT}
 ENV HTTPS_PROXY=http://${PROXY_USER}:${PROXY_PASS}@${PROXY_HOST}:${PROXY_PORT}

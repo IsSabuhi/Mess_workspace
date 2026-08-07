@@ -12,7 +12,6 @@ from app.deps import get_current_user
 from app.models import Notification, User
 from app.schemas.common import Message
 from app.schemas.notification import NotificationOut, NotificationUnreadCount
-from app.services.notifications import sync_task_deadline_notifications
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
@@ -29,7 +28,6 @@ async def list_notifications(
     unread_only: bool = False,
     limit: int = 50,
 ) -> list[NotificationOut]:
-    await sync_task_deadline_notifications(session, user)
     safe_limit = max(1, min(limit, 200))
     stmt = (
         select(Notification)
@@ -48,7 +46,6 @@ async def unread_count(
     session: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
 ) -> NotificationUnreadCount:
-    await sync_task_deadline_notifications(session, user)
     count_stmt = (
         select(func.count(Notification.id))
         .where(Notification.user_id == user.id)

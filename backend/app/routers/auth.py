@@ -9,12 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.http_errors import (
     EMAIL_ALREADY_REGISTERED,
     INVALID_CREDENTIALS,
-    INVALID_POSITION,
     USER_INACTIVE,
 )
 from app.database import get_db
 from app.deps import get_current_user
-from app.models import LoginAudit, Position, Role, User, UserRole
+from app.models import LoginAudit, Role, User, UserRole
 from app.schemas.auth import LoginAuditOut, LoginJson, ProfileUpdate, RegisterIn, Token
 from app.permissions import ALL_PERMISSION_CODES
 from app.schemas.user import UserMeOut
@@ -252,17 +251,6 @@ async def patch_me(
         current.full_name = data["full_name"]
     if "birth_date" in data:
         current.birth_date = data["birth_date"]
-    if "position_id" in data:
-        pid = data["position_id"]
-        if pid is None:
-            current.position_id = None
-        else:
-            pos = await session.get(Position, pid)
-            if not pos:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=INVALID_POSITION)
-            if not pos.is_active and current.position_id != pid:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=INVALID_POSITION)
-            current.position_id = pid
     if "dashboard_preferences" in data and data["dashboard_preferences"] is not None:
         dp = data["dashboard_preferences"]
         cur = dict(current.dashboard_preferences or {})

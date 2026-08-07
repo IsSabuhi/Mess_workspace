@@ -53,11 +53,16 @@ function DirectoryBody({ row }: { row: EmployeeDirectoryRowOut }) {
         <div className="space-y-2">
           <Field label="ФИО">{row.full_name}</Field>
           <Field label="Email">{row.email}</Field>
+          <Field label="Табельный номер">{row.personnel_number?.trim() || "—"}</Field>
           <Field label="Статус">{row.is_active ? "Активен" : "Неактивен"}</Field>
           <Field label="Дата рождения">{fmtDate(row.birth_date)}</Field>
           <Field label="Должность">{row.position?.name ?? "—"}</Field>
+          <Field label="Дата должности">{fmtDate(row.position_assigned_at)}</Field>
           <Field label="Пол">{genderLabel(row.gender)}</Field>
           <Field label="График работы">{workScheduleLabel(row.work_schedule_kind, row.gender)}</Field>
+          <Field label="Удалёнщик">{row.is_remote ? "Да" : "Нет"}</Field>
+          <Field label="Адрес работы">{row.work_address?.trim() || "—"}</Field>
+          <Field label="Выездной">{row.is_field_worker ? "Да" : "Нет"}</Field>
         </div>
       </section>
 
@@ -108,6 +113,7 @@ function DirectoryBody({ row }: { row: EmployeeDirectoryRowOut }) {
         </h3>
         <div className="space-y-2">
           <Field label="Экзамен по электробезопасности">{row.exam_electrical_passed ? "Сдан" : "Не сдан"}</Field>
+          <Field label="Группа по ЭБ">{row.exam_electrical_group ? `${row.exam_electrical_group} группа` : "—"}</Field>
           <Field label="Дата сдачи">{fmtDate(row.exam_electrical_date)}</Field>
           <Field label="Экзамен действителен до">{fmtDate(row.exam_electrical_valid_to)}</Field>
           <Field label="Пропуск">{row.pass_has ? "Есть" : "Нет"}</Field>

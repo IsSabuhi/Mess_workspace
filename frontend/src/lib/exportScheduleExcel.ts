@@ -54,17 +54,17 @@ function buildSheet(wb: ExcelJS.Workbook, sheet: ScheduleExcelSheetInput): void 
   const { year, month, dayNumbers, groups } = sheet;
   const monthName = MONTH_NAMES_RU[Math.max(0, Math.min(11, month - 1))] ?? String(month);
   const ws = wb.addWorksheet(monthName, {
-    views: [{ state: "frozen", ySplit: 2, xSplit: 1 }],
+    views: [{ state: "frozen", ySplit: 2, xSplit: 2 }],
   });
 
-  const colCount = 1 + dayNumbers.length + 2;
+  const colCount = 2 + dayNumbers.length + 1;
   const monthTitle = monthLabel(year, month);
   const titleRow = ws.addRow([monthTitle]);
   titleRow.font = { bold: true, size: 14 };
   titleRow.alignment = { horizontal: "center", vertical: "middle" };
   ws.mergeCells(1, 1, 1, colCount);
 
-  const header = ["Сотрудник", ...dayNumbers.map((d) => String(d)), "Часы", "Система"];
+  const header = ["Система", "Сотрудник", ...dayNumbers.map((d) => String(d)), "Часы"];
   ws.addRow(header);
   ws.getRow(2).font = { bold: true };
   ws.getRow(2).alignment = { vertical: "middle", horizontal: "center", wrapText: true };
@@ -73,19 +73,19 @@ function buildSheet(wb: ExcelJS.Workbook, sheet: ScheduleExcelSheetInput): void 
   for (const group of groups) {
     const groupStart = excelRow;
     for (const row of group.users) {
-      ws.addRow([row.full_name, ...dayNumbers.map((d) => codeAt(row, d)), row.hours_total, group.label]);
+      ws.addRow([group.label, row.full_name, ...dayNumbers.map((d) => codeAt(row, d)), row.hours_total]);
       const color = rowColorHex(row);
       if (color) {
         const fill = { type: "pattern", pattern: "solid", fgColor: { argb: toArgb(color) } } as const;
         // Как на клиенте: красим строку сотрудника, но не колонку "Система".
-        for (let c = 1; c <= colCount - 1; c += 1) {
+        for (let c = 2; c <= colCount; c += 1) {
           ws.getCell(excelRow, c).fill = fill;
         }
       }
       excelRow += 1;
     }
     const groupEnd = excelRow - 1;
-    const systemCol = colCount;
+    const systemCol = 1;
     if (groupEnd > groupStart) {
       ws.mergeCells(groupStart, systemCol, groupEnd, systemCol);
     }
@@ -93,14 +93,14 @@ function buildSheet(wb: ExcelJS.Workbook, sheet: ScheduleExcelSheetInput): void 
     ws.getCell(groupStart, systemCol).alignment = { horizontal: "center", vertical: "middle", wrapText: true };
   }
 
-  ws.columns = [{ width: 30 }, ...dayNumbers.map(() => ({ width: 5.2 })), { width: 10 }, { width: 18 }];
+  ws.columns = [{ width: 18 }, { width: 30 }, ...dayNumbers.map(() => ({ width: 5.2 })), { width: 10 }];
 
   for (let r = 3; r < excelRow; r += 1) {
-    ws.getCell(r, 1).alignment = { horizontal: "left", vertical: "middle" };
+    ws.getCell(r, 2).alignment = { horizontal: "left", vertical: "middle" };
     for (let i = 0; i < dayNumbers.length; i += 1) {
-      ws.getCell(r, 2 + i).alignment = { horizontal: "center", vertical: "middle" };
+      ws.getCell(r, 3 + i).alignment = { horizontal: "center", vertical: "middle" };
     }
-    ws.getCell(r, 2 + dayNumbers.length).alignment = { horizontal: "center", vertical: "middle" };
+    ws.getCell(r, 3 + dayNumbers.length).alignment = { horizontal: "center", vertical: "middle" };
   }
 }
 

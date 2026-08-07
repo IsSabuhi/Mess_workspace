@@ -4,10 +4,10 @@ import json
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import AuditEvent
+from app.models import AuditEvent, User
 from app.models.system_setting import SystemSetting
 
 AUDIT_ENABLED_KEY = "audit_enabled"
@@ -125,6 +125,9 @@ async def list_audit_events(
     entity_type: str | None = None,
     action: str | None = None,
     q: str | None = None,
+    actor_user_id: uuid.UUID | None = None,
+    actor_q: str | None = None,
+    system_only: bool = False,
 ) -> list[AuditEvent]:
     lim = max(1, min(limit, 500))
     off = max(0, offset)
@@ -133,6 +136,22 @@ async def list_audit_events(
         stmt = stmt.where(AuditEvent.entity_type == entity_type[:64])
     if action:
         stmt = stmt.where(AuditEvent.action.ilike(f"%{action[:128]}%"))
+    if system_only:
+        stmt = stmt.where(AuditEvent.actor_user_id.is_(None))
+    elif actor_user_id is not None:
+        stmt = stmt.where(AuditEvent.actor_user_id == actor_user_id)
+    if actor_q and actor_q.strip():
+        needle_actor = f"%{actor_q.strip()[:128]}%"
+        actor_ids = (
+            await session.execute(
+                select(User.id).where(
+                    or_(User.full_name.ilike(needle_actor), User.email.ilike(needle_actor))
+                )
+            )
+        ).scalars().all()
+        if not actor_ids:
+            return []
+        stmt = stmt.where(AuditEvent.actor_user_id.in_(actor_ids))
     if q:
         needle = f"%{q[:128]}%"
         stmt = stmt.where(AuditEvent.action.ilike(needle) | AuditEvent.details_json.ilike(needle))

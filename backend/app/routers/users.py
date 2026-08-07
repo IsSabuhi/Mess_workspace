@@ -2,7 +2,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -24,7 +24,7 @@ from app.models.board import BOARD_SCOPE_SYSTEM
 from app.models.user_system import UserSystem
 from app.permissions import USERS_MANAGE
 from app.schemas.employee_import import EmployeeImportOut
-from app.schemas.user import UserCreate, UserOut, UserUpdate
+from app.schemas.user import UserCreate, UserListOut, UserOut, UserUpdate
 from app.security import hash_password
 from app.services.authz import (
     USER_LOAD_OPTIONS,
@@ -112,15 +112,37 @@ async def list_assignee_candidates(
     return [user_to_out(u) for u in result.scalars().unique().all()]
 
 
-@router.get("", response_model=list[UserOut])
+@router.get("", response_model=UserListOut)
 async def list_users(
     session: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[User, Depends(require_permission(USERS_MANAGE))],
-) -> list[UserOut]:
+    limit: Annotated[int, Query(ge=1, le=500)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    q: Annotated[str | None, Query(max_length=200)] = None,
+) -> UserListOut:
+    filters = []
+    needle = (q or "").strip()
+    if needle:
+        pattern = f"%{needle}%"
+        filters.append(or_(User.email.ilike(pattern), User.full_name.ilike(pattern)))
+
+    count_stmt = select(func.count()).select_from(User)
+    if filters:
+        count_stmt = count_stmt.where(*filters)
+    total = int(await session.scalar(count_stmt) or 0)
+
     stmt = select(User).options(*USER_LOAD_OPTIONS).order_by(User.email)
+    if filters:
+        stmt = stmt.where(*filters)
+    stmt = stmt.offset(offset).limit(limit)
     result = await session.execute(stmt)
     users = result.scalars().unique().all()
-    return [user_to_out(u) for u in users]
+    return UserListOut(
+        items=[user_to_out(u) for u in users],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.post("", response_model=UserOut, status_code=status.HTTP_201_CREATED)

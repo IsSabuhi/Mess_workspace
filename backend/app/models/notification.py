@@ -16,6 +16,10 @@ class NotificationType(str, enum.Enum):
     task_overdue = "task_overdue"
     task_mention = "task_mention"
     release_note = "release_note"
+    employee_pass_due_3_days = "employee_pass_due_3_days"
+    employee_pass_overdue = "employee_pass_overdue"
+    employee_exam_electrical_due_3_days = "employee_exam_electrical_due_3_days"
+    employee_exam_electrical_overdue = "employee_exam_electrical_overdue"
 
 
 class Notification(Base):
@@ -25,6 +29,8 @@ class Notification(Base):
         UniqueConstraint("user_id", "type", "task_id", name="uq_notifications_user_type_task"),
         # Для релиз-нотов — тоже одна запись на пользователя.
         UniqueConstraint("user_id", "type", "release_note_id", name="uq_notifications_user_type_release_note"),
+        # Срок пропуска/экзамена — одна запись на получателя, тип и сотрудника.
+        UniqueConstraint("user_id", "type", "employee_user_id", name="uq_notifications_user_type_employee"),
         Index("ix_notifications_user_created_at", "user_id", "created_at"),
         Index("ix_notifications_user_read_at", "user_id", "read_at"),
     )
@@ -47,6 +53,11 @@ class Notification(Base):
         ForeignKey("release_notes.id", ondelete="CASCADE"),
         nullable=True,
     )
+    employee_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -54,6 +65,7 @@ class Notification(Base):
     )
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    user: Mapped["User"] = relationship("User", back_populates="notifications")
+    user: Mapped["User"] = relationship("User", back_populates="notifications", foreign_keys=[user_id])
     task: Mapped["Task | None"] = relationship("Task")
     release_note: Mapped["ReleaseNote | None"] = relationship("ReleaseNote")
+    employee: Mapped["User | None"] = relationship("User", foreign_keys=[employee_user_id])

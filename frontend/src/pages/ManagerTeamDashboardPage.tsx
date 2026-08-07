@@ -26,7 +26,6 @@ import {
   type TaskAnalyticsFilters,
 } from "../lib/taskAnalyticsFilters";
 import { canViewManagerTeamDashboard } from "../lib/permissions";
-import { downloadAnalyticsReportExcel } from "../lib/exportAnalyticsReportExcel";
 import { taskHasAssignee } from "../lib/taskAssignees";
 import { taskInDoneColumn, taskIsActiveForDashboard } from "../lib/taskStatus";
 import { toastApiError, toastSuccess } from "../lib/toast";
@@ -259,6 +258,7 @@ export function ManagerTeamDashboardPage() {
     if (exportPending) return;
     setExportPending(true);
     try {
+      const { downloadAnalyticsReportExcel } = await import("../lib/exportAnalyticsReportExcel");
       await downloadAnalyticsReportExcel({
         boardScope: filters.boardScope,
         boardLabel: reportBoardLabel,

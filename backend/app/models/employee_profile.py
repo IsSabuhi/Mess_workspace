@@ -23,6 +23,8 @@ class EmployeeProfile(Base):
     exam_electrical_passed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     exam_electrical_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     exam_electrical_valid_to: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Группа по электробезопасности (I–V)
+    exam_electrical_group: Mapped[str | None] = mapped_column(String(8), nullable=True)
 
     pass_has: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     pass_number: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -36,6 +38,13 @@ class EmployeeProfile(Base):
     work_schedule_kind: Mapped[str] = mapped_column(String(32), default=WORK_SCHEDULE_FIVE_TWO, nullable=False)
     # male / female / unspecified — при 5/2 из пола считаются 8 ч или 7.2 ч
     gender: Mapped[str] = mapped_column(String(32), default=EMPLOYEE_GENDER_UNSPECIFIED, nullable=False)
+    # Кадровые признаки и фактическое место работы.
+    is_remote: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    work_address: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    is_field_worker: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Дата назначения на текущую должность
+    position_assigned_at: Mapped[date | None] = mapped_column(Date, nullable=True)
+    personnel_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False

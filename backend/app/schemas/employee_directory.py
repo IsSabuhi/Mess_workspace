@@ -38,6 +38,7 @@ class EmployeeDirectoryRowOut(BaseModel):
     exam_electrical_passed: bool = False
     exam_electrical_date: date | None = None
     exam_electrical_valid_to: date | None = None
+    exam_electrical_group: str | None = None
 
     pass_has: bool = False
     pass_number: str | None = None
@@ -48,6 +49,11 @@ class EmployeeDirectoryRowOut(BaseModel):
     vacation_periods: list[VacationPeriodOut] = Field(default_factory=list)
     work_schedule_kind: Literal["five_two", "shift", "two_two"] = "five_two"
     gender: Literal["male", "female", "unspecified"] = "unspecified"
+    is_remote: bool = False
+    work_address: str | None = None
+    is_field_worker: bool = False
+    position_assigned_at: date | None = None
+    personnel_number: str | None = None
 
 
 class EmployeeDirectoryPatch(BaseModel):
@@ -58,6 +64,7 @@ class EmployeeDirectoryPatch(BaseModel):
     exam_electrical_passed: bool | None = None
     exam_electrical_date: date | None = None
     exam_electrical_valid_to: date | None = None
+    exam_electrical_group: str | None = Field(None, max_length=8)
     pass_has: bool | None = None
     pass_number: str | None = None
     pass_valid_from: date | None = None
@@ -69,6 +76,11 @@ class EmployeeDirectoryPatch(BaseModel):
     )
     work_schedule_kind: Literal["five_two", "shift", "two_two"] | None = None
     gender: Literal["male", "female", "unspecified"] | None = None
+    is_remote: bool | None = None
+    work_address: str | None = Field(None, max_length=512)
+    is_field_worker: bool | None = None
+    position_assigned_at: date | None = None
+    personnel_number: str | None = Field(None, max_length=64)
 
     @model_validator(mode="after")
     def limit_vacation_periods(self) -> "EmployeeDirectoryPatch":

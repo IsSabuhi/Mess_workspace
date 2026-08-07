@@ -62,9 +62,13 @@ function ensureCopyButton(pre: HTMLElement): void {
 
 /**
  * Вешает кнопки копирования на все <pre> внутри root.
- * Следит за изменениями DOM (TipTap / подсветка) и возвращает cleanup.
+ * В редакторе следит только за добавленными узлами, а не сканирует весь DOM при
+ * каждом вводе символа.
  */
-export function attachCodeCopyButtons(root: HTMLElement | null): () => void {
+export function attachCodeCopyButtons(
+  root: HTMLElement | null,
+  options: { observeChanges?: boolean } = {},
+): () => void {
   if (!root) return () => undefined;
 
   const decorate = () => {
@@ -75,13 +79,21 @@ export function attachCodeCopyButtons(root: HTMLElement | null): () => void {
 
   decorate();
 
-  const mo = new MutationObserver(() => {
-    decorate();
-  });
-  mo.observe(root, { childList: true, subtree: true });
+  const mo = options.observeChanges
+    ? new MutationObserver((records) => {
+        for (const record of records) {
+          for (const node of record.addedNodes) {
+            if (!(node instanceof HTMLElement)) continue;
+            if (node.matches("pre")) ensureCopyButton(node);
+            node.querySelectorAll("pre").forEach((pre) => ensureCopyButton(pre));
+          }
+        }
+      })
+    : null;
+  mo?.observe(root, { childList: true, subtree: true });
 
   return () => {
-    mo.disconnect();
+    mo?.disconnect();
     root.querySelectorAll(`.${BTN_CLASS}`).forEach((el) => el.remove());
     root.querySelectorAll(`.${PRE_CLASS}`).forEach((el) => el.classList.remove(PRE_CLASS));
   };

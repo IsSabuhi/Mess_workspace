@@ -1,6 +1,14 @@
 import { apiFetch } from "./client";
 
-export type NotificationType = "task_due_3_days" | "task_overdue" | "task_mention" | "release_note";
+export type NotificationType =
+  | "task_due_3_days"
+  | "task_overdue"
+  | "task_mention"
+  | "release_note"
+  | "employee_pass_due_3_days"
+  | "employee_pass_overdue"
+  | "employee_exam_electrical_due_3_days"
+  | "employee_exam_electrical_overdue";
 
 export type NotificationOut = {
   id: string;

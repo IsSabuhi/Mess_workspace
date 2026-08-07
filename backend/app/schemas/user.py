@@ -68,6 +68,13 @@ class UserOut(ORMModel):
     systems: list[SystemBrief] = []
 
 
+class UserListOut(BaseModel):
+    items: list[UserOut]
+    total: int
+    limit: int
+    offset: int
+
+
 class UserMeOut(UserOut):
     """Профиль текущего пользователя + коды прав для UI."""
 

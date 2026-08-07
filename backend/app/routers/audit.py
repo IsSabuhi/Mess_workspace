@@ -54,6 +54,9 @@ async def get_events(
     entity_type: str | None = None,
     action: str | None = None,
     q: str | None = None,
+    actor_user_id: uuid.UUID | None = None,
+    actor_q: str | None = Query(None, description="Поиск по ФИО или email автора"),
+    system_only: bool = Query(False, description="Только системные события без автора"),
 ) -> list[AuditEventOut]:
     rows = await list_audit_events(
         session,
@@ -62,6 +65,9 @@ async def get_events(
         entity_type=entity_type,
         action=action,
         q=q,
+        actor_user_id=actor_user_id,
+        actor_q=actor_q,
+        system_only=system_only,
     )
     user_ids = {r.actor_user_id for r in rows if r.actor_user_id is not None}
     names_by_id: dict[uuid.UUID, str] = {}

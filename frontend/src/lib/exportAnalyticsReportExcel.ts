@@ -47,7 +47,7 @@ function stamp(d = new Date()): string {
 }
 
 function styleHeaderRow(row: ExcelJS.Row): void {
-  row.eachCell((cell) => {
+  row.eachCell((cell: any) => {
     cell.fill = HEADER_FILL;
     cell.font = HEADER_FONT;
     cell.alignment = { vertical: "middle", horizontal: "left", wrapText: true };

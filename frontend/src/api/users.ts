@@ -30,8 +30,26 @@ export type UserUpdate = {
   must_change_password?: boolean;
 };
 
-export async function listUsers(): Promise<UserOut[]> {
-  return apiFetch<UserOut[]>("/api/v1/users");
+export type UserListOut = {
+  items: UserOut[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type ListUsersParams = {
+  limit?: number;
+  offset?: number;
+  q?: string;
+};
+
+export async function listUsers(params?: ListUsersParams): Promise<UserListOut> {
+  const sp = new URLSearchParams();
+  if (typeof params?.limit === "number") sp.set("limit", String(params.limit));
+  if (typeof params?.offset === "number") sp.set("offset", String(params.offset));
+  if (params?.q?.trim()) sp.set("q", params.q.trim());
+  const qs = sp.toString();
+  return apiFetch<UserListOut>(`/api/v1/users${qs ? `?${qs}` : ""}`);
 }
 
 /** Кандидаты в исполнители: на системной доске — сотрудники системы ∪ участники доски */

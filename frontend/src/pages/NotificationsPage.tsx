@@ -28,9 +28,15 @@ function formatDate(iso: string): string {
 
 function notificationTypeLabel(type: NotificationOut["type"]): string {
   if (type === "release_note") return "Обновление системы";
-  if (type === "task_overdue") return "Просрочено";
   if (type === "task_mention") return "Упоминание";
-  return "До 3 дней";
+  if (type === "task_overdue" || type === "employee_pass_overdue" || type === "employee_exam_electrical_overdue") {
+    return "Просрочено";
+  }
+  if (type === "employee_pass_due_3_days" || type === "employee_exam_electrical_due_3_days") {
+    return "Срок документов";
+  }
+  if (type === "task_due_3_days") return "До 3 дней";
+  return "Уведомление";
 }
 
 export function NotificationsPage() {

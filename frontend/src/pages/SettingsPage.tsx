@@ -5,8 +5,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchLoginHistory, patchProfile } from "../api/auth";
 import type { LoginAuditOut } from "../api/auth";
 import { HOME_DASHBOARD_BLOCK_IDS, isHomeBlockVisible as isDashboardBlockShown } from "../lib/homeDashboardBlocks";
-import { listPositions } from "../api/positions";
-import type { PositionOut } from "../api/positions";
 import { AppShell } from "../components/AppShell";
 import { Switch } from "../components/Switch";
 import { useAuth } from "../context/AuthContext";
@@ -41,30 +39,6 @@ const inputClass =
 const cardClass =
   "overflow-hidden rounded-3xl border border-slate-200/80 bg-white/90 shadow-soft backdrop-blur-sm dark:border-slate-700/80 dark:bg-slate-900/70";
 
-/** Активные должности + текущая должность пользователя, если она снята с учёта (чтобы select не «ломался»). */
-function usePositionOptions(
-  userPosition: { id: string; name: string; slug: string } | null | undefined,
-  activeList: PositionOut[],
-) {
-  return useMemo(() => {
-    const byId = new Map(activeList.map((p) => [p.id, p]));
-    const out: PositionOut[] = [...activeList];
-    if (userPosition && !byId.has(userPosition.id)) {
-      out.unshift({
-        id: userPosition.id,
-        name: `${userPosition.name} (не в справочнике)`,
-        slug: userPosition.slug,
-        description: null,
-        sort_order: -1,
-        is_active: false,
-        created_at: "",
-        user_count: 0,
-      });
-    }
-    return out;
-  }, [userPosition, activeList]);
-}
-
 export function SettingsPage() {
   const { theme, setTheme } = useTheme();
   const { state, setAuthenticatedUser } = useAuth();
@@ -72,7 +46,6 @@ export function SettingsPage() {
   const user = state.status === "authenticated" ? state.user : null;
 
   const [fullName, setFullName] = useState("");
-  const [positionId, setPositionId] = useState("");
   const [birthDate, setBirthDate] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [homeBlockVisible, setHomeBlockVisible] = useState<Record<string, boolean>>({});
@@ -117,18 +90,9 @@ export function SettingsPage() {
     return ids;
   }, [user, isManager]);
 
-  const positionsQuery = useQuery({
-    queryKey: ["positions", "settings"],
-    queryFn: () => listPositions(true),
-    enabled: !!user,
-  });
-
-  const positionOptions = usePositionOptions(user?.position ?? null, positionsQuery.data ?? []);
-
   useEffect(() => {
     if (user) {
       setFullName(user.full_name);
-      setPositionId(user.position?.id ?? "");
       setBirthDate(user.birth_date ? user.birth_date.slice(0, 10) : "");
     }
   }, [user]);
@@ -204,14 +168,12 @@ export function SettingsPage() {
     mutationFn: () =>
       patchProfile({
         full_name: fullName.trim(),
-        position_id: positionId.trim() || null,
         birth_date: birthDate.trim() || null,
       }),
     onSuccess: async (updated) => {
       setMsg("Профиль сохранён");
       toastSuccess("Профиль сохранён");
       setAuthenticatedUser(updated);
-      await qc.invalidateQueries({ queryKey: ["positions", "settings"] });
       await qc.invalidateQueries({ queryKey: ["auth", "login-history"] });
     },
     onError: (e: unknown) => {
@@ -263,7 +225,7 @@ export function SettingsPage() {
                 <div>
                   <h2 className="text-lg font-semibold tracking-tight text-slate-900 dark:text-white">Профиль</h2>
                   <p className="mt-1 text-sm leading-relaxed text-slate-600 dark:text-slate-400">
-                    Системы и Email назначает администратор.
+                    Должность, системы и email назначает администратор.
                   </p>
                 </div>
               </div>
@@ -284,19 +246,16 @@ export function SettingsPage() {
                     <label className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-200">
                       Должность
                     </label>
-                    <select
-                      value={positionId}
-                      onChange={(e) => setPositionId(e.target.value)}
-                      disabled={positionsQuery.isPending}
-                      className={inputClass}
-                    >
-                      <option value="">— не выбрана —</option>
-                      {positionOptions.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}
-                        </option>
-                      ))}
-                    </select>
+                    <input
+                      type="text"
+                      value={user.position?.name ?? "— не выбрана —"}
+                      disabled
+                      className={`${inputClass} cursor-not-allowed opacity-70`}
+                      title="Должность назначает администратор"
+                    />
+                    <p className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">
+                      Назначается администратором.
+                    </p>
                   </div>
                   <div>
                     <p className="mb-1.5 text-sm font-medium text-slate-700 dark:text-slate-200">

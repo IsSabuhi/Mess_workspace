@@ -40,8 +40,7 @@ import {
 import { AppShell } from "../components/AppShell";
 import { useAuth } from "../context/AuthContext";
 import { PERM, canViewSchedule, hasPermission } from "../lib/permissions";
-import { downloadScheduleExcel } from "../lib/exportScheduleExcel";
-import { downloadSchedulePng } from "../lib/exportScheduleImage";
+import type { ScheduleExcelSheetInput } from "../lib/exportScheduleExcel";
 import { toastApiError, toastSuccess } from "../lib/toast";
 import { useModalLayer } from "../lib/useModalLayer";
 import { useToastQueryError } from "../lib/useToastQueryError";
@@ -439,6 +438,7 @@ export function SchedulePage() {
       if (!scheduleQuery.data) return;
       setExportPending(true);
       try {
+        const { downloadScheduleExcel } = await import("../lib/exportScheduleExcel");
         if (mode === "month") {
           await downloadScheduleExcel({
             fileBaseName: `grafik_${String(month).padStart(2, "0")}_${year}`,
@@ -452,7 +452,7 @@ export function SchedulePage() {
             ],
           });
         } else {
-          const sheets: Parameters<typeof downloadScheduleExcel>[0]["sheets"] = [];
+          const sheets: ScheduleExcelSheetInput[] = [];
           for (let m = 1; m <= 12; m += 1) {
             const data = await getScheduleMonth(year, m);
             const groups = applyCurrentFiltersToGroups(data.groups);
@@ -484,6 +484,7 @@ export function SchedulePage() {
     if (!scheduleQuery.data || filteredGroups.length === 0) return;
     setImageExportPending(true);
     try {
+      const { downloadSchedulePng } = await import("../lib/exportScheduleImage");
       await downloadSchedulePng({
         year,
         month,
@@ -765,7 +766,7 @@ export function SchedulePage() {
                     Колонка «Часы» суммирует только числа (<span className="font-mono">8</span>,{" "}
                     <span className="font-mono">7.2</span>, <span className="font-mono">11</span>…); буквы не учитываются
                   </li>
-                  <li>Закреплено только ФИО — прокрутите вправо, чтобы увидеть конец месяца</li>
+                  <li>Закреплены «Система» и ФИО — прокрутите вправо, чтобы увидеть конец месяца</li>
                   <li>Наведите на ФИО — email, системы и тип графика сотрудника</li>
                   <li>Клик по ФИО — выбрать цвет строки для удобства сравнения смен</li>
                 </ul>
@@ -1065,7 +1066,13 @@ export function SchedulePage() {
           <table className="w-max min-w-full border-collapse text-xs">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50/90 dark:border-slate-600/60 dark:bg-slate-800">
-                <th className="sticky left-0 z-20 w-[10.5rem] min-w-[9rem] max-w-[12rem] border-r border-slate-200 bg-slate-50/95 px-1.5 py-1.5 text-left text-[10px] font-semibold uppercase text-slate-500 shadow-[4px_0_12px_-4px_rgba(15,23,42,0.12)] dark:border-slate-600/80 dark:bg-slate-800 dark:text-slate-300 dark:shadow-[4px_0_16px_-4px_rgba(0,0,0,0.45)]">
+                <th
+                  rowSpan={2}
+                  className="sticky left-0 z-30 w-[8.5rem] min-w-[8.5rem] max-w-[8.5rem] border-r border-slate-200 bg-slate-50/95 px-2 py-2 text-center text-[10px] font-semibold uppercase text-slate-500 shadow-[4px_0_12px_-4px_rgba(15,23,42,0.12)] dark:border-slate-600/80 dark:bg-slate-800 dark:text-slate-300 dark:shadow-[4px_0_16px_-4px_rgba(0,0,0,0.45)]"
+                >
+                  Система
+                </th>
+                <th className="sticky left-[8.5rem] z-20 w-[10.5rem] min-w-[9rem] max-w-[12rem] border-r border-slate-200 bg-slate-50/95 px-1.5 py-1.5 text-left text-[10px] font-semibold uppercase text-slate-500 shadow-[4px_0_12px_-4px_rgba(15,23,42,0.12)] dark:border-slate-600/80 dark:bg-slate-800 dark:text-slate-300 dark:shadow-[4px_0_16px_-4px_rgba(0,0,0,0.45)]">
                   ФИО
                 </th>
                 {dayNumbers.map((d) => {
@@ -1088,16 +1095,10 @@ export function SchedulePage() {
                 >
                   Часы
                 </th>
-                <th
-                  rowSpan={2}
-                  className="min-w-[7.5rem] max-w-[10rem] border-l border-slate-200 bg-slate-50/95 px-2 py-2 text-center text-xs font-semibold uppercase text-slate-500 dark:border-slate-600/80 dark:bg-slate-800 dark:text-slate-300"
-                >
-                  Система
-                </th>
               </tr>
               <tr className="border-b border-slate-200 bg-white dark:border-slate-600/60 dark:bg-slate-800/95">
                 <th
-                  className="sticky left-0 z-20 border-r border-slate-200 bg-white px-1.5 py-0.5 shadow-[4px_0_12px_-4px_rgba(15,23,42,0.1)] dark:border-slate-600/80 dark:bg-slate-800 dark:shadow-[4px_0_16px_-4px_rgba(0,0,0,0.45)]"
+                  className="sticky left-[8.5rem] z-20 border-r border-slate-200 bg-white px-1.5 py-0.5 shadow-[4px_0_12px_-4px_rgba(15,23,42,0.1)] dark:border-slate-600/80 dark:bg-slate-800 dark:shadow-[4px_0_16px_-4px_rgba(0,0,0,0.45)]"
                   aria-hidden
                 />
                 {dayNumbers.map((d) => {
@@ -1131,9 +1132,17 @@ export function SchedulePage() {
                         : ""
                     }`}
                   >
+                    {rowInGroup === 0 ? (
+                      <td
+                        rowSpan={Math.max(1, group.users.length)}
+                        className="sticky left-0 z-20 w-[8.5rem] min-w-[8.5rem] max-w-[8.5rem] border-r border-slate-200 bg-white px-2 py-2 align-middle text-center text-xs font-semibold leading-snug text-slate-800 shadow-[4px_0_12px_-4px_rgba(15,23,42,0.08)] dark:border-slate-600/70 dark:bg-slate-900/90 dark:text-violet-200/95 dark:shadow-[4px_0_14px_-4px_rgba(0,0,0,0.5)]"
+                      >
+                        {group.label}
+                      </td>
+                    ) : null}
                     <td
                       style={rowBgStyle}
-                      className={`sticky left-0 z-10 w-[10.5rem] min-w-[9rem] max-w-[12rem] border-r border-slate-200 px-1.5 py-0.5 shadow-[4px_0_12px_-4px_rgba(15,23,42,0.08)] dark:border-slate-600/70 dark:shadow-[4px_0_14px_-4px_rgba(0,0,0,0.5)] ${rowBgClassName}`}
+                      className={`sticky left-[8.5rem] z-10 w-[10.5rem] min-w-[9rem] max-w-[12rem] border-r border-slate-200 px-1.5 py-0.5 shadow-[4px_0_12px_-4px_rgba(15,23,42,0.08)] dark:border-slate-600/70 dark:shadow-[4px_0_14px_-4px_rgba(0,0,0,0.5)] ${rowBgClassName}`}
                       title={scheduleRowTitle(row)}
                     >
                       <button
@@ -1190,14 +1199,6 @@ export function SchedulePage() {
                     >
                       {formatHoursTotal(row.hours_total)}
                     </td>
-                    {rowInGroup === 0 ? (
-                      <td
-                        rowSpan={Math.max(1, group.users.length)}
-                        className="min-w-[7.5rem] max-w-[10rem] border-l border-slate-200 bg-white px-2 py-2 align-middle text-center text-xs font-semibold leading-snug text-slate-800 dark:border-slate-600/70 dark:bg-slate-900/90 dark:text-violet-200/95"
-                      >
-                        {group.label}
-                      </td>
-                    ) : null}
                   </tr>
                   );
                 })

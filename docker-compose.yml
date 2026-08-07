@@ -1,4 +1,16 @@
 services:
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
@@ -42,6 +54,8 @@ services:
     depends_on:
       minio-init:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test:
@@ -55,6 +69,34 @@ services:
       timeout: 5s
       retries: 5
       start_period: 40s
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    entrypoint: ["arq"]
+    command: ["app.worker.WorkerSettings"]
+    env_file:
+      - .env
+    environment:
+      MINIO_ENDPOINT: http://minio:9000
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-minio}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    # Postgres на хосте: тот же host.docker.internal, что и у api.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "arq", "--check", "app.worker.WorkerSettings"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   web:
     build:
@@ -91,3 +133,4 @@ services:
 
 volumes:
   minio_data:
+  redis_data:

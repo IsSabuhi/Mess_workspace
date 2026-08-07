@@ -21,6 +21,7 @@ export type EmployeeDirectoryRowOut = {
   exam_electrical_passed: boolean;
   exam_electrical_date: string | null;
   exam_electrical_valid_to: string | null;
+  exam_electrical_group: string | null;
   pass_has: boolean;
   pass_number: string | null;
   pass_valid_from: string | null;
@@ -29,6 +30,11 @@ export type EmployeeDirectoryRowOut = {
   vacation_periods: VacationPeriod[];
   work_schedule_kind: WorkScheduleKind;
   gender: EmployeeGender;
+  is_remote: boolean;
+  work_address: string | null;
+  is_field_worker: boolean;
+  position_assigned_at: string | null;
+  personnel_number: string | null;
 };
 
 export type EmployeeDirectoryFilters = {
@@ -39,6 +45,10 @@ export type EmployeeDirectoryFilters = {
   position_ids?: string[];
   exam_electrical_passed?: boolean;
   pass_has?: boolean;
+  exam_valid_to_from?: string;
+  exam_valid_to_to?: string;
+  pass_valid_to_from?: string;
+  pass_valid_to_to?: string;
   expiring_in_days?: number;
   expired_only?: boolean;
   include_inactive_users?: boolean;
@@ -53,6 +63,7 @@ export type EmployeeDirectoryPatch = {
   exam_electrical_passed?: boolean;
   exam_electrical_date?: string | null;
   exam_electrical_valid_to?: string | null;
+  exam_electrical_group?: string | null;
   pass_has?: boolean;
   pass_number?: string | null;
   pass_valid_from?: string | null;
@@ -61,6 +72,11 @@ export type EmployeeDirectoryPatch = {
   vacation_periods?: VacationPeriod[];
   work_schedule_kind?: WorkScheduleKind;
   gender?: EmployeeGender;
+  is_remote?: boolean;
+  work_address?: string | null;
+  is_field_worker?: boolean;
+  position_assigned_at?: string | null;
+  personnel_number?: string | null;
 };
 
 export async function listEmployeeDirectory(
@@ -78,6 +94,10 @@ export async function listEmployeeDirectory(
     sp.set("exam_electrical_passed", String(filters.exam_electrical_passed));
   }
   if (filters?.pass_has !== undefined) sp.set("pass_has", String(filters.pass_has));
+  if (filters?.exam_valid_to_from) sp.set("exam_valid_to_from", filters.exam_valid_to_from);
+  if (filters?.exam_valid_to_to) sp.set("exam_valid_to_to", filters.exam_valid_to_to);
+  if (filters?.pass_valid_to_from) sp.set("pass_valid_to_from", filters.pass_valid_to_from);
+  if (filters?.pass_valid_to_to) sp.set("pass_valid_to_to", filters.pass_valid_to_to);
   if (filters?.expiring_in_days !== undefined) sp.set("expiring_in_days", String(filters.expiring_in_days));
   if (filters?.expired_only) sp.set("expired_only", "true");
   if (filters?.include_inactive_users) sp.set("include_inactive_users", "true");

@@ -1,21 +1,29 @@
+import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import { useAuth } from "./context/AuthContext";
 import { canViewManagerTeamDashboard, canViewSchedule } from "./lib/permissions";
-import { AdminPage } from "./pages/AdminPage";
-import { EmployeeDirectoryPage } from "./pages/EmployeeDirectoryPage";
-import { HomePage } from "./pages/HomePage";
-import { PositionsPage } from "./pages/PositionsPage";
-import { KnowledgePage } from "./pages/KnowledgePage";
-import { LoginPage } from "./pages/LoginPage";
-import { SettingsPage } from "./pages/SettingsPage";
-import { SystemsPage } from "./pages/SystemsPage";
-import { TasksPage } from "./pages/TasksPage";
-import { BoardSettingsPage } from "./pages/BoardSettingsPage";
-import { UsersRedirectPage } from "./pages/UsersRedirectPage";
-import { NotificationsPage } from "./pages/NotificationsPage";
-import { SchedulePage } from "./pages/SchedulePage";
-import { ManagerTeamDashboardPage } from "./pages/ManagerTeamDashboardPage";
+
+const AdminPage = lazy(() => import("./pages/AdminPage").then((m) => ({ default: m.AdminPage })));
+const BoardSettingsPage = lazy(() => import("./pages/BoardSettingsPage").then((m) => ({ default: m.BoardSettingsPage })));
+const EmployeeDirectoryPage = lazy(() =>
+  import("./pages/EmployeeDirectoryPage").then((m) => ({ default: m.EmployeeDirectoryPage })),
+);
+const HomePage = lazy(() => import("./pages/HomePage").then((m) => ({ default: m.HomePage })));
+const KnowledgePage = lazy(() => import("./pages/KnowledgePage").then((m) => ({ default: m.KnowledgePage })));
+const LoginPage = lazy(() => import("./pages/LoginPage").then((m) => ({ default: m.LoginPage })));
+const ManagerTeamDashboardPage = lazy(() =>
+  import("./pages/ManagerTeamDashboardPage").then((m) => ({ default: m.ManagerTeamDashboardPage })),
+);
+const NotificationsPage = lazy(() =>
+  import("./pages/NotificationsPage").then((m) => ({ default: m.NotificationsPage })),
+);
+const PositionsPage = lazy(() => import("./pages/PositionsPage").then((m) => ({ default: m.PositionsPage })));
+const SchedulePage = lazy(() => import("./pages/SchedulePage").then((m) => ({ default: m.SchedulePage })));
+const SettingsPage = lazy(() => import("./pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
+const SystemsPage = lazy(() => import("./pages/SystemsPage").then((m) => ({ default: m.SystemsPage })));
+const TasksPage = lazy(() => import("./pages/TasksPage").then((m) => ({ default: m.TasksPage })));
+const UsersRedirectPage = lazy(() => import("./pages/UsersRedirectPage").then((m) => ({ default: m.UsersRedirectPage })));
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { state } = useAuth();
@@ -60,8 +68,15 @@ function RequireManagerTeamDashboard({ children }: { children: React.ReactNode }
 
 export default function App() {
   return (
-    <Routes>
-      <Route path="/login" element={<LoginPage />} />
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center text-slate-500 dark:text-slate-400">
+          Загрузка страницы…
+        </div>
+      }
+    >
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
       <Route
         path="/"
         element={
@@ -186,7 +201,8 @@ export default function App() {
           </ProtectedRoute>
         }
       />
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </Suspense>
   );
 }

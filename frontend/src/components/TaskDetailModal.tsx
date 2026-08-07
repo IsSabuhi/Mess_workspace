@@ -38,6 +38,11 @@ function formatBytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} МБ`;
 }
 
+/** Старые абсолютные URL MinIO (:9000) → публичный путь через nginx. */
+function attachmentHref(url: string): string {
+  return url.replace(/^https?:\/\/[^/"'\s]+:9000(?=\/)/i, "/mes/files");
+}
+
 function newChecklistId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
   return `c_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -436,9 +441,10 @@ export function TaskDetailModal({
                     >
                       <Paperclip className="h-3.5 w-3.5 shrink-0 text-slate-400" />
                       <a
-                        href={att.url}
+                        href={attachmentHref(att.url)}
                         target="_blank"
                         rel="noreferrer"
+                        download={att.filename}
                         className="min-w-0 flex-1 truncate text-sm font-medium text-sky-700 hover:underline dark:text-sky-400"
                       >
                         {att.filename}

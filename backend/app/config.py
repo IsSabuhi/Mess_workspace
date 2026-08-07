@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -9,6 +10,15 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=str(_backend_dir / ".env"), env_file_encoding="utf-8", extra="ignore")
 
     database_url: str
+    # SQLAlchemy asyncpg pool: общий предел соединений = API workers × (size + overflow) + worker pool.
+    db_pool_size: int = Field(default=5, ge=1, le=100)
+    db_max_overflow: int = Field(default=5, ge=0, le=100)
+    db_pool_timeout_seconds: int = Field(default=30, ge=1, le=300)
+    db_pool_recycle_seconds: int = Field(default=1800, ge=0)
+    api_workers: int = Field(default=1, ge=1, le=16)
+    redis_url: str = "redis://redis:6379/0"
+    notification_sync_minutes: int = Field(default=10, ge=1, le=60)
+    worker_max_jobs: int = Field(default=2, ge=1, le=32)
     # При старте API выполняется alembic upgrade head (удобно для новой пустой БД). В проде при желании отключите.
     auto_migrate_on_startup: bool = True
     secret_key: str = "change-me"
