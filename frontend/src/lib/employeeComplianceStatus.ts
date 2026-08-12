@@ -1,10 +1,13 @@
-export type ValidityStatus = "ok" | "expiring" | "expired" | "missing" | "none";
+export type ValidityStatus = "ok" | "expiring" | "expired" | "missing" | "none" | "not_required";
 
 export type ValidityInfo = {
   status: ValidityStatus;
   label: string;
   daysLeft: number | null;
 };
+
+/** Единая подпись для Excel/UI — удобно фильтровать и сортировать. */
+export const EXAM_NOT_REQUIRED_LABEL = "Не требуется (удалёнщик)";
 
 function parseDateOnly(v: string | null | undefined): Date | null {
   if (!v) return null;
@@ -46,6 +49,30 @@ export function validityInfo(
   return { status: "ok", label: "В норме", daysLeft: days };
 }
 
+export function examElectricalValidityInfo(
+  row: {
+    is_remote?: boolean;
+    exam_electrical_passed: boolean;
+    exam_electrical_valid_to: string | null;
+  },
+  soonDays = 3,
+  today = startOfToday(),
+): ValidityInfo {
+  if (row.is_remote) {
+    return { status: "not_required", label: EXAM_NOT_REQUIRED_LABEL, daysLeft: null };
+  }
+  return validityInfo(row.exam_electrical_valid_to, row.exam_electrical_passed, soonDays, today);
+}
+
+/** Колонка «Экзамен ЭБ» / краткий статус сдачи. */
+export function examElectricalPassedLabel(row: {
+  is_remote?: boolean;
+  exam_electrical_passed: boolean;
+}): string {
+  if (row.is_remote) return EXAM_NOT_REQUIRED_LABEL;
+  return row.exam_electrical_passed ? "Сдан" : "Нет";
+}
+
 export function overallComplianceWorst(
   exam: ValidityInfo,
   pass: ValidityInfo,
@@ -55,7 +82,8 @@ export function overallComplianceWorst(
     expiring: 1,
     missing: 2,
     none: 3,
-    ok: 4,
+    not_required: 4,
+    ok: 5,
   };
   return rank[exam.status] <= rank[pass.status] ? exam.status : pass.status;
 }
@@ -65,6 +93,7 @@ export type ComplianceReportSummary = {
   examExpired: number;
   examExpiring3: number;
   examNone: number;
+  examNotRequired: number;
   passExpired: number;
   passExpiring3: number;
   passNone: number;
@@ -72,6 +101,7 @@ export type ComplianceReportSummary = {
 
 export function summarizeComplianceRows(
   rows: Array<{
+    is_remote?: boolean;
     exam_electrical_passed: boolean;
     exam_electrical_valid_to: string | null;
     pass_has: boolean;
@@ -85,13 +115,15 @@ export function summarizeComplianceRows(
     examExpired: 0,
     examExpiring3: 0,
     examNone: 0,
+    examNotRequired: 0,
     passExpired: 0,
     passExpiring3: 0,
     passNone: 0,
   };
   for (const r of rows) {
-    const exam = validityInfo(r.exam_electrical_valid_to, r.exam_electrical_passed, soonDays, today);
+    const exam = examElectricalValidityInfo(r, soonDays, today);
     const pass = validityInfo(r.pass_valid_to, r.pass_has, soonDays, today);
+    if (exam.status === "not_required") summary.examNotRequired += 1;
     if (exam.status === "expired") summary.examExpired += 1;
     if (exam.status === "expiring") summary.examExpiring3 += 1;
     if (exam.status === "none" || exam.status === "missing") summary.examNone += 1;

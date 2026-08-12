@@ -13,7 +13,7 @@ import {
 import { arrayMove, SortableContext, horizontalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, GripVertical, Lock, LockOpen, MessageSquare, Paperclip, Pencil, Plus, Tags, Trash2 } from "lucide-react";
+import { Check, CheckSquare, GripVertical, Lock, LockOpen, MessageSquare, Paperclip, Pencil, Plus, Tags, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
@@ -217,6 +217,10 @@ function DraggableTaskCard({
   };
   const assigneesLine = formatAssigneesLabel(task);
   const dueLabel = formatTaskDueShort(task.due_at);
+  const startedLabel = formatTaskDueShort(task.started_at ?? null);
+  const checklistItems = task.checklist ?? [];
+  const checklistTotal = checklistItems.length;
+  const checklistDone = checklistItems.filter((item) => item.done).length;
   const commentsCount = task.comments_count ?? 0;
   const attachmentsCount = (task.attachments ?? []).length;
   const isDueSoon = !isDone && !isOverdue && taskDueStatus(task) === "due_soon";
@@ -285,6 +289,11 @@ function DraggableTaskCard({
                   Скоро срок
                 </span>
               )}
+              {startedLabel && (
+                <span className="text-slate-500 dark:text-slate-400" title="Дата старта">
+                  с {startedLabel}
+                </span>
+              )}
               {dueLabel && (
                 <span
                   className={
@@ -330,8 +339,23 @@ function DraggableTaskCard({
                 )}
               </div>
             )}
-            {(commentsCount > 0 || attachmentsCount > 0) && (
+            {(checklistTotal > 0 || commentsCount > 0 || attachmentsCount > 0) && (
               <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                {checklistTotal > 0 && (
+                  <span
+                    className={`inline-flex items-center gap-1 ${
+                      checklistDone === checklistTotal
+                        ? "font-medium text-emerald-700 dark:text-emerald-300"
+                        : ""
+                    }`}
+                    title={`Чеклист: ${checklistDone} из ${checklistTotal}`}
+                  >
+                    <CheckSquare className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />
+                    <span className="tabular-nums">
+                      {checklistDone}/{checklistTotal}
+                    </span>
+                  </span>
+                )}
                 {commentsCount > 0 && (
                   <span
                     className="inline-flex items-center gap-1"

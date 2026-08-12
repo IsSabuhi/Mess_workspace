@@ -2,7 +2,7 @@ import { ArrowUpRight, BookMarked, FileText, FolderOpen } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import type { ArticleTreeNode } from "../lib/knowledgeTree";
-import { ARTICLE_STATUS_LABEL, articleStatusBadgeClass } from "../lib/knowledgeArticleStatus";
+import { ARTICLE_STATUS_LABEL } from "../lib/knowledgeArticleStatus";
 
 type Props = {
   spaceId: string;
@@ -57,20 +57,13 @@ function TocTreeList({
                   {hasKids ? <FolderOpen className="h-3.5 w-3.5" /> : <FileText className="h-3.5 w-3.5" />}
                 </span>
                 <span className="min-w-0">
-                  <span className="flex min-w-0 items-center gap-2">
-                    <span
-                      className={`block truncate font-semibold text-slate-900 group-hover:text-sky-700 dark:text-slate-50 dark:group-hover:text-sky-300 ${
-                        depth === 0 ? "text-base" : "text-sm"
-                      }`}
-                    >
-                      {node.title}
-                    </span>
-                    <span
-                      className={`shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold leading-none ${articleStatusBadgeClass(node.status)}`}
-                      title={ARTICLE_STATUS_LABEL[node.status]}
-                    >
-                      {ARTICLE_STATUS_LABEL[node.status]}
-                    </span>
+                  <span
+                    className={`block truncate font-semibold text-slate-900 group-hover:text-sky-700 dark:text-slate-50 dark:group-hover:text-sky-300 ${
+                      depth === 0 ? "text-base" : "text-sm"
+                    }`}
+                    title={`${node.title} · ${ARTICLE_STATUS_LABEL[node.status]}`}
+                  >
+                    {node.title}
                   </span>
                   {depth === 0 && (
                     <span className="mt-0.5 block truncate font-mono text-[11px] text-slate-400">{node.slug}</span>

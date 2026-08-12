@@ -729,6 +729,19 @@ export function TaskDetailModal({
                   />
                 </div>
                 <div>
+                  <FieldLabel>Дата старта</FieldLabel>
+                  <div
+                    className="flex w-full items-center rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 dark:border-slate-600 dark:bg-slate-900/40 dark:text-slate-200"
+                    title={
+                      task.started_at
+                        ? "Проставляется автоматически при назначении исполнителя"
+                        : "Появится после назначения исполнителя"
+                    }
+                  >
+                    {formatDt(task.started_at ?? null)}
+                  </div>
+                </div>
+                <div>
                   <FieldLabel>Оценка, ч</FieldLabel>
                   <input
                     type="number"

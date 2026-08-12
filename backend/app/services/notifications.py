@@ -234,6 +234,7 @@ async def sync_employee_compliance_notifications(session: AsyncSession) -> int:
             EmployeeProfile.pass_valid_to,
             EmployeeProfile.exam_electrical_passed,
             EmployeeProfile.exam_electrical_valid_to,
+            EmployeeProfile.is_remote,
         )
         .join(EmployeeProfile, EmployeeProfile.user_id == User.id)
         .where(User.is_active.is_(True))
@@ -245,6 +246,7 @@ async def sync_employee_compliance_notifications(session: AsyncSession) -> int:
                     EmployeeProfile.pass_valid_to <= due_until,
                 ),
                 and_(
+                    EmployeeProfile.is_remote.is_(False),
                     EmployeeProfile.exam_electrical_passed.is_(True),
                     EmployeeProfile.exam_electrical_valid_to.is_not(None),
                     EmployeeProfile.exam_electrical_valid_to <= due_until,
@@ -258,7 +260,15 @@ async def sync_employee_compliance_notifications(session: AsyncSession) -> int:
 
     authorized_recipients = await _compliance_notification_recipient_ids(session)
     payloads: list[dict] = []
-    for employee_id, employee_name, pass_has, pass_valid_to, exam_passed, exam_valid_to in employees:
+    for (
+        employee_id,
+        employee_name,
+        pass_has,
+        pass_valid_to,
+        exam_passed,
+        exam_valid_to,
+        is_remote,
+    ) in employees:
         recipients = authorized_recipients | {employee_id}
         if pass_has:
             _append_compliance_payloads(
@@ -274,7 +284,7 @@ async def sync_employee_compliance_notifications(session: AsyncSession) -> int:
                 title_subject="Пропуск",
                 body_subject="пропуска",
             )
-        if exam_passed:
+        if exam_passed and not is_remote:
             _append_compliance_payloads(
                 payloads,
                 recipients=recipients,

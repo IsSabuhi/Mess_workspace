@@ -45,6 +45,7 @@ class Task(Base):
         nullable=False,
     )
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     estimate_hours: Mapped[float | None] = mapped_column(Numeric(8, 2), nullable=True)
     checklist: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

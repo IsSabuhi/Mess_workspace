@@ -22,6 +22,7 @@ export type EmployeeDirectoryRowOut = {
   exam_electrical_date: string | null;
   exam_electrical_valid_to: string | null;
   exam_electrical_group: string | null;
+  exam_electrical_certificate_number?: string | null;
   pass_has: boolean;
   pass_number: string | null;
   pass_valid_from: string | null;
@@ -64,6 +65,7 @@ export type EmployeeDirectoryPatch = {
   exam_electrical_date?: string | null;
   exam_electrical_valid_to?: string | null;
   exam_electrical_group?: string | null;
+  exam_electrical_certificate_number?: string | null;
   pass_has?: boolean;
   pass_number?: string | null;
   pass_valid_from?: string | null;

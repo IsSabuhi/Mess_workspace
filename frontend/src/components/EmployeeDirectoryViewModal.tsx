@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 
 import type { EmployeeDirectoryRowOut, EmployeeGender, WorkScheduleKind } from "../api/employeeDirectory";
 import { getEmployeeDirectoryUser } from "../api/employeeDirectory";
+import { EXAM_NOT_REQUIRED_LABEL } from "../lib/employeeComplianceStatus";
 import { useModalLayer } from "../lib/useModalLayer";
 import { useToastQueryError } from "../lib/useToastQueryError";
 
@@ -112,10 +113,29 @@ function DirectoryBody({ row }: { row: EmployeeDirectoryRowOut }) {
           Экзамен и пропуск
         </h3>
         <div className="space-y-2">
-          <Field label="Экзамен по электробезопасности">{row.exam_electrical_passed ? "Сдан" : "Не сдан"}</Field>
-          <Field label="Группа по ЭБ">{row.exam_electrical_group ? `${row.exam_electrical_group} группа` : "—"}</Field>
+          <Field label="Экзамен по электробезопасности">
+            {row.is_remote
+              ? EXAM_NOT_REQUIRED_LABEL
+              : row.exam_electrical_passed
+                ? "Сдан"
+                : "Не сдан"}
+          </Field>
+          {!row.is_remote && (
+            <>
+          <Field label="Группа по ЭБ">
+            {[
+              row.exam_electrical_group ? `${row.exam_electrical_group} группа` : null,
+              row.exam_electrical_certificate_number?.trim()
+                ? `№ ${row.exam_electrical_certificate_number.trim()}`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(" · ") || "—"}
+          </Field>
           <Field label="Дата сдачи">{fmtDate(row.exam_electrical_date)}</Field>
           <Field label="Экзамен действителен до">{fmtDate(row.exam_electrical_valid_to)}</Field>
+            </>
+          )}
           <Field label="Пропуск">{row.pass_has ? "Есть" : "Нет"}</Field>
           {row.pass_number && (
             <Field label="Номер пропуска">{row.pass_number}</Field>

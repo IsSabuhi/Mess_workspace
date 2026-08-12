@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, Filter, SlidersHorizontal } from "lucide-react";
+import { ArrowDown, ArrowUp, Download, Filter, SlidersHorizontal } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
@@ -18,6 +18,9 @@ import { listSystems } from "../api/systems";
 import { AppShell } from "../components/AppShell";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import {
+  examElectricalPassedLabel,
+  examElectricalValidityInfo,
+  EXAM_NOT_REQUIRED_LABEL,
   summarizeComplianceRows,
   validityInfo,
   type ValidityStatus,
@@ -50,27 +53,18 @@ function formatScheduleSummary(row: EmployeeDirectoryRowOut): string {
   return `5/2 · ${norm}`;
 }
 
-/** Сортировка таблицы: по строке систем (А→Я), без систем — в конце; при равенстве — ФИО. */
-function compareDirectoryRowsBySystems(a: EmployeeDirectoryRowOut, b: EmployeeDirectoryRowOut): number {
-  const na = a.systems?.length ?? 0;
-  const nb = b.systems?.length ?? 0;
-  if (na === 0 && nb > 0) return 1;
-  if (nb === 0 && na > 0) return -1;
-  if (na === 0 && nb === 0) return a.full_name.localeCompare(b.full_name, "ru");
-  const sa = [...a.systems]
-    .map((s) => s.name)
-    .sort((x, y) => x.localeCompare(y, "ru"))
-    .join(" · ");
-  const sb = [...b.systems]
-    .map((s) => s.name)
-    .sort((x, y) => x.localeCompare(y, "ru"))
-    .join(" · ");
-  const c = sa.localeCompare(sb, "ru");
-  if (c !== 0) return c;
-  return a.full_name.localeCompare(b.full_name, "ru");
+/** Сортировка по ФИО (алфавит). */
+function compareDirectoryRowsByName(
+  a: EmployeeDirectoryRowOut,
+  b: EmployeeDirectoryRowOut,
+  dir: "asc" | "desc",
+): number {
+  const c = a.full_name.localeCompare(b.full_name, "ru", { sensitivity: "base" });
+  return dir === "asc" ? c : -c;
 }
 
 type TabId = "compliance" | "profile" | "report";
+type NameSortDir = "asc" | "desc";
 
 /** Трёхпозиционный фильтр да/нет для API (все = параметр не передаётся). */
 type YesNoFilter = "all" | "yes" | "no";
@@ -90,6 +84,9 @@ function statusBadgeClass(status: ValidityStatus): string {
   }
   if (status === "ok") {
     return "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200";
+  }
+  if (status === "not_required") {
+    return "bg-sky-100 text-sky-800 dark:bg-sky-950/40 dark:text-sky-200";
   }
   return "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300";
 }
@@ -133,6 +130,8 @@ export function EmployeeDirectoryPage() {
   const [passValidFrom, setPassValidFrom] = useState("");
   const [passValidTo, setPassValidTo] = useState("");
   const [filtersPanelOpen, setFiltersPanelOpen] = useState(false);
+  /** По умолчанию А→Я по ФИО */
+  const [nameSortDir, setNameSortDir] = useState<NameSortDir>("asc");
 
   const [bulkExpanded, setBulkExpanded] = useState(false);
   const [bulkApplySchedule, setBulkApplySchedule] = useState(false);
@@ -150,6 +149,7 @@ export function EmployeeDirectoryPage() {
     exam_electrical_date: "",
     exam_electrical_valid_to: "",
     exam_electrical_group: "",
+    exam_electrical_certificate_number: "",
     pass_has: false,
     pass_number: "",
     pass_valid_from: "",
@@ -397,8 +397,30 @@ export function EmployeeDirectoryPage() {
   }
 
   const rows = rowsQuery.data ?? [];
-  const displayRows = useMemo(() => [...rows].sort(compareDirectoryRowsBySystems), [rows]);
+  const displayRows = useMemo(
+    () => [...rows].sort((a, b) => compareDirectoryRowsByName(a, b, nameSortDir)),
+    [rows, nameSortDir],
+  );
   const reportSummary = useMemo(() => summarizeComplianceRows(displayRows), [displayRows]);
+
+  const nameSortHeader = (
+    <button
+      type="button"
+      onClick={() => setNameSortDir((d) => (d === "asc" ? "desc" : "asc"))}
+      className="inline-flex items-center gap-1 rounded-md px-0.5 py-0.5 font-medium text-slate-700 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-200 dark:hover:bg-slate-700/80 dark:hover:text-white"
+      title={nameSortDir === "asc" ? "Сортировка: А→Я (нажмите для Я→А)" : "Сортировка: Я→А (нажмите для А→Я)"}
+      aria-label={
+        nameSortDir === "asc" ? "Сортировка по ФИО: А→Я" : "Сортировка по ФИО: Я→А"
+      }
+    >
+      Сотрудник
+      {nameSortDir === "asc" ? (
+        <ArrowUp className="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden />
+      ) : (
+        <ArrowDown className="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden />
+      )}
+    </button>
+  );
 
   function openComplianceEdit(row: EmployeeDirectoryRowOut) {
     setEditingCompliance(row);
@@ -407,6 +429,7 @@ export function EmployeeDirectoryPage() {
       exam_electrical_date: asInputDate(row.exam_electrical_date),
       exam_electrical_valid_to: asInputDate(row.exam_electrical_valid_to),
       exam_electrical_group: row.exam_electrical_group ?? "",
+      exam_electrical_certificate_number: row.exam_electrical_certificate_number ?? "",
       pass_has: row.pass_has,
       pass_number: row.pass_number ?? "",
       pass_valid_from: asInputDate(row.pass_valid_from),
@@ -883,7 +906,7 @@ export function EmployeeDirectoryPage() {
               <table className="w-full min-w-[880px] text-left text-sm">
                 <thead className="bg-slate-50 dark:bg-slate-800/70">
                   <tr>
-                    <th className="px-3 py-2">Сотрудник</th>
+                    <th className="px-3 py-2">{nameSortHeader}</th>
                     <th className="px-3 py-2">Должность</th>
                     <th className="px-3 py-2">Системы</th>
                     <th className="px-3 py-2">Эл.безопасность</th>
@@ -902,10 +925,19 @@ export function EmployeeDirectoryPage() {
                       <td className="px-3 py-2">{r.position?.name ?? "—"}</td>
                       <td className="px-3 py-2 text-xs">{r.systems.map((s) => s.name).join(", ") || "—"}</td>
                       <td className="px-3 py-2 text-xs">
-                        {r.exam_electrical_passed ? "Сдан" : "Нет"}
-                        {r.exam_electrical_group ? ` · гр. ${r.exam_electrical_group}` : ""}
-                        <br />
-                        до: {r.exam_electrical_valid_to ? asInputDate(r.exam_electrical_valid_to) : "—"}
+                        {r.is_remote ? (
+                          <span className="text-sky-800 dark:text-sky-300">{EXAM_NOT_REQUIRED_LABEL}</span>
+                        ) : (
+                          <>
+                            {examElectricalPassedLabel(r)}
+                            {r.exam_electrical_group ? ` · гр. ${r.exam_electrical_group}` : ""}
+                            {r.exam_electrical_certificate_number?.trim()
+                              ? ` · № ${r.exam_electrical_certificate_number.trim()}`
+                              : ""}
+                            <br />
+                            до: {r.exam_electrical_valid_to ? asInputDate(r.exam_electrical_valid_to) : "—"}
+                          </>
+                        )}
                       </td>
                       <td className="px-3 py-2 text-xs">
                         {r.pass_has ? `Есть (${r.pass_number ?? "без №"})` : "Нет"}
@@ -940,12 +972,13 @@ export function EmployeeDirectoryPage() {
 
           {activeTab === "report" && (
             <>
-              <div className="mb-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+              <div className="mb-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
                 {[
                   { label: "Всего", value: reportSummary.total, tone: "bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-100" },
                   { label: "ЭБ просрочен", value: reportSummary.examExpired, tone: "bg-rose-100 text-rose-800 dark:bg-rose-950/40 dark:text-rose-200" },
                   { label: "ЭБ ≤3 дн.", value: reportSummary.examExpiring3, tone: "bg-amber-100 text-amber-900 dark:bg-amber-950/40 dark:text-amber-200" },
                   { label: "ЭБ нет/без даты", value: reportSummary.examNone, tone: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300" },
+                  { label: "ЭБ не требуется", value: reportSummary.examNotRequired, tone: "bg-sky-100 text-sky-800 dark:bg-sky-950/40 dark:text-sky-200" },
                   { label: "Пропуск просрочен", value: reportSummary.passExpired, tone: "bg-rose-100 text-rose-800 dark:bg-rose-950/40 dark:text-rose-200" },
                   { label: "Пропуск ≤3 дн.", value: reportSummary.passExpiring3, tone: "bg-amber-100 text-amber-900 dark:bg-amber-950/40 dark:text-amber-200" },
                   { label: "Пропуск нет/без даты", value: reportSummary.passNone, tone: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300" },
@@ -963,7 +996,7 @@ export function EmployeeDirectoryPage() {
                 <table className="w-full min-w-[980px] text-left text-sm">
                   <thead className="bg-slate-50 dark:bg-slate-800/70">
                     <tr>
-                      <th className="px-3 py-2">Сотрудник</th>
+                      <th className="px-3 py-2">{nameSortHeader}</th>
                       <th className="px-3 py-2">Должность</th>
                       <th className="px-3 py-2">Системы</th>
                       <th className="px-3 py-2">Экзамен ЭБ</th>
@@ -974,7 +1007,7 @@ export function EmployeeDirectoryPage() {
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
                     {displayRows.map((r) => {
-                      const exam = validityInfo(r.exam_electrical_valid_to, r.exam_electrical_passed);
+                      const exam = examElectricalValidityInfo(r);
                       const pass = validityInfo(r.pass_valid_to, r.pass_has);
                       return (
                         <tr key={r.id}>
@@ -985,10 +1018,19 @@ export function EmployeeDirectoryPage() {
                           <td className="px-3 py-2">{r.position?.name ?? "—"}</td>
                           <td className="px-3 py-2 text-xs">{r.systems.map((s) => s.name).join(", ") || "—"}</td>
                           <td className="px-3 py-2 text-xs">
-                            {r.exam_electrical_passed ? "Сдан" : "Нет"}
-                            {r.exam_electrical_group ? ` · гр. ${r.exam_electrical_group}` : ""}
-                            <br />
-                            до: {r.exam_electrical_valid_to ? asInputDate(r.exam_electrical_valid_to) : "—"}
+                            {r.is_remote ? (
+                              <span className="text-sky-800 dark:text-sky-300">{EXAM_NOT_REQUIRED_LABEL}</span>
+                            ) : (
+                              <>
+                                {examElectricalPassedLabel(r)}
+                                {r.exam_electrical_group ? ` · гр. ${r.exam_electrical_group}` : ""}
+                                {r.exam_electrical_certificate_number?.trim()
+                                  ? ` · № ${r.exam_electrical_certificate_number.trim()}`
+                                  : ""}
+                                <br />
+                                до: {r.exam_electrical_valid_to ? asInputDate(r.exam_electrical_valid_to) : "—"}
+                              </>
+                            )}
                           </td>
                           <td className="px-3 py-2">
                             <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${statusBadgeClass(exam.status)}`}>
@@ -1026,7 +1068,7 @@ export function EmployeeDirectoryPage() {
               <table className="w-full min-w-[1280px] text-left text-sm">
                 <thead className="bg-slate-50 dark:bg-slate-800/70">
                   <tr>
-                    <th className="px-3 py-2">Сотрудник</th>
+                    <th className="px-3 py-2">{nameSortHeader}</th>
                     <th className="px-3 py-2">Табельный №</th>
                     <th className="px-3 py-2">Дата рождения</th>
                     <th className="px-3 py-2">Должность</th>
@@ -1112,16 +1154,29 @@ export function EmployeeDirectoryPage() {
               Раздел контроля: экзамен по электробезопасности и пропуск. График и отпуск — во вкладке «Кадровый
               справочник».
             </p>
+            {editingCompliance.is_remote && (
+              <p className="mb-3 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900 dark:border-sky-900/50 dark:bg-sky-950/40 dark:text-sky-100">
+                {EXAM_NOT_REQUIRED_LABEL}. Поля экзамена скрыты. Если экзамен всё же нужен — снимите признак
+                «Удалёнщик» в кадровом справочнике.
+              </p>
+            )}
             <form
               onSubmit={(e) => {
                 e.preventDefault();
+                const examNotRequired = !!editingCompliance.is_remote;
                 saveComplianceMut.mutate({
                   id: editingCompliance.id,
                   body: {
-                    exam_electrical_passed: complianceForm.exam_electrical_passed,
-                    exam_electrical_date: complianceForm.exam_electrical_date || null,
-                    exam_electrical_valid_to: complianceForm.exam_electrical_valid_to || null,
-                    exam_electrical_group: complianceForm.exam_electrical_group || null,
+                    ...(examNotRequired
+                      ? {}
+                      : {
+                          exam_electrical_passed: complianceForm.exam_electrical_passed,
+                          exam_electrical_date: complianceForm.exam_electrical_date || null,
+                          exam_electrical_valid_to: complianceForm.exam_electrical_valid_to || null,
+                          exam_electrical_group: complianceForm.exam_electrical_group || null,
+                          exam_electrical_certificate_number:
+                            complianceForm.exam_electrical_certificate_number.trim() || null,
+                        }),
                     pass_has: complianceForm.pass_has,
                     pass_number: complianceForm.pass_number.trim() || null,
                     pass_valid_from: complianceForm.pass_valid_from || null,
@@ -1132,6 +1187,8 @@ export function EmployeeDirectoryPage() {
               }}
               className="space-y-3"
             >
+              {!editingCompliance.is_remote && (
+                <>
               <label className="flex items-center gap-2 text-sm">
                 <input
                   type="checkbox"
@@ -1155,6 +1212,17 @@ export function EmployeeDirectoryPage() {
                   <option value="V">V группа</option>
                 </select>
               </label>
+              <label className="block text-sm">
+                <span className="mb-1 block text-xs text-slate-500 dark:text-slate-400">Номер удостоверения</span>
+                <input
+                  value={complianceForm.exam_electrical_certificate_number}
+                  onChange={(e) =>
+                    setComplianceForm((p) => ({ ...p, exam_electrical_certificate_number: e.target.value }))
+                  }
+                  placeholder="№ удостоверения"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+                />
+              </label>
               <div className="grid grid-cols-2 gap-2 text-xs text-slate-500 dark:text-slate-400">
                 <span>Дата сдачи</span>
                 <span>Действителен до</span>
@@ -1173,6 +1241,8 @@ export function EmployeeDirectoryPage() {
                   className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
                 />
               </div>
+                </>
+              )}
               <label className="flex items-center gap-2 text-sm">
                 <input
                   type="checkbox"

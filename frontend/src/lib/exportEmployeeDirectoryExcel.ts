@@ -2,6 +2,8 @@ import ExcelJS from "exceljs";
 
 import type { EmployeeDirectoryRowOut } from "../api/employeeDirectory";
 import {
+  examElectricalPassedLabel,
+  examElectricalValidityInfo,
   summarizeComplianceRows,
   validityInfo,
   type ValidityStatus,
@@ -26,6 +28,7 @@ const STATUS_FILLS: Record<ValidityStatus, string> = {
   expiring: "FFFEF3C7",
   missing: "FFE2E8F0",
   none: "FFF1F5F9",
+  not_required: "FFE0F2FE",
   ok: "FFDCFCE7",
 };
 
@@ -63,6 +66,7 @@ function addReportDataSheet(
     "Системы",
     "Экзамен ЭБ",
     "Группа ЭБ",
+    "№ удостоверения",
     "Экзамен до",
     "Статус экзамена",
     "Пропуск",
@@ -74,16 +78,18 @@ function addReportDataSheet(
   styleReportHeader(ws.addRow(headers));
 
   for (const r of rows) {
-    const exam = validityInfo(r.exam_electrical_valid_to, r.exam_electrical_passed);
+    const exam = examElectricalValidityInfo(r);
     const pass = validityInfo(r.pass_valid_to, r.pass_has);
+    const remote = !!r.is_remote;
     const row = ws.addRow([
       r.full_name,
       r.email,
       r.position?.name ?? "",
       r.systems.map((s) => s.name).join(", "),
-      r.exam_electrical_passed ? "Сдан" : "Нет",
-      r.exam_electrical_group ?? "",
-      fmtDate(r.exam_electrical_valid_to),
+      examElectricalPassedLabel(r),
+      remote ? "" : (r.exam_electrical_group ?? ""),
+      remote ? "" : (r.exam_electrical_certificate_number ?? ""),
+      remote ? "" : fmtDate(r.exam_electrical_valid_to),
       exam.label,
       r.pass_has ? "Есть" : "Нет",
       r.pass_number ?? "",
@@ -91,11 +97,11 @@ function addReportDataSheet(
       pass.label,
       r.notes ?? "",
     ]);
-    applyStatusFill(row.getCell(8), exam.status);
-    applyStatusFill(row.getCell(12), pass.status);
+    applyStatusFill(row.getCell(9), exam.status);
+    applyStatusFill(row.getCell(13), pass.status);
   }
 
-  [28, 30, 22, 36, 12, 10, 14, 16, 10, 14, 14, 16, 32].forEach((w, i) => {
+  [28, 30, 22, 36, 12, 10, 16, 14, 16, 10, 14, 14, 16, 32].forEach((w, i) => {
     ws.getColumn(i + 1).width = w;
   });
 }
@@ -108,6 +114,7 @@ const COMPLIANCE_HEADERS = [
   "Системы",
   "Экзамен ЭБ",
   "Группа ЭБ",
+  "№ удостоверения",
   "Дата экзамена",
   "Экзамен действителен до",
   "Пропуск",
@@ -153,16 +160,18 @@ export async function downloadEmployeeDirectoryComplianceExcel(rows: EmployeeDir
   header.alignment = { vertical: "middle", wrapText: true };
 
   for (const r of rows) {
+    const remote = !!r.is_remote;
     ws.addRow([
       r.full_name,
       r.email,
       r.is_active ? "Да" : "Нет",
       r.position?.name ?? "",
       r.systems.map((s) => s.name).join(", "),
-      r.exam_electrical_passed ? "Сдан" : "Нет",
-      r.exam_electrical_group ?? "",
-      fmtDate(r.exam_electrical_date),
-      fmtDate(r.exam_electrical_valid_to),
+      examElectricalPassedLabel(r),
+      remote ? "" : (r.exam_electrical_group ?? ""),
+      remote ? "" : (r.exam_electrical_certificate_number ?? ""),
+      remote ? "" : fmtDate(r.exam_electrical_date),
+      remote ? "" : fmtDate(r.exam_electrical_valid_to),
       r.pass_has ? "Есть" : "Нет",
       r.pass_number ?? "",
       fmtDate(r.pass_valid_from),
@@ -171,7 +180,7 @@ export async function downloadEmployeeDirectoryComplianceExcel(rows: EmployeeDir
     ]);
   }
 
-  const colWidths = [28, 32, 10, 24, 40, 12, 10, 14, 22, 10, 16, 14, 14, 36];
+  const colWidths = [28, 32, 10, 24, 40, 12, 10, 16, 14, 22, 10, 16, 14, 14, 36];
   colWidths.forEach((w, i) => {
     ws.getColumn(i + 1).width = w;
   });
@@ -264,6 +273,7 @@ export async function downloadEmployeeDirectoryReportExcel(rows: EmployeeDirecto
     ["Экзамен ЭБ — просрочен", summary.examExpired],
     ["Экзамен ЭБ — истекает ≤ 3 дн.", summary.examExpiring3],
     ["Экзамен ЭБ — нет / нет даты", summary.examNone],
+    ["Экзамен ЭБ — не требуется (удалёнщик)", summary.examNotRequired],
     ["Пропуск — просрочен", summary.passExpired],
     ["Пропуск — истекает ≤ 3 дн.", summary.passExpiring3],
     ["Пропуск — нет / нет даты", summary.passNone],
@@ -272,20 +282,20 @@ export async function downloadEmployeeDirectoryReportExcel(rows: EmployeeDirecto
     const row = summaryWs.addRow([label, value]);
     row.getCell(2).alignment = { horizontal: "right" };
   }
-  summaryWs.getColumn(1).width = 36;
+  summaryWs.getColumn(1).width = 42;
   summaryWs.getColumn(2).width = 14;
 
   addReportDataSheet(wb, "Все сотрудники", rows);
 
   const expired = rows.filter((r) => {
-    const exam = validityInfo(r.exam_electrical_valid_to, r.exam_electrical_passed);
+    const exam = examElectricalValidityInfo(r);
     const pass = validityInfo(r.pass_valid_to, r.pass_has);
     return exam.status === "expired" || pass.status === "expired";
   });
   addReportDataSheet(wb, "Просрочено", expired);
 
   const expiring = rows.filter((r) => {
-    const exam = validityInfo(r.exam_electrical_valid_to, r.exam_electrical_passed);
+    const exam = examElectricalValidityInfo(r);
     const pass = validityInfo(r.pass_valid_to, r.pass_has);
     return exam.status === "expiring" || pass.status === "expiring";
   });

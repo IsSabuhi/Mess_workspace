@@ -25,6 +25,8 @@ class EmployeeProfile(Base):
     exam_electrical_valid_to: Mapped[date | None] = mapped_column(Date, nullable=True)
     # Группа по электробезопасности (I–V)
     exam_electrical_group: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    # Номер удостоверения по электробезопасности
+    exam_electrical_certificate_number: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     pass_has: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     pass_number: Mapped[str | None] = mapped_column(String(128), nullable=True)

@@ -113,6 +113,7 @@ class TaskOut(ORMModel):
     creator_id: uuid.UUID | None
     priority: TaskPriority
     due_at: datetime | None
+    started_at: datetime | None = None
     estimate_hours: Decimal | None = None
     checklist: list[ChecklistItem] = Field(default_factory=list)
     position: int

@@ -187,6 +187,7 @@ def _task_to_out(task: Task, *, comments_count: int = 0) -> TaskOut:
         creator_id=task.creator_id,
         priority=task.priority,
         due_at=task.due_at,
+        started_at=task.started_at,
         estimate_hours=task.estimate_hours,
         checklist=[ChecklistItem.model_validate(x) for x in checklist],
         position=task.position,
@@ -535,6 +536,7 @@ async def create_task(
         creator_id=user.id,
         priority=body.priority,
         due_at=body.due_at,
+        started_at=datetime.now(timezone.utc) if assignees else None,
         estimate_hours=body.estimate_hours,
         checklist=_normalize_checklist(body.checklist),
         position=body.position,
@@ -695,12 +697,15 @@ async def update_task(
     if body.assignee_ids is not None:
         board = await session.get(Board, task.board_id)
         existing_ids = {a.id for a in (task.assignees or [])}
+        had_assignees = bool(existing_ids)
         task.assignees = await _resolve_assignee_users(
             session,
             body.assignee_ids,
             board=board,
             allow_existing_ids=existing_ids,
         )
+        if not had_assignees and task.assignees and task.started_at is None:
+            task.started_at = datetime.now(timezone.utc)
     if body.priority is not None:
         task.priority = body.priority
     if body.due_at is not None:

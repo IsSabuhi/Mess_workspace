@@ -39,6 +39,7 @@ class EmployeeDirectoryRowOut(BaseModel):
     exam_electrical_date: date | None = None
     exam_electrical_valid_to: date | None = None
     exam_electrical_group: str | None = None
+    exam_electrical_certificate_number: str | None = None
 
     pass_has: bool = False
     pass_number: str | None = None
@@ -65,6 +66,7 @@ class EmployeeDirectoryPatch(BaseModel):
     exam_electrical_date: date | None = None
     exam_electrical_valid_to: date | None = None
     exam_electrical_group: str | None = Field(None, max_length=8)
+    exam_electrical_certificate_number: str | None = Field(None, max_length=128)
     pass_has: bool | None = None
     pass_number: str | None = None
     pass_valid_from: date | None = None

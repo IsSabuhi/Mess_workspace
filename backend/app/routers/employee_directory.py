@@ -41,6 +41,7 @@ _COMPLIANCE_PATCH_FIELDS = frozenset({
     "exam_electrical_date",
     "exam_electrical_valid_to",
     "exam_electrical_group",
+    "exam_electrical_certificate_number",
     "pass_has",
     "pass_number",
     "pass_valid_from",
@@ -112,6 +113,7 @@ def _row_to_out(user: User) -> EmployeeDirectoryRowOut:
         exam_electrical_date=p.exam_electrical_date if p else None,
         exam_electrical_valid_to=p.exam_electrical_valid_to if p else None,
         exam_electrical_group=p.exam_electrical_group if p else None,
+        exam_electrical_certificate_number=p.exam_electrical_certificate_number if p else None,
         pass_has=bool(p.pass_has) if p else False,
         pass_number=p.pass_number if p else None,
         pass_valid_from=p.pass_valid_from if p else None,
@@ -264,7 +266,11 @@ async def list_employee_directory(
         today = date.today()
         cond.append(
             or_(
-                and_(EmployeeProfile.exam_electrical_valid_to.is_not(None), EmployeeProfile.exam_electrical_valid_to < today),
+                and_(
+                    EmployeeProfile.is_remote.is_(False),
+                    EmployeeProfile.exam_electrical_valid_to.is_not(None),
+                    EmployeeProfile.exam_electrical_valid_to < today,
+                ),
                 and_(EmployeeProfile.pass_valid_to.is_not(None), EmployeeProfile.pass_valid_to < today),
             )
         )
@@ -274,6 +280,7 @@ async def list_employee_directory(
         cond.append(
             or_(
                 and_(
+                    EmployeeProfile.is_remote.is_(False),
                     EmployeeProfile.exam_electrical_valid_to.is_not(None),
                     EmployeeProfile.exam_electrical_valid_to >= today,
                     EmployeeProfile.exam_electrical_valid_to <= to_day,

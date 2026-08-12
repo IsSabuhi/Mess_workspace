@@ -2,7 +2,7 @@ import { ChevronDown, ChevronRight, ChevronUp, FileText, FolderOpen, Plus, Trash
 import { Link } from "react-router-dom";
 
 import type { ArticleTreeNode } from "../lib/knowledgeTree";
-import { ARTICLE_STATUS_LABEL, articleStatusBadgeClass, articleStatusTitleClass } from "../lib/knowledgeArticleStatus";
+import { ARTICLE_STATUS_LABEL, articleStatusTitleClass } from "../lib/knowledgeArticleStatus";
 
 type Props = {
   nodes: ArticleTreeNode[];
@@ -113,13 +113,6 @@ export function KnowledgeArticleTree({
               >
                 {n.title}
               </Link>
-
-              <span
-                className={`shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold leading-none ${articleStatusBadgeClass(n.status)}`}
-                title={ARTICLE_STATUS_LABEL[n.status]}
-              >
-                {isDraft ? "черн." : "опубл."}
-              </span>
 
               {canEdit && (
                 <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
