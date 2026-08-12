@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { History, RotateCcw } from "lucide-react";
 
-import type { KnowledgeArticleRevisionOut } from "../api/knowledge";
+import type { ArticleStatus, KnowledgeArticleRevisionOut } from "../api/knowledge";
+import { ARTICLE_STATUS_LABEL, articleStatusBadgeClass } from "../lib/knowledgeArticleStatus";
 import { diffLines, htmlToPlainText } from "../lib/simpleDiff";
 import { useModalLayer } from "../lib/useModalLayer";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -24,8 +25,6 @@ type Props = {
   onRestore: (revisionId: string) => void;
   parentTitleById?: Map<string, string>;
 };
-
-const STATUS_LABEL = { draft: "Черновик", published: "Опубликовано" } as const;
 
 export function KnowledgeRevisionsModal({
   open,
@@ -188,7 +187,7 @@ export function KnowledgeRevisionsModal({
                       <MetaCard
                         label="Сейчас"
                         title={current.title}
-                        status={STATUS_LABEL[current.status]}
+                        status={current.status}
                         parent={
                           current.parent_id
                             ? parentTitleById?.get(current.parent_id) ?? current.parent_id
@@ -198,7 +197,7 @@ export function KnowledgeRevisionsModal({
                       <MetaCard
                         label="В этой версии"
                         title={selected.title}
-                        status={STATUS_LABEL[selected.status]}
+                        status={selected.status}
                         parent={
                           selected.parent_id
                             ? parentTitleById?.get(selected.parent_id) ?? selected.parent_id
@@ -318,7 +317,7 @@ function MetaCard({
 }: {
   label: string;
   title: string;
-  status: string;
+  status: ArticleStatus;
   parent: string;
   highlight?: boolean;
 }) {
@@ -332,7 +331,12 @@ function MetaCard({
     >
       <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
       <p className="font-medium text-slate-900 dark:text-slate-100">{title || "—"}</p>
-      <p className="mt-1 text-xs text-slate-500">Статус: {status}</p>
+      <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
+        Статус:
+        <span className={`rounded-md px-1.5 py-0.5 text-[10px] font-semibold leading-none ${articleStatusBadgeClass(status)}`}>
+          {ARTICLE_STATUS_LABEL[status]}
+        </span>
+      </p>
       <p className="mt-0.5 truncate text-xs text-slate-500" title={parent}>
         Родитель: {parent}
       </p>

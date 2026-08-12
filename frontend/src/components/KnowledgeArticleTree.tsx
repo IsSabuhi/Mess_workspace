@@ -2,6 +2,7 @@ import { ChevronDown, ChevronRight, ChevronUp, FileText, FolderOpen, Plus, Trash
 import { Link } from "react-router-dom";
 
 import type { ArticleTreeNode } from "../lib/knowledgeTree";
+import { ARTICLE_STATUS_LABEL, articleStatusBadgeClass, articleStatusTitleClass } from "../lib/knowledgeArticleStatus";
 
 type Props = {
   nodes: ArticleTreeNode[];
@@ -43,19 +44,26 @@ export function KnowledgeArticleTree({
         const canMoveUp = !!onMoveArticle && index > 0;
         const canMoveDown = !!onMoveArticle && index < nodes.length - 1;
         const showMove = canEdit && !!onMoveArticle && nodes.length > 1;
+        const isDraft = n.status === "draft";
 
         return (
           <li key={n.id} className="min-w-0" role="treeitem" aria-expanded={hasKids ? !collapsed : undefined}>
             <div
               className={`group relative flex min-w-0 items-center gap-1 rounded-xl px-1.5 py-1.5 transition ${
                 active
-                  ? "bg-sky-50 text-sky-900 shadow-sm ring-1 ring-sky-200/80 dark:bg-sky-950/40 dark:text-sky-100 dark:ring-sky-800/60"
-                  : "hover:bg-slate-100/80 dark:hover:bg-slate-800/60"
+                  ? isDraft
+                    ? "bg-amber-50 text-amber-950 shadow-sm ring-1 ring-amber-200/80 dark:bg-amber-950/35 dark:text-amber-100 dark:ring-amber-800/60"
+                    : "bg-sky-50 text-sky-900 shadow-sm ring-1 ring-sky-200/80 dark:bg-sky-950/40 dark:text-sky-100 dark:ring-sky-800/60"
+                  : isDraft
+                    ? "hover:bg-amber-50/70 dark:hover:bg-amber-950/25"
+                    : "hover:bg-slate-100/80 dark:hover:bg-slate-800/60"
               }`}
             >
               {active && (
                 <span
-                  className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-sky-500"
+                  className={`absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full ${
+                    isDraft ? "bg-amber-500" : "bg-sky-500"
+                  }`}
                   aria-hidden
                 />
               )}
@@ -70,7 +78,11 @@ export function KnowledgeArticleTree({
                   {collapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
                 </button>
               ) : (
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center text-slate-300 dark:text-slate-600">
+                <span
+                  className={`flex h-6 w-6 shrink-0 items-center justify-center ${
+                    isDraft ? "text-amber-400 dark:text-amber-500/80" : "text-slate-300 dark:text-slate-600"
+                  }`}
+                >
                   <FileText className="h-3.5 w-3.5" />
                 </span>
               )}
@@ -78,7 +90,11 @@ export function KnowledgeArticleTree({
               {hasKids && (
                 <FolderOpen
                   className={`h-3.5 w-3.5 shrink-0 ${
-                    active ? "text-sky-500" : "text-amber-500/90 dark:text-amber-400/80"
+                    active
+                      ? isDraft
+                        ? "text-amber-500"
+                        : "text-sky-500"
+                      : "text-amber-500/90 dark:text-amber-400/80"
                   }`}
                   aria-hidden
                 />
@@ -86,15 +102,24 @@ export function KnowledgeArticleTree({
 
               <Link
                 to={`/knowledge/${spaceId}/${n.id}`}
-                title={n.title}
+                title={`${n.title} · ${ARTICLE_STATUS_LABEL[n.status]}`}
                 className={`min-w-0 flex-1 truncate text-sm ${
                   active
-                    ? "font-semibold text-sky-800 dark:text-sky-100"
-                    : "font-medium text-slate-800 hover:text-sky-600 dark:text-slate-100 dark:hover:text-sky-400"
+                    ? isDraft
+                      ? "font-semibold text-amber-900 dark:text-amber-100"
+                      : "font-semibold text-sky-800 dark:text-sky-100"
+                    : `font-medium hover:text-sky-600 dark:hover:text-sky-400 ${articleStatusTitleClass(n.status)}`
                 }`}
               >
                 {n.title}
               </Link>
+
+              <span
+                className={`shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold leading-none ${articleStatusBadgeClass(n.status)}`}
+                title={ARTICLE_STATUS_LABEL[n.status]}
+              >
+                {isDraft ? "черн." : "опубл."}
+              </span>
 
               {canEdit && (
                 <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">

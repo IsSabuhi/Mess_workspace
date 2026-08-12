@@ -12,6 +12,7 @@ import {
   PanelLeft,
   Settings,
   Shield,
+  StickyNote,
   Kanban,
   CalendarDays,
   PlusCircle,
@@ -289,7 +290,22 @@ export function Sidebar({ collapsed, onToggleCollapse }: Props) {
         )}
       </nav>
 
-      <div className='border-t border-slate-200/80 p-2 dark:border-slate-700/80'>
+      <div className='space-y-0.5 border-t border-slate-200/80 p-2 dark:border-slate-700/80'>
+        <NavLink
+          to='/notes'
+          title={collapsed ? 'Заметки' : undefined}
+          className={({ isActive }) =>
+            [
+              'flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition',
+              collapsed ? 'justify-center' : '',
+              isActive
+                ? 'bg-amber-500/15 text-amber-800 shadow-sm dark:bg-amber-400/10 dark:text-amber-200'
+                : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800',
+            ].join(' ')
+          }>
+          <StickyNote className='h-5 w-5 shrink-0' aria-hidden />
+          {!collapsed && <span>Заметки</span>}
+        </NavLink>
         <NavLink
           to='/settings'
           title={collapsed ? 'Настройки' : undefined}

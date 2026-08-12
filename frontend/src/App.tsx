@@ -15,6 +15,7 @@ const LoginPage = lazy(() => import("./pages/LoginPage").then((m) => ({ default:
 const ManagerTeamDashboardPage = lazy(() =>
   import("./pages/ManagerTeamDashboardPage").then((m) => ({ default: m.ManagerTeamDashboardPage })),
 );
+const NotesPage = lazy(() => import("./pages/NotesPage").then((m) => ({ default: m.NotesPage })));
 const NotificationsPage = lazy(() =>
   import("./pages/NotificationsPage").then((m) => ({ default: m.NotificationsPage })),
 );
@@ -190,6 +191,14 @@ export default function App() {
             <RequireScheduleAccess>
               <SchedulePage />
             </RequireScheduleAccess>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/notes"
+        element={
+          <ProtectedRoute>
+            <NotesPage />
           </ProtectedRoute>
         }
       />

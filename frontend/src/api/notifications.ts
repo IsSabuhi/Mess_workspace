@@ -8,7 +8,8 @@ export type NotificationType =
   | "employee_pass_due_3_days"
   | "employee_pass_overdue"
   | "employee_exam_electrical_due_3_days"
-  | "employee_exam_electrical_overdue";
+  | "employee_exam_electrical_overdue"
+  | "note_reminder";
 
 export type NotificationOut = {
   id: string;
@@ -18,6 +19,7 @@ export type NotificationOut = {
   task_id: string | null;
   board_id: string | null;
   release_note_id: string | null;
+  personal_note_id: string | null;
   created_at: string;
   read_at: string | null;
 };

@@ -77,3 +77,8 @@ class User(Base):
         "TaskComment",
         back_populates="author",
     )
+    personal_notes: Mapped[list["PersonalNote"]] = relationship(
+        "PersonalNote",
+        back_populates="owner",
+        cascade="all, delete-orphan",
+    )

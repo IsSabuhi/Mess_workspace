@@ -12,7 +12,7 @@ from app.config import get_settings
 from app.database import async_session_maker
 from app.db_startup import run_alembic_upgrade
 from app.models import Role, User, UserRole
-from app.paths import UPLOAD_KB_DIR, UPLOAD_TASKS_DIR, UPLOADS_DIR
+from app.paths import UPLOAD_KB_DIR, UPLOAD_NOTES_DIR, UPLOAD_TASKS_DIR, UPLOADS_DIR
 from app.routers import (
     audit,
     auth,
@@ -20,6 +20,7 @@ from app.routers import (
     employee_directory,
     knowledge,
     notifications,
+    personal_notes,
     positions,
     release_notes,
     schedule,
@@ -36,6 +37,7 @@ settings = get_settings()
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 UPLOAD_KB_DIR.mkdir(parents=True, exist_ok=True)
 UPLOAD_TASKS_DIR.mkdir(parents=True, exist_ok=True)
+UPLOAD_NOTES_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @asynccontextmanager
@@ -108,6 +110,7 @@ app.include_router(release_notes.router, prefix="/api/v1")
 app.include_router(schedule.router, prefix="/api/v1")
 app.include_router(employee_directory.router, prefix="/api/v1")
 app.include_router(knowledge.router, prefix="/api/v1")
+app.include_router(personal_notes.router, prefix="/api/v1")
 
 app.mount(
     "/uploads",

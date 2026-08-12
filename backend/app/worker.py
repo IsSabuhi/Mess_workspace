@@ -12,6 +12,7 @@ from app.config import get_settings
 from app.database import async_session_maker
 from app.services.notifications import (
     sync_employee_compliance_notifications,
+    sync_note_reminder_notifications,
     sync_task_deadline_notifications_all,
 )
 
@@ -29,11 +30,14 @@ async def _sync_employee_compliance(session: AsyncSession) -> int:
     return await sync_employee_compliance_notifications(session)
 
 
-# Новые проверки (срок пропуска, экзамен и т.п.) добавляются сюда, когда будут определены
-# роли получателей и правила периодичности; HTTP API от них не зависит.
+async def _sync_note_reminders(session: AsyncSession) -> int:
+    return await sync_note_reminder_notifications(session)
+
+
 NOTIFICATION_CHECKS: dict[str, NotificationCheck] = {
     "task_deadlines": _sync_task_deadlines,
     "employee_compliance": _sync_employee_compliance,
+    "note_reminders": _sync_note_reminders,
 }
 
 

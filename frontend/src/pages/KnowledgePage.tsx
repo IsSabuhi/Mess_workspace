@@ -44,6 +44,7 @@ import { KnowledgeRevisionsModal } from "../components/KnowledgeRevisionsModal";
 import { KnowledgeRichEditor } from "../components/KnowledgeRichEditor";
 import { useAuth } from "../context/AuthContext";
 import { PERM, hasPermission } from "../lib/permissions";
+import { ARTICLE_STATUS_LABEL, articleStatusBadgeClass } from "../lib/knowledgeArticleStatus";
 import {
   articlePathToRoot,
   buildArticleTree,
@@ -981,9 +982,16 @@ export function KnowledgePage() {
               onClick={() => setSearchQ("")}
               className="block min-w-0 rounded-lg border border-slate-100 bg-slate-50/70 px-2.5 py-2 hover:border-sky-300 dark:border-slate-700 dark:bg-slate-800/50 dark:hover:border-sky-700"
             >
-              <p className="truncate text-sm font-medium text-slate-900 dark:text-slate-100">
-                {row.article.title}
-              </p>
+              <div className="flex min-w-0 items-center gap-2">
+                <p className="min-w-0 truncate text-sm font-medium text-slate-900 dark:text-slate-100">
+                  {row.article.title}
+                </p>
+                <span
+                  className={`shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold leading-none ${articleStatusBadgeClass(row.article.status)}`}
+                >
+                  {ARTICLE_STATUS_LABEL[row.article.status]}
+                </span>
+              </div>
               {row.snippet && (
                 <p className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-slate-500 dark:text-slate-400">
                   {row.snippet}
@@ -1688,13 +1696,23 @@ export function KnowledgePage() {
                   ) : null}
                 </div>
               </div>
-              <div className="rounded-xl border border-slate-200 bg-white/80 p-3 dark:border-slate-700 dark:bg-slate-900/50">
+              <div
+                className={`rounded-xl border p-3 ${
+                  status === "published"
+                    ? "border-emerald-200/80 bg-emerald-50/50 dark:border-emerald-900/50 dark:bg-emerald-950/25"
+                    : "border-amber-200/80 bg-amber-50/50 dark:border-amber-900/50 dark:bg-amber-950/25"
+                }`}
+              >
                 <p className="mb-2 text-xs font-medium text-slate-500">Статус</p>
                 <select
                   value={status}
                   onChange={(e) => setStatus(e.target.value as "draft" | "published")}
                   disabled={!canEdit}
-                  className="w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+                  className={`w-full rounded-lg border px-2 py-2 text-sm font-medium ${
+                    status === "published"
+                      ? "border-emerald-300 bg-white text-emerald-900 dark:border-emerald-800 dark:bg-slate-900 dark:text-emerald-200"
+                      : "border-amber-300 bg-white text-amber-950 dark:border-amber-800 dark:bg-slate-900 dark:text-amber-200"
+                  }`}
                 >
                   <option value="draft">Черновик</option>
                   <option value="published">Опубликовано</option>
@@ -1982,16 +2000,19 @@ export function KnowledgePage() {
                       {title || "Без заголовка"}
                     </h1>
                     {article && (
-                      <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
-                        Обновлено {new Date(article.updated_at).toLocaleString("ru-RU")}
-                        {" · "}
-                        {status === "published" ? "Опубликовано" : "Черновик"}
+                      <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5 text-sm text-slate-500 dark:text-slate-400">
+                        <span>Обновлено {new Date(article.updated_at).toLocaleString("ru-RU")}</span>
+                        <span
+                          className={`inline-flex rounded-md px-2 py-0.5 text-xs font-semibold ${articleStatusBadgeClass(status)}`}
+                        >
+                          {ARTICLE_STATUS_LABEL[status]}
+                        </span>
                         {article.created_by?.full_name
-                          ? ` · Автор: ${article.created_by.full_name}`
+                          ? <span>Автор: {article.created_by.full_name}</span>
                           : article.created_by?.email
-                            ? ` · Автор: ${article.created_by.email}`
-                            : ""}
-                      </p>
+                            ? <span>Автор: {article.created_by.email}</span>
+                            : null}
+                      </div>
                     )}
                   </header>
                   {childTree.length > 0 ? (
@@ -2049,13 +2070,23 @@ export function KnowledgePage() {
                       />
                     </div>
                   </div>
-                  <div className="rounded-xl border border-slate-200 bg-white/80 p-3 dark:border-slate-700 dark:bg-slate-900/50">
+                  <div
+                    className={`rounded-xl border p-3 ${
+                      status === "published"
+                        ? "border-emerald-200/80 bg-emerald-50/50 dark:border-emerald-900/50 dark:bg-emerald-950/25"
+                        : "border-amber-200/80 bg-amber-50/50 dark:border-amber-900/50 dark:bg-amber-950/25"
+                    }`}
+                  >
                     <p className="mb-2 text-xs font-medium text-slate-500">Статус</p>
                     <select
                       value={status}
                       onChange={(e) => setStatus(e.target.value as "draft" | "published")}
                       disabled={!canEdit}
-                      className="w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+                      className={`w-full rounded-lg border px-2 py-2 text-sm font-medium ${
+                        status === "published"
+                          ? "border-emerald-300 bg-white text-emerald-900 dark:border-emerald-800 dark:bg-slate-900 dark:text-emerald-200"
+                          : "border-amber-300 bg-white text-amber-950 dark:border-amber-800 dark:bg-slate-900 dark:text-amber-200"
+                      }`}
                     >
                       <option value="draft">Черновик</option>
                       <option value="published">Опубликовано</option>

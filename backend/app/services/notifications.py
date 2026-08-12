@@ -12,6 +12,7 @@ from app.models import (
     Notification,
     NotificationType,
     Permission,
+    PersonalNote,
     Task,
     User,
 )
@@ -299,4 +300,45 @@ async def sync_employee_compliance_notifications(session: AsyncSession) -> int:
     created = len(result.scalars().all())
     if created:
         await session.commit()
+    return created
+
+
+async def sync_note_reminder_notifications(session: AsyncSession) -> int:
+    """Создать уведомления по наступившим напоминаниям личных заметок."""
+    now = datetime.now(timezone.utc)
+    notes = (
+        await session.execute(
+            select(PersonalNote).where(
+                PersonalNote.reminder_at.is_not(None),
+                PersonalNote.reminder_at <= now,
+                PersonalNote.reminder_notified_at.is_(None),
+                PersonalNote.deleted_at.is_(None),
+            )
+        )
+    ).scalars().all()
+    if not notes:
+        return 0
+
+    payloads: list[dict] = []
+    for note in notes:
+        title_text = (note.title or "").strip() or "Без названия"
+        payloads.append(
+            {
+                "user_id": note.owner_user_id,
+                "type": NotificationType.note_reminder,
+                "title": f"Напоминание: {title_text}",
+                "body": "Срок напоминания по личной заметке.",
+                "personal_note_id": note.id,
+            }
+        )
+        note.reminder_notified_at = now
+
+    result = await session.execute(
+        insert(Notification)
+        .values(payloads)
+        .on_conflict_do_nothing(constraint="uq_notifications_user_type_personal_note")
+        .returning(Notification.id)
+    )
+    created = len(result.scalars().all())
+    await session.commit()
     return created

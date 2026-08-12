@@ -3,6 +3,12 @@ from app.models.audit_event import AuditEvent
 from app.models.employee_profile import EmployeeProfile
 from app.models.login_audit import LoginAudit
 from app.models.notification import Notification, NotificationType
+from app.models.personal_note import (
+    PersonalNote,
+    PersonalNoteAttachment,
+    PersonalNoteTag,
+    PersonalNoteTagLink,
+)
 from app.models.release_note import ReleaseNote
 from app.models.position import Position
 from app.models.knowledge import (
@@ -32,6 +38,10 @@ __all__ = [
     "LoginAudit",
     "Notification",
     "NotificationType",
+    "PersonalNote",
+    "PersonalNoteAttachment",
+    "PersonalNoteTag",
+    "PersonalNoteTagLink",
     "ReleaseNote",
     "ArticleStatus",
     "EmployeeProfile",

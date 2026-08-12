@@ -14,6 +14,7 @@ class NotificationOut(ORMModel):
     # Доска задачи — для ссылки «К задаче» на нужный канбан
     board_id: uuid.UUID | None = None
     release_note_id: uuid.UUID | None
+    personal_note_id: uuid.UUID | None = None
     created_at: datetime
     read_at: datetime | None
 

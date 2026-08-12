@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 import boto3
 
 from app.config import get_settings
-from app.paths import UPLOAD_KB_DIR, UPLOAD_TASKS_DIR
+from app.paths import UPLOAD_KB_DIR, UPLOAD_NOTES_DIR, UPLOAD_TASKS_DIR
 
 _IMAGE_EXT = {"image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp"}
 _TASK_EXT = {
@@ -103,6 +103,25 @@ def _store(raw: bytes, content_type: str, prefix: str, local_dir: Path, url_pref
 
 def save_kb_image(raw: bytes, content_type: str) -> str:
     return _store(raw, content_type, "kb", UPLOAD_KB_DIR, "/uploads/kb")
+
+
+def save_note_file(raw: bytes, content_type: str, original_filename: str | None = None) -> str:
+    ct = (content_type or "application/octet-stream").split(";")[0].strip().lower()
+    if ct == "application/octet-stream" and original_filename:
+        suffix = Path(original_filename).suffix.lower()
+        if suffix in {".pdf", ".txt", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".doc", ".docx", ".zip"}:
+            name = f"{uuid.uuid4().hex}{suffix}"
+            key = f"notes/{name}"
+            if _is_minio():
+                s = get_settings()
+                client = _minio_client()
+                client.put_object(Bucket=s.minio_bucket, Key=key, Body=raw, ContentType=ct)
+                base = public_files_base()
+                return f"{base}/{s.minio_bucket}/{key}"
+            UPLOAD_NOTES_DIR.mkdir(parents=True, exist_ok=True)
+            (UPLOAD_NOTES_DIR / name).write_bytes(raw)
+            return f"/uploads/notes/{name}"
+    return _store(raw, ct, "notes", UPLOAD_NOTES_DIR, "/uploads/notes")
 
 
 def save_task_file(raw: bytes, content_type: str, original_filename: str | None = None) -> str:

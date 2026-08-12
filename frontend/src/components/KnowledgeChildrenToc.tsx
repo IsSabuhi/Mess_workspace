@@ -2,6 +2,7 @@ import { ArrowUpRight, BookMarked, FileText, FolderOpen } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import type { ArticleTreeNode } from "../lib/knowledgeTree";
+import { ARTICLE_STATUS_LABEL, articleStatusBadgeClass } from "../lib/knowledgeArticleStatus";
 
 type Props = {
   spaceId: string;
@@ -28,14 +29,19 @@ function TocTreeList({
     <ul className={depth === 0 ? "space-y-2" : "mt-2 space-y-1.5 border-l border-sky-200/70 pl-3 dark:border-sky-900/50"}>
       {nodes.map((node) => {
         const hasKids = node.children.length > 0;
+        const isDraft = node.status === "draft";
         return (
           <li key={node.id}>
             <Link
               to={`/knowledge/${spaceId}/${node.id}`}
               className={`group flex items-center justify-between gap-3 rounded-xl border transition hover:border-sky-300 hover:bg-sky-50/80 dark:hover:border-sky-700 dark:hover:bg-sky-950/30 ${
                 depth === 0
-                  ? "border-slate-200/80 bg-white/90 px-4 py-3 dark:border-slate-700 dark:bg-slate-900/60"
-                  : "border-transparent bg-white/60 px-3 py-2 dark:bg-slate-900/40"
+                  ? isDraft
+                    ? "border-amber-200/80 bg-amber-50/60 px-4 py-3 dark:border-amber-900/50 dark:bg-amber-950/25"
+                    : "border-slate-200/80 bg-white/90 px-4 py-3 dark:border-slate-700 dark:bg-slate-900/60"
+                  : isDraft
+                    ? "border-transparent bg-amber-50/40 px-3 py-2 dark:bg-amber-950/20"
+                    : "border-transparent bg-white/60 px-3 py-2 dark:bg-slate-900/40"
               }`}
             >
               <span className="flex min-w-0 items-center gap-2.5">
@@ -43,18 +49,28 @@ function TocTreeList({
                   className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${
                     hasKids
                       ? "bg-amber-50 text-amber-600 dark:bg-amber-950/40 dark:text-amber-400"
-                      : "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"
+                      : isDraft
+                        ? "bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300"
+                        : "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"
                   }`}
                 >
                   {hasKids ? <FolderOpen className="h-3.5 w-3.5" /> : <FileText className="h-3.5 w-3.5" />}
                 </span>
                 <span className="min-w-0">
-                  <span
-                    className={`block truncate font-semibold text-slate-900 group-hover:text-sky-700 dark:text-slate-50 dark:group-hover:text-sky-300 ${
-                      depth === 0 ? "text-base" : "text-sm"
-                    }`}
-                  >
-                    {node.title}
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span
+                      className={`block truncate font-semibold text-slate-900 group-hover:text-sky-700 dark:text-slate-50 dark:group-hover:text-sky-300 ${
+                        depth === 0 ? "text-base" : "text-sm"
+                      }`}
+                    >
+                      {node.title}
+                    </span>
+                    <span
+                      className={`shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold leading-none ${articleStatusBadgeClass(node.status)}`}
+                      title={ARTICLE_STATUS_LABEL[node.status]}
+                    >
+                      {ARTICLE_STATUS_LABEL[node.status]}
+                    </span>
                   </span>
                   {depth === 0 && (
                     <span className="mt-0.5 block truncate font-mono text-[11px] text-slate-400">{node.slug}</span>

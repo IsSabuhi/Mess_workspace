@@ -20,6 +20,7 @@ class NotificationType(str, enum.Enum):
     employee_pass_overdue = "employee_pass_overdue"
     employee_exam_electrical_due_3_days = "employee_exam_electrical_due_3_days"
     employee_exam_electrical_overdue = "employee_exam_electrical_overdue"
+    note_reminder = "note_reminder"
 
 
 class Notification(Base):
@@ -31,6 +32,7 @@ class Notification(Base):
         UniqueConstraint("user_id", "type", "release_note_id", name="uq_notifications_user_type_release_note"),
         # Срок пропуска/экзамена — одна запись на получателя, тип и сотрудника.
         UniqueConstraint("user_id", "type", "employee_user_id", name="uq_notifications_user_type_employee"),
+        UniqueConstraint("user_id", "type", "personal_note_id", name="uq_notifications_user_type_personal_note"),
         Index("ix_notifications_user_created_at", "user_id", "created_at"),
         Index("ix_notifications_user_read_at", "user_id", "read_at"),
     )
@@ -58,6 +60,11 @@ class Notification(Base):
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=True,
     )
+    personal_note_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("personal_notes.id", ondelete="CASCADE"),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -69,3 +76,4 @@ class Notification(Base):
     task: Mapped["Task | None"] = relationship("Task")
     release_note: Mapped["ReleaseNote | None"] = relationship("ReleaseNote")
     employee: Mapped["User | None"] = relationship("User", foreign_keys=[employee_user_id])
+    personal_note: Mapped["PersonalNote | None"] = relationship("PersonalNote")

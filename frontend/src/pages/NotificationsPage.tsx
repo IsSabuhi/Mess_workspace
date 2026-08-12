@@ -36,6 +36,7 @@ function notificationTypeLabel(type: NotificationOut["type"]): string {
     return "Срок документов";
   }
   if (type === "task_due_3_days") return "До 3 дней";
+  if (type === "note_reminder") return "Напоминание";
   return "Уведомление";
 }
 
@@ -163,6 +164,14 @@ export function NotificationsPage() {
                         className="text-sm font-medium text-sky-600 hover:underline dark:text-sky-400"
                       >
                         К задаче
+                      </Link>
+                    )}
+                    {n.type === "note_reminder" && (
+                      <Link
+                        to="/notes"
+                        className="text-sm font-medium text-sky-600 hover:underline dark:text-sky-400"
+                      >
+                        К заметкам
                       </Link>
                     )}
                     {!n.read_at && (

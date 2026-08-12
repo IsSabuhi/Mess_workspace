@@ -18,7 +18,12 @@ router = APIRouter(prefix="/notifications", tags=["notifications"])
 
 def _notification_to_out(item: Notification) -> NotificationOut:
     board_id = item.task.board_id if item.task is not None else None
-    return NotificationOut.model_validate(item).model_copy(update={"board_id": board_id})
+    return NotificationOut.model_validate(item).model_copy(
+        update={
+            "board_id": board_id,
+            "personal_note_id": item.personal_note_id,
+        }
+    )
 
 
 @router.get("", response_model=list[NotificationOut])
