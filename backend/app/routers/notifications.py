@@ -8,12 +8,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.deps import get_current_user
+from app.deps import get_current_user, require_any_permission
 from app.models import Notification, User
+from app.permissions import ROLES_MANAGE, USERS_MANAGE
 from app.schemas.common import Message
-from app.schemas.notification import NotificationOut, NotificationUnreadCount
+from app.schemas.notification import (
+    NotificationOut,
+    NotificationSettingsOut,
+    NotificationSettingsPatch,
+    NotificationUnreadCount,
+)
+from app.services.notifications import (
+    cleanup_old_notifications,
+    get_notification_retention_settings,
+    set_notification_retention_settings,
+)
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
+_ADMIN = require_any_permission(USERS_MANAGE, ROLES_MANAGE)
 
 
 def _notification_to_out(item: Notification) -> NotificationOut:
@@ -44,6 +56,43 @@ async def list_notifications(
     stmt = stmt.order_by(Notification.created_at.desc()).limit(safe_limit)
     rows = (await session.execute(stmt)).scalars().all()
     return [_notification_to_out(n) for n in rows]
+
+
+@router.get("/settings", response_model=NotificationSettingsOut)
+async def get_notification_settings(
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(_ADMIN)],
+) -> NotificationSettingsOut:
+    enabled, read_days, unread_days, note_reminder_days = await get_notification_retention_settings(session)
+    return NotificationSettingsOut(
+        enabled=enabled,
+        read_days=read_days,
+        unread_days=unread_days,
+        note_reminder_days=note_reminder_days,
+    )
+
+
+@router.patch("/settings", response_model=NotificationSettingsOut)
+async def patch_notification_settings(
+    body: NotificationSettingsPatch,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(_ADMIN)],
+) -> NotificationSettingsOut:
+    enabled, read_days, unread_days, note_reminder_days = await set_notification_retention_settings(
+        session,
+        enabled=body.enabled,
+        read_days=body.read_days,
+        unread_days=body.unread_days,
+        note_reminder_days=body.note_reminder_days,
+    )
+    if enabled:
+        await cleanup_old_notifications(session, force=True)
+    return NotificationSettingsOut(
+        enabled=enabled,
+        read_days=read_days,
+        unread_days=unread_days,
+        note_reminder_days=note_reminder_days,
+    )
 
 
 @router.get("/unread-count", response_model=NotificationUnreadCount)

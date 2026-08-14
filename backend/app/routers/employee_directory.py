@@ -61,7 +61,16 @@ _PROFILE_PATCH_FIELDS = frozenset({
     "position_assigned_at",
     "personnel_number",
 })
-_BULK_PROFILE_KEYS = frozenset({"work_schedule_kind", "gender", "position_id", "system_ids"})
+_BULK_PROFILE_KEYS = frozenset({
+    "work_schedule_kind",
+    "gender",
+    "position_id",
+    "system_ids",
+    "is_remote",
+    "is_field_worker",
+    "work_address",
+    "position_assigned_at",
+})
 
 
 def _parse_iso(d) -> date | None:
@@ -217,6 +226,8 @@ async def list_employee_directory(
         None,
         description="Фильтр по графику (five_two / shift / two_two). Нет профиля → five_two.",
     ),
+    is_remote: bool | None = Query(None, description="Фильтр: удалёнщик"),
+    is_field_worker: bool | None = Query(None, description="Фильтр: выездной сотрудник"),
 ) -> list[EmployeeDirectoryRowOut]:
     stmt = (
         select(User)
@@ -236,7 +247,13 @@ async def list_employee_directory(
         cond.append(User.is_active.is_(True))
     if search:
         q = f"%{search.strip()}%"
-        cond.append(or_(User.full_name.ilike(q), User.email.ilike(q)))
+        cond.append(
+            or_(
+                User.full_name.ilike(q),
+                User.email.ilike(q),
+                EmployeeProfile.personnel_number.ilike(q),
+            )
+        )
     sids = list(system_ids)
     if system_id is not None and system_id not in sids:
         sids.append(system_id)
@@ -318,6 +335,18 @@ async def list_employee_directory(
             else_=literal("five_two"),
         )
         cond.append(schedule_effective == work_schedule_kind)
+
+    if is_remote is not None:
+        if is_remote:
+            cond.append(EmployeeProfile.is_remote.is_(True))
+        else:
+            cond.append(or_(EmployeeProfile.id.is_(None), EmployeeProfile.is_remote.is_(False)))
+
+    if is_field_worker is not None:
+        if is_field_worker:
+            cond.append(EmployeeProfile.is_field_worker.is_(True))
+        else:
+            cond.append(or_(EmployeeProfile.id.is_(None), EmployeeProfile.is_field_worker.is_(False)))
 
     if cond:
         stmt = stmt.where(*cond)

@@ -27,6 +27,7 @@ from app.schemas.personal_note import (
     PersonalNoteUpdate,
 )
 from app.services.file_storage import save_note_file
+from app.services.notifications import next_daily_reminder_at
 
 router = APIRouter(prefix="/notes", tags=["notes"])
 
@@ -231,6 +232,7 @@ async def create_note(
         is_archived=bool(body.is_archived),
         reminder_at=body.reminder_at,
         reminder_notified_at=None,
+        reminder_repeat_daily=bool(body.reminder_repeat_daily) if body.reminder_at else False,
         tags=tags,
     )
     session.add(note)
@@ -276,9 +278,23 @@ async def update_note(
     if data.get("clear_reminder"):
         note.reminder_at = None
         note.reminder_notified_at = None
+        note.reminder_repeat_daily = False
     elif "reminder_at" in data:
         note.reminder_at = data["reminder_at"]
         note.reminder_notified_at = None
+        if data["reminder_at"] is None:
+            note.reminder_repeat_daily = False
+    if "reminder_repeat_daily" in data and data["reminder_repeat_daily"] is not None:
+        note.reminder_repeat_daily = bool(data["reminder_repeat_daily"]) and note.reminder_at is not None
+        if note.reminder_repeat_daily and note.reminder_at is not None:
+            now = datetime.now(timezone.utc)
+            at = note.reminder_at
+            if at.tzinfo is None:
+                at = at.replace(tzinfo=timezone.utc)
+            # Уже сработавшее разовое — не слать сразу, а сдвинуть на ближайшее будущее.
+            if note.reminder_notified_at is not None and at <= now:
+                note.reminder_at = next_daily_reminder_at(at, now)
+            note.reminder_notified_at = None
     if "tag_ids" in data and data["tag_ids"] is not None:
         note.tags = await _resolve_tags(session, user.id, data["tag_ids"])
 

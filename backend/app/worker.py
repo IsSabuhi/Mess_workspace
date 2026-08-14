@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.database import async_session_maker
 from app.services.notifications import (
+    cleanup_old_notifications,
     sync_employee_compliance_notifications,
     sync_note_reminder_notifications,
     sync_task_deadline_notifications_all,
@@ -47,6 +48,7 @@ async def sync_notifications_job(_: dict[str, Any]) -> dict[str, int]:
     async with async_session_maker() as session:
         for name, check in NOTIFICATION_CHECKS.items():
             results[name] = await check(session)
+        results["cleanup"] = await cleanup_old_notifications(session)
     logger.info("Notification checks completed: %s", results)
     return results
 

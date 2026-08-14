@@ -160,7 +160,7 @@ export async function downloadEmployeeDirectoryComplianceExcel(rows: EmployeeDir
   header.alignment = { vertical: "middle", wrapText: true };
 
   for (const r of rows) {
-    const remote = !!r.is_remote;
+    if (r.is_remote) continue;
     ws.addRow([
       r.full_name,
       r.email,
@@ -168,10 +168,10 @@ export async function downloadEmployeeDirectoryComplianceExcel(rows: EmployeeDir
       r.position?.name ?? "",
       r.systems.map((s) => s.name).join(", "),
       examElectricalPassedLabel(r),
-      remote ? "" : (r.exam_electrical_group ?? ""),
-      remote ? "" : (r.exam_electrical_certificate_number ?? ""),
-      remote ? "" : fmtDate(r.exam_electrical_date),
-      remote ? "" : fmtDate(r.exam_electrical_valid_to),
+      r.exam_electrical_group ?? "",
+      r.exam_electrical_certificate_number ?? "",
+      fmtDate(r.exam_electrical_date),
+      fmtDate(r.exam_electrical_valid_to),
       r.pass_has ? "Есть" : "Нет",
       r.pass_number ?? "",
       fmtDate(r.pass_valid_from),

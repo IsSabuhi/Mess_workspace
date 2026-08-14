@@ -10,6 +10,7 @@ import {
   Pin,
   PinOff,
   Plus,
+  Repeat,
   RotateCcw,
   Search,
   StickyNote,
@@ -100,7 +101,9 @@ export function NotesPage() {
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [tagDraft, setTagDraft] = useState("");
+  const [draftReminder, setDraftReminder] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const reminderFocusedRef = useRef(false);
   const skipNextAutosave = useRef(false);
   const selectedIdRef = useRef<string | null>(null);
   selectedIdRef.current = selectedId;
@@ -153,6 +156,11 @@ export function NotesPage() {
     setDraftChecklist(selected.checklist_items ?? []);
     setSaveState("idle");
   }, [selected?.id]);
+
+  useEffect(() => {
+    if (reminderFocusedRef.current) return;
+    setDraftReminder(toLocalInputValue(selected?.reminder_at ?? null));
+  }, [selected?.id, selected?.reminder_at]);
 
   const refreshNotes = async () => {
     await qc.invalidateQueries({ queryKey: ["notes"] });
@@ -311,6 +319,26 @@ export function NotesPage() {
     patchMut.mutate({ id: selected.id, body: { tag_ids: [...current] } });
   }
 
+  function commitReminderDraft() {
+    if (!selected || inTrash) return;
+    const iso = fromLocalInputValue(draftReminder);
+    const current = toLocalInputValue(selected.reminder_at);
+    if (draftReminder === current) return;
+    if (!iso) {
+      if (selected.reminder_at) {
+        patchMut.mutate({ id: selected.id, body: { clear_reminder: true } });
+      }
+      return;
+    }
+    patchMut.mutate({
+      id: selected.id,
+      body: {
+        reminder_at: iso,
+        reminder_repeat_daily: !!selected.reminder_repeat_daily,
+      },
+    });
+  }
+
   const saveLabel =
     saveState === "saving"
       ? "Сохранение…"
@@ -441,7 +469,13 @@ export function NotesPage() {
                             {notePreview(n)}
                           </p>
                           <div className="mt-1 flex flex-wrap items-center gap-1">
-                            {n.reminder_at && <Bell className="h-3 w-3 text-sky-500" />}
+                            {n.reminder_at && (
+                              n.reminder_repeat_daily ? (
+                                <Repeat className="h-3 w-3 text-sky-500" />
+                              ) : (
+                                <Bell className="h-3 w-3 text-sky-500" />
+                              )
+                            )}
                             {n.tags.slice(0, 2).map((t) => (
                               <span
                                 key={t.id}
@@ -710,14 +744,14 @@ export function NotesPage() {
                     <input
                       type="datetime-local"
                       disabled={inTrash}
-                      value={toLocalInputValue(selected.reminder_at)}
-                      onChange={(e) => {
-                        const iso = fromLocalInputValue(e.target.value);
-                        if (!iso) {
-                          patchMut.mutate({ id: selected.id, body: { clear_reminder: true } });
-                          return;
-                        }
-                        patchMut.mutate({ id: selected.id, body: { reminder_at: iso } });
+                      value={draftReminder}
+                      onFocus={() => {
+                        reminderFocusedRef.current = true;
+                      }}
+                      onChange={(e) => setDraftReminder(e.target.value)}
+                      onBlur={() => {
+                        reminderFocusedRef.current = false;
+                        commitReminderDraft();
                       }}
                       className="rounded-xl border border-slate-200 bg-white/80 px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-900/50"
                     />
@@ -732,6 +766,23 @@ export function NotesPage() {
                       </button>
                     )}
                   </div>
+                  {selected.reminder_at && (
+                    <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
+                      <input
+                        type="checkbox"
+                        disabled={inTrash}
+                        checked={!!selected.reminder_repeat_daily}
+                        onChange={(e) =>
+                          patchMut.mutate({
+                            id: selected.id,
+                            body: { reminder_repeat_daily: e.target.checked },
+                          })
+                        }
+                        className="rounded border-slate-300"
+                      />
+                      Повторять ежедневно в это время
+                    </label>
+                  )}
                 </div>
 
                 <div className="space-y-2 border-t border-slate-200/70 pt-3 dark:border-slate-700/70">

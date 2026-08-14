@@ -40,6 +40,7 @@ export type PersonalNoteOut = {
   is_pinned: boolean;
   is_archived: boolean;
   reminder_at: string | null;
+  reminder_repeat_daily?: boolean;
   deleted_at: string | null;
   tags: PersonalNoteTagOut[];
   attachments: PersonalNoteAttachmentOut[];
@@ -55,6 +56,7 @@ export type PersonalNoteCreate = {
   is_pinned?: boolean;
   is_archived?: boolean;
   reminder_at?: string | null;
+  reminder_repeat_daily?: boolean;
   tag_ids?: string[];
 };
 
@@ -66,6 +68,7 @@ export type PersonalNoteUpdate = {
   is_pinned?: boolean;
   is_archived?: boolean;
   reminder_at?: string | null;
+  reminder_repeat_daily?: boolean;
   clear_reminder?: boolean;
   tag_ids?: string[];
 };

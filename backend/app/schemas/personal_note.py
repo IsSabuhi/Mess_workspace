@@ -44,6 +44,7 @@ class PersonalNoteOut(ORMModel):
     is_pinned: bool
     is_archived: bool
     reminder_at: datetime | None = None
+    reminder_repeat_daily: bool = False
     deleted_at: datetime | None = None
     tags: list[PersonalNoteTagOut] = []
     attachments: list[PersonalNoteAttachmentOut] = []
@@ -59,6 +60,7 @@ class PersonalNoteCreate(BaseModel):
     is_pinned: bool = False
     is_archived: bool = False
     reminder_at: datetime | None = None
+    reminder_repeat_daily: bool = False
     tag_ids: list[uuid.UUID] = []
 
     @field_validator("color")
@@ -78,6 +80,7 @@ class PersonalNoteUpdate(BaseModel):
     is_pinned: bool | None = None
     is_archived: bool | None = None
     reminder_at: datetime | None = None
+    reminder_repeat_daily: bool | None = None
     clear_reminder: bool | None = None
     tag_ids: list[uuid.UUID] | None = None
 

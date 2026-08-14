@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     api_workers: int = Field(default=1, ge=1, le=16)
     redis_url: str = "redis://redis:6379/0"
     notification_sync_minutes: int = Field(default=10, ge=1, le=60)
+    # Ротация уведомлений (воркер, не чаще раза в сутки).
+    notification_retention_read_days: int = Field(default=90, ge=7, le=3650)
+    notification_retention_unread_days: int = Field(default=180, ge=7, le=3650)
+    notification_retention_note_reminder_days: int = Field(default=30, ge=7, le=3650)
     worker_max_jobs: int = Field(default=2, ge=1, le=32)
     # При старте API выполняется alembic upgrade head (удобно для новой пустой БД). В проде при желании отключите.
     auto_migrate_on_startup: bool = True

@@ -92,12 +92,16 @@ class EmployeeDirectoryPatch(BaseModel):
 
 
 class EmployeeDirectoryBulkProfilePatch(BaseModel):
-    """Только кадровые поля для массового обновления."""
+    """Кадровые поля для массового обновления (как столбцы справочника, кроме уникальных)."""
 
     work_schedule_kind: Literal["five_two", "shift", "two_two"] | None = None
     gender: Literal["male", "female", "unspecified"] | None = None
     position_id: uuid.UUID | None = None
     system_ids: list[uuid.UUID] | None = Field(None, description="Полная замена списка производственных систем.")
+    is_remote: bool | None = None
+    is_field_worker: bool | None = None
+    work_address: str | None = Field(None, max_length=512)
+    position_assigned_at: date | None = None
 
 
 class EmployeeDirectoryBulkProfileIn(BaseModel):

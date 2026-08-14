@@ -55,6 +55,8 @@ export type EmployeeDirectoryFilters = {
   include_inactive_users?: boolean;
   gender?: EmployeeGender;
   work_schedule_kind?: WorkScheduleKind;
+  is_remote?: boolean;
+  is_field_worker?: boolean;
 };
 
 export type EmployeeDirectoryPatch = {
@@ -105,6 +107,8 @@ export async function listEmployeeDirectory(
   if (filters?.include_inactive_users) sp.set("include_inactive_users", "true");
   if (filters?.gender) sp.set("gender", filters.gender);
   if (filters?.work_schedule_kind) sp.set("work_schedule_kind", filters.work_schedule_kind);
+  if (filters?.is_remote !== undefined) sp.set("is_remote", String(filters.is_remote));
+  if (filters?.is_field_worker !== undefined) sp.set("is_field_worker", String(filters.is_field_worker));
   const q = sp.toString();
   return apiFetch<EmployeeDirectoryRowOut[]>(`/api/v1/employee-directory${q ? `?${q}` : ""}`);
 }
@@ -128,6 +132,10 @@ export type EmployeeDirectoryBulkProfilePatch = {
   gender?: EmployeeGender;
   position_id?: string | null;
   system_ids?: string[];
+  is_remote?: boolean;
+  is_field_worker?: boolean;
+  work_address?: string | null;
+  position_assigned_at?: string | null;
 };
 
 export async function bulkEmployeeDirectoryProfile(body: {

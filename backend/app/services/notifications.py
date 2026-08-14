@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config import get_settings
 
 from app.models import (
     EmployeeProfile,
@@ -17,10 +19,116 @@ from app.models import (
     User,
 )
 from app.models.role import RolePermission, UserRole
+from app.models.system_setting import SystemSetting
 from app.models.task import task_assignees_table
 from app.permissions import EMPLOYEE_DIRECTORY_COMPLIANCE_NOTIFICATIONS_RECEIVE
 
+NOTIFICATIONS_LAST_CLEANUP_AT_KEY = "notifications_last_cleanup_at"
+NOTIFICATIONS_CLEANUP_ENABLED_KEY = "notifications_cleanup_enabled"
+NOTIFICATIONS_RETENTION_READ_DAYS_KEY = "notifications_retention_read_days"
+NOTIFICATIONS_RETENTION_UNREAD_DAYS_KEY = "notifications_retention_unread_days"
+NOTIFICATIONS_RETENTION_NOTE_REMINDER_DAYS_KEY = "notifications_retention_note_reminder_days"
+
+NOTIFICATIONS_CLEANUP_ENABLED_DEFAULT = True
+_RETENTION_DAYS_MIN = 7
+_RETENTION_DAYS_MAX = 3650
+
 _DUE_SOON_WINDOW = timedelta(days=3)
+
+
+def _clamp_retention_days(value: int) -> int:
+    return max(_RETENTION_DAYS_MIN, min(int(value), _RETENTION_DAYS_MAX))
+
+
+async def _get_bool_setting(session: AsyncSession, key: str, default: bool) -> bool:
+    row = await session.get(SystemSetting, key)
+    if not row:
+        return default
+    return str(row.value).strip().lower() not in {"0", "false", "off", "no"}
+
+
+async def _get_int_setting(session: AsyncSession, key: str, default: int) -> int:
+    row = await session.get(SystemSetting, key)
+    if not row:
+        return _clamp_retention_days(default)
+    try:
+        return _clamp_retention_days(int(row.value))
+    except (TypeError, ValueError):
+        return _clamp_retention_days(default)
+
+
+async def _set_setting(session: AsyncSession, key: str, value: str) -> None:
+    row = await session.get(SystemSetting, key)
+    if row:
+        row.value = value
+    else:
+        session.add(SystemSetting(key=key, value=value))
+
+
+async def get_notification_cleanup_enabled(session: AsyncSession) -> bool:
+    return await _get_bool_setting(session, NOTIFICATIONS_CLEANUP_ENABLED_KEY, NOTIFICATIONS_CLEANUP_ENABLED_DEFAULT)
+
+
+async def get_notification_retention_settings(session: AsyncSession) -> tuple[bool, int, int, int]:
+    defaults = get_settings()
+    enabled = await get_notification_cleanup_enabled(session)
+    read_days = await _get_int_setting(
+        session, NOTIFICATIONS_RETENTION_READ_DAYS_KEY, defaults.notification_retention_read_days
+    )
+    unread_days = await _get_int_setting(
+        session, NOTIFICATIONS_RETENTION_UNREAD_DAYS_KEY, defaults.notification_retention_unread_days
+    )
+    note_days = await _get_int_setting(
+        session,
+        NOTIFICATIONS_RETENTION_NOTE_REMINDER_DAYS_KEY,
+        defaults.notification_retention_note_reminder_days,
+    )
+    unread_days = max(unread_days, read_days)
+    return enabled, read_days, unread_days, note_days
+
+
+async def set_notification_retention_settings(
+    session: AsyncSession,
+    *,
+    enabled: bool | None = None,
+    read_days: int | None = None,
+    unread_days: int | None = None,
+    note_reminder_days: int | None = None,
+) -> tuple[bool, int, int, int]:
+    if enabled is not None:
+        await _set_setting(session, NOTIFICATIONS_CLEANUP_ENABLED_KEY, "1" if enabled else "0")
+    if read_days is not None:
+        await _set_setting(
+            session, NOTIFICATIONS_RETENTION_READ_DAYS_KEY, str(_clamp_retention_days(read_days))
+        )
+    if unread_days is not None:
+        await _set_setting(
+            session, NOTIFICATIONS_RETENTION_UNREAD_DAYS_KEY, str(_clamp_retention_days(unread_days))
+        )
+    if note_reminder_days is not None:
+        await _set_setting(
+            session,
+            NOTIFICATIONS_RETENTION_NOTE_REMINDER_DAYS_KEY,
+            str(_clamp_retention_days(note_reminder_days)),
+        )
+    enabled_out, read_out, unread_out, note_out = await get_notification_retention_settings(session)
+    if unread_out < read_out:
+        unread_out = read_out
+        await _set_setting(session, NOTIFICATIONS_RETENTION_UNREAD_DAYS_KEY, str(unread_out))
+    await session.flush()
+    return enabled_out, read_out, unread_out, note_out
+
+
+def next_daily_reminder_at(current: datetime, now: datetime) -> datetime:
+    """Следующее срабатывание ежедневного напоминания строго в будущем."""
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    nxt = current + timedelta(days=1)
+    while nxt <= now:
+        nxt += timedelta(days=1)
+    return nxt
 
 
 def _deadline_notification_payload(
@@ -321,34 +429,95 @@ async def sync_note_reminder_notifications(session: AsyncSession) -> int:
             select(PersonalNote).where(
                 PersonalNote.reminder_at.is_not(None),
                 PersonalNote.reminder_at <= now,
-                PersonalNote.reminder_notified_at.is_(None),
                 PersonalNote.deleted_at.is_(None),
+                or_(
+                    PersonalNote.reminder_repeat_daily.is_(True),
+                    PersonalNote.reminder_notified_at.is_(None),
+                ),
             )
         )
     ).scalars().all()
     if not notes:
         return 0
 
-    payloads: list[dict] = []
+    created = 0
     for note in notes:
         title_text = (note.title or "").strip() or "Без названия"
-        payloads.append(
-            {
-                "user_id": note.owner_user_id,
-                "type": NotificationType.note_reminder,
-                "title": f"Напоминание: {title_text}",
-                "body": "Срок напоминания по личной заметке.",
-                "personal_note_id": note.id,
-            }
+        daily = bool(note.reminder_repeat_daily)
+        session.add(
+            Notification(
+                user_id=note.owner_user_id,
+                type=NotificationType.note_reminder,
+                title=f"Напоминание: {title_text}",
+                body=(
+                    "Ежедневное напоминание по личной заметке."
+                    if daily
+                    else "Срок напоминания по личной заметке."
+                ),
+                personal_note_id=note.id,
+            )
         )
-        note.reminder_notified_at = now
+        created += 1
+        if daily and note.reminder_at is not None:
+            note.reminder_at = next_daily_reminder_at(note.reminder_at, now)
+            note.reminder_notified_at = None
+        else:
+            note.reminder_notified_at = now
 
-    result = await session.execute(
-        insert(Notification)
-        .values(payloads)
-        .on_conflict_do_nothing(constraint="uq_notifications_user_type_personal_note")
-        .returning(Notification.id)
-    )
-    created = len(result.scalars().all())
     await session.commit()
     return created
+
+
+async def cleanup_old_notifications(session: AsyncSession, *, force: bool = False) -> int:
+    """Удаляет устаревшие уведомления. Не чаще одного раза в сутки.
+
+    Сроки берутся из настроек админки (иначе — значения по умолчанию / .env).
+    """
+    enabled, read_days, unread_days, note_days = await get_notification_retention_settings(session)
+    if not enabled:
+        return 0
+
+    now = datetime.now(timezone.utc)
+    last_row = await session.get(SystemSetting, NOTIFICATIONS_LAST_CLEANUP_AT_KEY)
+    if last_row and not force:
+        try:
+            last = datetime.fromisoformat(last_row.value)
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=timezone.utc)
+            if now - last < timedelta(hours=24):
+                return 0
+        except ValueError:
+            pass
+
+    read_cutoff = now - timedelta(days=read_days)
+    unread_cutoff = now - timedelta(days=unread_days)
+    note_cutoff = now - timedelta(days=note_days)
+
+    result = await session.execute(
+        delete(Notification).where(
+            or_(
+                and_(
+                    Notification.type == NotificationType.note_reminder,
+                    Notification.created_at < note_cutoff,
+                ),
+                and_(
+                    Notification.type != NotificationType.note_reminder,
+                    Notification.read_at.is_not(None),
+                    Notification.created_at < read_cutoff,
+                ),
+                and_(
+                    Notification.type != NotificationType.note_reminder,
+                    Notification.read_at.is_(None),
+                    Notification.created_at < unread_cutoff,
+                ),
+            )
+        )
+    )
+    deleted = int(result.rowcount or 0)
+    stamp = now.isoformat()
+    if last_row:
+        last_row.value = stamp
+    else:
+        session.add(SystemSetting(key=NOTIFICATIONS_LAST_CLEANUP_AT_KEY, value=stamp))
+    await session.commit()
+    return deleted

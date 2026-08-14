@@ -49,3 +49,26 @@ export async function markNotificationRead(notificationId: string): Promise<Noti
 export async function markAllNotificationsRead(): Promise<void> {
   await apiFetch("/api/v1/notifications/read-all", { method: "POST" });
 }
+
+export type NotificationSettingsOut = {
+  enabled: boolean;
+  read_days: number;
+  unread_days: number;
+  note_reminder_days: number;
+};
+
+export async function getNotificationSettings(): Promise<NotificationSettingsOut> {
+  return apiFetch<NotificationSettingsOut>("/api/v1/notifications/settings");
+}
+
+export async function patchNotificationSettings(body: {
+  enabled?: boolean;
+  read_days?: number;
+  unread_days?: number;
+  note_reminder_days?: number;
+}): Promise<NotificationSettingsOut> {
+  return apiFetch<NotificationSettingsOut>("/api/v1/notifications/settings", {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}

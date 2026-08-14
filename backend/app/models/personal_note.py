@@ -58,6 +58,7 @@ class PersonalNote(Base):
     is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     reminder_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reminder_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reminder_repeat_daily: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

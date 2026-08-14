@@ -1,10 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Eye, EyeOff, FileSpreadsheet, Loader2 } from "lucide-react";
+import { Download, Eye, EyeOff, FileSpreadsheet, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Navigate, useSearchParams } from "react-router-dom";
 
 import type { UserOut } from "../api/auth";
 import { getAuditSettings, listAuditEvents, patchAuditSettings } from "../api/audit";
+import {
+  getNotificationSettings,
+  patchNotificationSettings,
+} from "../api/notifications";
 import type { PermissionOut, RoleCreate, RoleOut, RoleUpdate } from "../api/roles";
 import {
   createRole,
@@ -483,6 +487,9 @@ function SystemSettingsSection() {
   const qc = useQueryClient();
   const [autoArchiveDays, setAutoArchiveDays] = useState("60");
   const [auditRetentionDays, setAuditRetentionDays] = useState("180");
+  const [notifReadDays, setNotifReadDays] = useState("90");
+  const [notifUnreadDays, setNotifUnreadDays] = useState("180");
+  const [notifNoteDays, setNotifNoteDays] = useState("30");
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importResultOpen, setImportResultOpen] = useState(false);
   const [taskImportOpen, setTaskImportOpen] = useState(false);
@@ -498,8 +505,13 @@ function SystemSettingsSection() {
     queryKey: ["admin", "audit-settings"],
     queryFn: getAuditSettings,
   });
+  const notificationSettingsQuery = useQuery({
+    queryKey: ["admin", "notification-settings"],
+    queryFn: getNotificationSettings,
+  });
   useToastQueryError(taskArchiveQuery.error, "Не удалось загрузить настройки автоархивации");
   useToastQueryError(auditSettingsQuery.error, "Не удалось загрузить настройки аудита");
+  useToastQueryError(notificationSettingsQuery.error, "Не удалось загрузить настройки уведомлений");
   useEffect(() => {
     if (!taskArchiveQuery.data) return;
     setAutoArchiveDays(String(taskArchiveQuery.data.auto_archive_done_days));
@@ -508,6 +520,12 @@ function SystemSettingsSection() {
     if (!auditSettingsQuery.data) return;
     setAuditRetentionDays(String(auditSettingsQuery.data.retention_days));
   }, [auditSettingsQuery.data]);
+  useEffect(() => {
+    if (!notificationSettingsQuery.data) return;
+    setNotifReadDays(String(notificationSettingsQuery.data.read_days));
+    setNotifUnreadDays(String(notificationSettingsQuery.data.unread_days));
+    setNotifNoteDays(String(notificationSettingsQuery.data.note_reminder_days));
+  }, [notificationSettingsQuery.data]);
   const taskArchiveMut = useMutation({
     mutationFn: (days: number) => updateTaskArchiveSettings(days),
     onSuccess: async (saved) => {
@@ -525,6 +543,22 @@ function SystemSettingsSection() {
       await qc.invalidateQueries({ queryKey: ["admin", "audit-settings"] });
     },
     onError: (e: unknown) => toastApiError(e, "Не удалось сохранить настройки аудита"),
+  });
+  const notificationSettingsMut = useMutation({
+    mutationFn: (body: {
+      enabled?: boolean;
+      read_days?: number;
+      unread_days?: number;
+      note_reminder_days?: number;
+    }) => patchNotificationSettings(body),
+    onSuccess: async (saved) => {
+      setNotifReadDays(String(saved.read_days));
+      setNotifUnreadDays(String(saved.unread_days));
+      setNotifNoteDays(String(saved.note_reminder_days));
+      toastSuccess("Настройки уведомлений сохранены");
+      await qc.invalidateQueries({ queryKey: ["admin", "notification-settings"] });
+    },
+    onError: (e: unknown) => toastApiError(e, "Не удалось сохранить настройки уведомлений"),
   });
   const importUsersMut = useMutation({
     mutationFn: (file: File) => importUsersFromExcel(file),
@@ -672,14 +706,115 @@ function SystemSettingsSection() {
           </form>
         </div>
       </div>
+      <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-5 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
+        <h3 className="text-base font-semibold text-slate-900 dark:text-white">Хранение уведомлений</h3>
+        <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+          Ротация старых уведомлений. Прочитанные удаляются раньше непрочитанных. Напоминания по личным
+          заметкам хранятся отдельно — ежедневные копятся быстрее.
+        </p>
+        <div className="mt-4 space-y-3">
+          <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+            <input
+              type="checkbox"
+              checked={notificationSettingsQuery.data?.enabled ?? true}
+              disabled={notificationSettingsQuery.isPending || notificationSettingsMut.isPending}
+              onChange={(e) => notificationSettingsMut.mutate({ enabled: e.target.checked })}
+            />
+            Включить ротацию
+          </label>
+          <form
+            className="flex flex-wrap items-end gap-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const readDays = Number(notifReadDays);
+              const unreadDays = Number(notifUnreadDays);
+              const noteDays = Number(notifNoteDays);
+              if (
+                ![readDays, unreadDays, noteDays].every((n) => Number.isFinite(n) && n >= 7)
+              ) {
+                toastError("Введите число дней от 7");
+                return;
+              }
+              notificationSettingsMut.mutate({
+                read_days: Math.floor(readDays),
+                unread_days: Math.floor(unreadDays),
+                note_reminder_days: Math.floor(noteDays),
+              });
+            }}
+          >
+            <label className="text-sm text-slate-700 dark:text-slate-300">
+              Прочитанные (дней)
+              <input
+                type="number"
+                min={7}
+                max={3650}
+                value={notifReadDays}
+                onChange={(e) => setNotifReadDays(e.target.value)}
+                disabled={notificationSettingsQuery.isPending || notificationSettingsMut.isPending}
+                className="ml-2 w-24 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+              />
+            </label>
+            <label className="text-sm text-slate-700 dark:text-slate-300">
+              Непрочитанные (дней)
+              <input
+                type="number"
+                min={7}
+                max={3650}
+                value={notifUnreadDays}
+                onChange={(e) => setNotifUnreadDays(e.target.value)}
+                disabled={notificationSettingsQuery.isPending || notificationSettingsMut.isPending}
+                className="ml-2 w-24 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+              />
+            </label>
+            <label className="text-sm text-slate-700 dark:text-slate-300">
+              Напоминания по заметкам (дней)
+              <input
+                type="number"
+                min={7}
+                max={3650}
+                value={notifNoteDays}
+                onChange={(e) => setNotifNoteDays(e.target.value)}
+                disabled={notificationSettingsQuery.isPending || notificationSettingsMut.isPending}
+                className="ml-2 w-24 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+              />
+            </label>
+            <button
+              type="submit"
+              disabled={notificationSettingsQuery.isPending || notificationSettingsMut.isPending}
+              className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-md hover:bg-sky-600 disabled:opacity-60"
+            >
+              {notificationSettingsMut.isPending ? "Сохранение…" : "Сохранить"}
+            </button>
+          </form>
+        </div>
+      </div>
       {canImportUsers && (
         <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-5 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
           <h3 className="text-base font-semibold text-slate-900 dark:text-white">Импорт сотрудников из Excel</h3>
           <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-            Загрузите файл `xlsx` с колонками «УчетнаяЗапись», «ФИО», «Должность» (опционально «Системы»).
+            Файл `.xlsx`, первый лист. Обязательные колонки: «УчетнаяЗапись», «ФИО», «Должность». Дополнительно:
+            «Подразделение», «Системы» (несколько через запятую). Скачайте шаблон, заполните и загрузите его сюда.
           </p>
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  const { downloadEmployeeImportTemplate } = await import("../lib/exportEmployeeImportTemplate");
+                  await downloadEmployeeImportTemplate();
+                  toastSuccess("Шаблон Excel скачан");
+                } catch (e: unknown) {
+                  toastApiError(e, "Не удалось сформировать шаблон");
+                }
+              }}
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-800 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
+            >
+              <Download className="h-4 w-4 shrink-0" aria-hidden />
+              Скачать шаблон
+            </button>
+          </div>
           <form
-            className="mt-4 flex flex-wrap items-center gap-3"
+            className="mt-3 flex flex-wrap items-center gap-3"
             onSubmit={(e) => {
               e.preventDefault();
               if (!importFile) {
@@ -981,12 +1116,12 @@ function AuditLogSection() {
     !!auditFilterActorQ.trim();
 
   return (
-    <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-5 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
-      <h3 className="text-base font-semibold text-slate-900 dark:text-white">Журнал аудита</h3>
-      <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-        Общий журнал событий по системе. Используйте фильтры для поиска нужных действий и авторов.
+    <div className="flex h-[calc(100dvh-13.5rem)] min-h-[28rem] flex-col overflow-hidden rounded-2xl border border-slate-200/80 bg-white/80 p-5 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
+      <h3 className="shrink-0 text-base font-semibold text-slate-900 dark:text-white">Журнал аудита</h3>
+      <p className="mt-1 shrink-0 text-sm text-slate-600 dark:text-slate-400">
+        Общий журнал событий по системе. Используйте фильтры для поиска нужных действий и пользователей.
       </p>
-      <div className="mt-4 mb-3 flex flex-wrap items-center gap-2">
+      <div className="mt-4 mb-3 flex shrink-0 flex-wrap items-center gap-2">
         <input
           value={auditFilterEntityType}
           onChange={(e) => setAuditFilterEntityType(e.target.value)}
@@ -1041,9 +1176,9 @@ function AuditLogSection() {
           </button>
         )}
       </div>
-      <div className="max-h-96 overflow-auto rounded-xl border border-slate-200 dark:border-slate-700">
+      <div className="min-h-0 flex-1 overflow-auto rounded-xl border border-slate-200 dark:border-slate-700">
         <table className="w-full min-w-[860px] text-left text-sm">
-          <thead className="bg-slate-50 text-xs text-slate-500 dark:bg-slate-800/70 dark:text-slate-400">
+          <thead className="sticky top-0 z-10 bg-slate-50 text-xs text-slate-500 dark:bg-slate-800 dark:text-slate-400">
             <tr>
               <th className="px-3 py-2">Время</th>
               <th className="px-3 py-2">Сущность</th>

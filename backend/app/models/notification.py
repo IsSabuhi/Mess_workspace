@@ -32,7 +32,7 @@ class Notification(Base):
         UniqueConstraint("user_id", "type", "release_note_id", name="uq_notifications_user_type_release_note"),
         # Срок пропуска/экзамена — одна запись на получателя, тип и сотрудника.
         UniqueConstraint("user_id", "type", "employee_user_id", name="uq_notifications_user_type_employee"),
-        UniqueConstraint("user_id", "type", "personal_note_id", name="uq_notifications_user_type_personal_note"),
+        Index("ix_notifications_user_type_personal_note", "user_id", "type", "personal_note_id"),
         Index("ix_notifications_user_created_at", "user_id", "created_at"),
         Index("ix_notifications_user_read_at", "user_id", "read_at"),
     )
