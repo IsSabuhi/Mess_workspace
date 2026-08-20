@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from arq.connections import RedisSettings
 from arq.cron import cron
+from arq.worker import func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import async_session_maker
+from app.services.db_backup import maybe_enqueue_scheduled_backup, run_backup
 from app.services.notifications import (
     cleanup_old_notifications,
     sync_employee_compliance_notifications,
@@ -53,16 +56,38 @@ async def sync_notifications_job(_: dict[str, Any]) -> dict[str, int]:
     return results
 
 
+async def create_database_backup(ctx: dict[str, Any], backup_id: str) -> None:
+    """Полный pg_dump в том /backups. Не ставить в HTTP-запрос: дамп может идти минуты."""
+    del ctx
+    bid = uuid.UUID(backup_id)
+    async with async_session_maker() as session:
+        await run_backup(session, bid)
+    logger.info("Database backup finished: %s", backup_id)
+
+
+async def schedule_daily_backup(ctx: dict[str, Any]) -> str:
+    """Раз в час: если уже наступило окно и сегодня дампа ещё нет — ставим в очередь."""
+    async with async_session_maker() as session:
+        result = await maybe_enqueue_scheduled_backup(session, redis=ctx.get("redis"))
+    logger.info("Scheduled backup check: %s", result)
+    return result
+
+
 async def worker_startup(_: dict[str, Any]) -> None:
     logger.info(
-        "Notification worker started; interval=%s min, max_jobs=%s",
+        "Notification worker started; interval=%s min, max_jobs=%s, backup_tz=%s",
         settings.notification_sync_minutes,
         settings.worker_max_jobs,
+        settings.backup_tz,
     )
 
 
 class WorkerSettings:
-    functions = [sync_notifications_job]
+    functions = [
+        sync_notifications_job,
+        func(create_database_backup, name="create_database_backup", timeout=1800, max_tries=2),
+        schedule_daily_backup,
+    ]
     cron_jobs = [
         cron(
             sync_notifications_job,
@@ -70,7 +95,14 @@ class WorkerSettings:
             unique=True,
             job_id="sync-notifications",
             run_at_startup=True,
-        )
+        ),
+        cron(
+            schedule_daily_backup,
+            minute=set(range(0, 60, 5)),
+            unique=True,
+            job_id="daily-database-backup",
+            run_at_startup=True,
+        ),
     ]
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     max_jobs = settings.worker_max_jobs

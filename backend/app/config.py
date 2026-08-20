@@ -23,6 +23,15 @@ class Settings(BaseSettings):
     notification_retention_unread_days: int = Field(default=180, ge=7, le=3650)
     notification_retention_note_reminder_days: int = Field(default=30, ge=7, le=3650)
     worker_max_jobs: int = Field(default=2, ge=1, le=32)
+    # Каталог файлов pg_dump. В Docker — том /backups.
+    backup_dir: str = ""
+    # Жёсткий потолок числа файлов (защита, если за дни накопилось много ручных дампов).
+    backup_keep: int = Field(default=40, ge=1, le=200)
+    backup_auto_enabled: bool = True
+    backup_retention_days: int = Field(default=10, ge=1, le=365)
+    backup_hour: int = Field(default=3, ge=0, le=23)
+    backup_minute: int = Field(default=0, ge=0, le=59)
+    backup_tz: str = "Asia/Bangkok"
     # При старте API выполняется alembic upgrade head (удобно для новой пустой БД). В проде при желании отключите.
     auto_migrate_on_startup: bool = True
     secret_key: str = "change-me"

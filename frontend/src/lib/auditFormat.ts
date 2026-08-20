@@ -31,6 +31,10 @@ const ACTION_LABELS: Record<string, string> = {
   "schedule.user_mode.updated": "Режим графика пользователя",
   "employee_directory.profile.updated": "Обновлён профиль сотрудника",
   "employee_directory.bulk_profile.updated": "Массовое обновление профилей",
+  "system_backup.requested": "Запрошена резервная копия БД",
+  "system_backup.downloaded": "Скачана резервная копия БД",
+  "system_backup.deleted": "Удалена резервная копия БД",
+  "system_backup.settings_updated": "Изменены настройки резервных копий",
 };
 
 const FIELD_LABELS: Record<string, string> = {
@@ -204,6 +208,13 @@ export function formatAuditDetails(action: string, detailsJson: string | null | 
   } else if (action.startsWith("auth.")) {
     const ip = asStr(d.ip);
     if (ip) parts.push(`IP: ${ip}`);
+  } else if (action.startsWith("system_backup.")) {
+    const fn = asStr(d.filename);
+    if (fn) parts.push(`Файл: «${fn}»`);
+    if (d.enabled != null) parts.push(d.enabled ? "автобэкап включён" : "автобэкап выключен");
+    if (d.retention_days != null) parts.push(`хранение: ${String(d.retention_days)} дн.`);
+    if (d.run_at != null) parts.push(`время: ${String(d.run_at)}`);
+    else if (d.hour != null) parts.push(`время: ${String(d.hour).padStart(2, "0")}:00`);
   }
 
   if (parts.length === 0) {

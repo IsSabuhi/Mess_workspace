@@ -16,6 +16,7 @@ from app.paths import UPLOAD_KB_DIR, UPLOAD_NOTES_DIR, UPLOAD_TASKS_DIR, UPLOADS
 from app.routers import (
     audit,
     auth,
+    backups,
     boards,
     employee_directory,
     knowledge,
@@ -98,6 +99,7 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(audit.router, prefix="/api/v1")
+app.include_router(backups.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
 app.include_router(roles.router, prefix="/api/v1")
 app.include_router(systems.router, prefix="/api/v1")

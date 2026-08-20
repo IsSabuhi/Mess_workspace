@@ -48,6 +48,9 @@ services:
       MINIO_ENDPOINT: http://minio:9000
       STORAGE_BACKEND: ${STORAGE_BACKEND:-minio}
       MINIO_PUBLIC_BASE_URL: ${MINIO_PUBLIC_BASE_URL:-/mes/files}
+      BACKUP_DIR: /backups
+    volumes:
+      - backup_data:/backups
     # Postgres на хосте / в LAN: в DATABASE_URL укажите IP сервера БД или host.docker.internal
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -82,6 +85,9 @@ services:
       MINIO_ENDPOINT: http://minio:9000
       STORAGE_BACKEND: ${STORAGE_BACKEND:-minio}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      BACKUP_DIR: /backups
+    volumes:
+      - backup_data:/backups
     # Postgres на хосте: тот же host.docker.internal, что и у api.
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -124,8 +130,11 @@ services:
     environment:
       MINIO_ENDPOINT: http://minio:9000
       STORAGE_BACKEND: ${STORAGE_BACKEND:-minio}
+      BACKUP_DIR: /backups
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    volumes:
+      - backup_data:/backups
     entrypoint: ["python"]
     depends_on:
       minio-init:
@@ -134,3 +143,4 @@ services:
 volumes:
   minio_data:
   redis_data:
+  backup_data:

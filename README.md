@@ -26,7 +26,7 @@
 
 - **Руководители отдела MES**: контроль загрузки команд, сроков и рисков.
 - **Сотрудники**: ежедневная работа с задачами, графиком, комментариями и уведомлениями.
-- **Администраторы**: управление доступами, ролями, системами и настройками аудита.
+- **Администраторы**: управление доступами, ролями, системами, аудитом и резервными копиями БД.
 
 ## Ключевые функции
 
@@ -60,8 +60,9 @@
 ### 5) Администрирование и безопасность
 
 - Пользователи, роли, права (permission-модель).
-- Глобальные настройки системы.
+- Глобальные настройки системы (автоархив задач, ротация уведомлений, аудит).
 - Журнал аудита.
+- Полный бэкап PostgreSQL из админки: ручной и ежедневный по расписанию, скачивание, ротация.
 
 ### 6) База знаний и уведомления
 
@@ -76,16 +77,18 @@
 | Frontend | React 19, TypeScript, Vite, Tailwind CSS, TanStack Query, React Router, dnd-kit, ECharts, ExcelJS, TipTap |
 | Backend | Python 3.12, FastAPI, SQLAlchemy 2 (async), Alembic, Pydantic Settings |
 | БД | PostgreSQL (внешний, не в compose) |
+| Очередь | Redis + arq (воркер: уведомления, ежедневный pg_dump) |
 | Файлы | MinIO (S3), fallback на локальное хранилище |
+| Бэкапы БД | Docker-том `backup_data` → `/backups` (не MinIO) |
 | Инфраструктура | Docker Compose, Nginx |
 
 ## Архитектура репозитория
 
 ```text
 .
-├── backend/                 # API — см. backend/README.md
+├── backend/                 # API и worker — см. backend/README.md
 ├── frontend/                # SPA — см. frontend/README.md
-├── docker-compose.yml       # web, api, minio, api-job
+├── docker-compose.yml       # web, api, worker, redis, minio, api-job
 ├── .env.template            # env для compose
 └── README.md
 ```
@@ -111,13 +114,49 @@ docker compose up --build -d
 | Swagger (через web nginx) | `http://localhost:8811/api/docs` |
 | MinIO API / Console | `:9000` / `:9001` |
 
-Что поднимается: `web`, `api`, `minio`, `minio-init`.
+Что поднимается: `web`, `api`, `worker`, `redis`, `minio`, `minio-init`.
 
 При старте `api`:
 
 1. `alembic upgrade head` (если `AUTO_MIGRATE_ON_STARTUP=true`);
 2. `uvicorn`;
 3. создание первого суперпользователя при пустой БД (`INITIAL_ADMIN_*`).
+
+`worker` обрабатывает очередь arq: уведомления по расписанию и создание дампов БД (не через HTTP, чтобы не упереться в таймаут nginx).
+
+### Резервные копии PostgreSQL
+
+Управление: **Администрирование → Настройки системы → Резервные копии базы данных**.
+
+Полный `pg_dump` (custom, сжатый). В админке: создать сейчас, скачать, удалить; ежедневный автобэкап с временем запуска (UTC+7) и сроком хранения в днях.
+
+Файлы **не** кладутся в MinIO (бакет публичный). Они на диске сервера:
+
+| Где | Путь |
+|---|---|
+| В контейнерах `api` / `worker` | `/backups` (`BACKUP_DIR`) |
+| На хосте | Docker-том `backup_data`, обычно `/var/lib/docker/volumes/mess_workspace_backup_data/_data` |
+| Имя на диске | `{uuid}.dump` (имя вроде `mess_db_….dump` — только при скачивании) |
+
+```bash
+docker compose exec worker ls -lh /backups
+```
+
+Картинки БЗ и вложения задач/заметок в дамп **не входят** — они в томе `minio_data`. Для полного восстановления с нуля копируйте и его.
+
+Восстановление на новой установке (из UI не делается — затрёт живую базу):
+
+1. Поднимите Postgres с пустой базой. `api` и `worker` не запускайте (или остановите).
+2. Положите `.dump` в том (или смонтируйте файл).
+3. Восстановите:
+
+```bash
+docker compose --profile jobs run --rm api-job scripts/restore_database_backup.py /backups/файл.dump --clean
+```
+
+`--clean` нужен, если в базе уже есть таблицы. Затем запустите `api` и `worker`.
+
+Ротация: хранятся дампы за N дней (по умолчанию 10). Место на диске ≈ N × размер одного дампа. Потолок числа файлов — `BACKUP_KEEP` (по умолчанию 40).
 
 ### Внешний PostgreSQL
 
@@ -135,7 +174,7 @@ docker compose --profile jobs run --rm api-job scripts/infer_employee_genders.py
 
 ### Конфигурация для Docker
 
-Корневой `.env` (из `.env.template`) → `env_file` сервиса `api`.
+Корневой `.env` (из `.env.template`) → `env_file` сервисов `api` и `worker`.
 Локальная разработка без Docker: `backend/.env` и `frontend/.env` — детали в README пакетов.
 
 ## Локальная разработка (без Docker)

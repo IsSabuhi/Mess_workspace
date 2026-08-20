@@ -32,6 +32,7 @@ from app.models.user_system import UserSystem
 from app.models.user_schedule_phase_color import UserSchedulePhaseColor
 from app.models.schedule import ScheduleEntry
 from app.models.schedule_row_color import ScheduleRowColor
+from app.models.system_backup import SystemBackup
 
 __all__ = [
     "Position",
@@ -72,4 +73,5 @@ __all__ = [
     "UserSchedulePhaseColor",
     "ScheduleEntry",
     "ScheduleRowColor",
+    "SystemBackup",
 ]
