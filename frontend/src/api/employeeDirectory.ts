@@ -36,6 +36,8 @@ export type EmployeeDirectoryRowOut = {
   is_field_worker: boolean;
   position_assigned_at: string | null;
   personnel_number: string | null;
+  is_dismissed: boolean;
+  dismissed_at: string | null;
 };
 
 export type EmployeeDirectoryFilters = {
@@ -57,6 +59,8 @@ export type EmployeeDirectoryFilters = {
   work_schedule_kind?: WorkScheduleKind;
   is_remote?: boolean;
   is_field_worker?: boolean;
+  is_dismissed?: boolean;
+  include_dismissed?: boolean;
 };
 
 export type EmployeeDirectoryPatch = {
@@ -81,6 +85,8 @@ export type EmployeeDirectoryPatch = {
   is_field_worker?: boolean;
   position_assigned_at?: string | null;
   personnel_number?: string | null;
+  is_dismissed?: boolean;
+  dismissed_at?: string | null;
 };
 
 export async function listEmployeeDirectory(
@@ -109,6 +115,8 @@ export async function listEmployeeDirectory(
   if (filters?.work_schedule_kind) sp.set("work_schedule_kind", filters.work_schedule_kind);
   if (filters?.is_remote !== undefined) sp.set("is_remote", String(filters.is_remote));
   if (filters?.is_field_worker !== undefined) sp.set("is_field_worker", String(filters.is_field_worker));
+  if (filters?.is_dismissed !== undefined) sp.set("is_dismissed", String(filters.is_dismissed));
+  if (filters?.include_dismissed) sp.set("include_dismissed", "true");
   const q = sp.toString();
   return apiFetch<EmployeeDirectoryRowOut[]>(`/api/v1/employee-directory${q ? `?${q}` : ""}`);
 }

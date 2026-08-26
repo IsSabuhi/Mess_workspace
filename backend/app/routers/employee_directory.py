@@ -75,6 +75,8 @@ _PROFILE_PATCH_FIELDS = frozenset({
     "is_field_worker",
     "position_assigned_at",
     "personnel_number",
+    "is_dismissed",
+    "dismissed_at",
 })
 _BULK_PROFILE_KEYS = frozenset({
     "work_schedule_kind",
@@ -175,6 +177,8 @@ def _row_to_out(user: User) -> EmployeeDirectoryRowOut:
         is_field_worker=bool(p.is_field_worker) if p else False,
         position_assigned_at=p.position_assigned_at if p else None,
         personnel_number=p.personnel_number if p else None,
+        is_dismissed=bool(p.is_dismissed) if p else False,
+        dismissed_at=p.dismissed_at if p else None,
     )
 
 
@@ -232,6 +236,15 @@ async def _apply_directory_patch_core(session: AsyncSession, user: User, body: E
     for k, v in patch.items():
         setattr(profile, k, v)
 
+    if profile.is_dismissed:
+        if profile.dismissed_at is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Укажите дату увольнения",
+            )
+    elif "is_dismissed" in body.model_dump(exclude_unset=True):
+        profile.dismissed_at = None
+
 
 @router.get("", response_model=list[EmployeeDirectoryRowOut])
 async def list_employee_directory(
@@ -267,6 +280,14 @@ async def list_employee_directory(
     ),
     is_remote: bool | None = Query(None, description="Фильтр: удалёнщик"),
     is_field_worker: bool | None = Query(None, description="Фильтр: выездной сотрудник"),
+    is_dismissed: bool | None = Query(
+        None,
+        description="True — только уволенные, False — только работающие. Если не задан и include_dismissed=false — только работающие.",
+    ),
+    include_dismissed: bool = Query(
+        False,
+        description="Показать и работающих, и уволенных (если is_dismissed не задан).",
+    ),
 ) -> list[EmployeeDirectoryRowOut]:
     stmt = (
         select(User)
@@ -386,6 +407,11 @@ async def list_employee_directory(
             cond.append(EmployeeProfile.is_field_worker.is_(True))
         else:
             cond.append(or_(EmployeeProfile.id.is_(None), EmployeeProfile.is_field_worker.is_(False)))
+
+    if is_dismissed is True:
+        cond.append(EmployeeProfile.is_dismissed.is_(True))
+    elif is_dismissed is False or not include_dismissed:
+        cond.append(or_(EmployeeProfile.id.is_(None), EmployeeProfile.is_dismissed.is_(False)))
 
     if cond:
         stmt = stmt.where(*cond)

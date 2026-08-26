@@ -56,6 +56,11 @@ function DirectoryBody({ row }: { row: EmployeeDirectoryRowOut }) {
           <Field label="Email">{row.email}</Field>
           <Field label="Табельный номер">{row.personnel_number?.trim() || "—"}</Field>
           <Field label="Статус">{row.is_active ? "Активен" : "Неактивен"}</Field>
+          <Field label="Уволен">
+            {row.is_dismissed
+              ? `Да${row.dismissed_at ? ` · ${fmtDate(row.dismissed_at)}` : ""}`
+              : "Нет"}
+          </Field>
           <Field label="Дата рождения">{fmtDate(row.birth_date)}</Field>
           <Field label="Должность">{row.position?.name ?? "—"}</Field>
           <Field label="Дата должности">{fmtDate(row.position_assigned_at)}</Field>

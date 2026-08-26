@@ -1,6 +1,6 @@
 # Backend — Портал MES
 
-FastAPI-сервис: REST API, auth, бизнес-логика, миграции БД, работа с файлами.
+FastAPI: REST API, auth, бизнес-логика, миграции, файлы.
 
 Общий обзор продукта и запуск через Docker — в [корневом README](../README.md).
 
@@ -15,25 +15,27 @@ FastAPI-сервис: REST API, auth, бизнес-логика, миграци�
 | Pydantic Settings | конфигурация из env |
 | python-jose + bcrypt | JWT / пароли |
 | boto3 | MinIO (S3) |
-| openpyxl, holidays | Excel-импорт графика, календарь |
+| openpyxl, holidays | Excel, календарь РФ |
+| arq | фоновые задачи (воркер) |
 
 ## Структура
 
 ```text
 backend/
 ├── app/
-│   ├── main.py            # FastAPI app, CORS, static /uploads, lifespan
+│   ├── main.py            # FastAPI, CORS, /uploads, lifespan
 │   ├── config.py          # Settings
 │   ├── database.py        # async engine / sessions
 │   ├── deps.py            # get_current_user, require_permission
 │   ├── permissions.py     # коды прав
-│   ├── models/            # SQLAlchemy
-│   ├── schemas/           # Pydantic in/out
-│   ├── routers/           # HTTP endpoints (/api/v1/...)
-│   ├── services/          # бизнес-логика (authz, schedule, storage, audit, …)
-│   └── paths.py           # uploads/kb, uploads/tasks
-├── alembic/               # миграции
-├── scripts/               # entrypoint, one-off jobs, release notes
+│   ├── permission_texts.py # названия и описания прав для админки
+│   ├── models/
+│   ├── schemas/
+│   ├── routers/           # /api/v1/...
+│   ├── services/
+│   └── paths.py           # uploads: kb, tasks, notes, uspd
+├── alembic/
+├── scripts/
 ├── Dockerfile
 ├── requirements.txt
 └── .env.example
@@ -41,38 +43,40 @@ backend/
 
 ## API-модули (`app/routers`)
 
-Префикс приложения: `/api/v1`.
+Префикс: `/api/v1`.
 
 | Router | Область |
 |---|---|
-| `auth` | login / refresh / logout / register / me (cookies) |
+| `auth` | login / refresh / logout / me (cookies) |
 | `users` | пользователи, кандидаты в исполнители |
-| `roles` | роли и права |
+| `roles` | роли и каталог прав |
 | `systems` | производственные системы |
 | `positions` | должности |
 | `boards` | доски, колонки, участники, lock |
 | `tasks` | задачи, комментарии, аналитика, вложения |
-| `task_tags` | теги задач |
-| `schedule` | график смен, autofill, Excel |
-| `employee_directory` | справочник сотрудника |
+| `task_tags` | теги |
+| `schedule` | график, autofill, Excel |
+| `employee_directory` | справочник, архив уволенных |
 | `knowledge` | пространства, статьи, поиск, upload |
-| `uspd` | справочник УСПД (заметки Object/IP/Cred, суперпользователь) |
+| `personal_notes` | личные заметки |
+| `uspd` | справочник УСПД |
 | `notifications` | центр уведомлений |
 | `release_notes` | «Что нового» |
 | `audit` | журнал аудита |
+| `backups` | дампы PostgreSQL |
 
-Документация: `GET /docs` (Swagger), health: `GET /health`.
+Документация: `GET /docs`. Health: `GET /health`.
 
-Статика файлов: `GET /uploads/...` (локальный backend storage).
+Статика: `GET /uploads/...` (локальное хранилище).
 
 ## Локальный запуск
 
-Нужен PostgreSQL. Скопируйте env:
+Нужен PostgreSQL.
 
 ```bash
 cd backend
 cp .env.example .env
-# поправьте DATABASE_URL, SECRET_KEY, CORS_ORIGINS, INITIAL_ADMIN_*
+# DATABASE_URL, SECRET_KEY, CORS_ORIGINS, INITIAL_ADMIN_*
 ```
 
 ```bash
@@ -86,13 +90,13 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 - API: `http://127.0.0.1:8000`
 - Swagger: `http://127.0.0.1:8000/docs`
 
-При `AUTO_MIGRATE_ON_STARTUP=true` миграции также выполняются на старте приложения.
+При `AUTO_MIGRATE_ON_STARTUP=true` миграции также идут на старте приложения.
 
-Первый суперпользователь создаётся автоматически, если в БД нет пользователей (`INITIAL_ADMIN_*`).
+Первый суперпользователь создаётся, если в БД нет пользователей (`INITIAL_ADMIN_*`).
 
 ## Переменные окружения
 
-Полный пример: `.env.example`. Для Docker Compose используется **корневой** `.env` (см. `.env.template` в корне репозитория).
+Полный пример: `.env.example`. Для Docker Compose — **корневой** `.env` (`.env.template` в корне репозитория).
 
 | Группа | Переменные |
 |---|---|
@@ -103,8 +107,9 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 | Bootstrap | `INITIAL_ADMIN_EMAIL`, `INITIAL_ADMIN_PASSWORD`, `INITIAL_ADMIN_FULL_NAME` |
 | Миграции | `AUTO_MIGRATE_ON_STARTUP` |
 | Файлы | `STORAGE_BACKEND=local\|minio`, `MINIO_*` |
+| Бэкапы | `BACKUP_DIR`, `BACKUP_KEEP` |
 
-Auth: access/refresh в HttpOnly cookies. Refresh cookie path должен совпадать с тем, как браузер ходит на API (за reverse-proxy с префиксом `/mes/api` это частая точка поломок).
+Auth: access/refresh в HttpOnly cookies. Path у refresh-cookie должен совпадать с тем, как браузер ходит на API (за reverse-proxy `/mes/api` это частая точка поломок).
 
 ## Миграции
 
@@ -114,39 +119,43 @@ alembic revision --autogenerate -m "описание"
 alembic history
 ```
 
-Модели — в `app/models/`. Новые таблицы/колонки — только через Alembic.
+Модели — в `app/models/`. Новые таблицы и колонки — только через Alembic.
 
 ## Файловое хранилище
 
 `app/services/file_storage.py`:
 
-- `STORAGE_BACKEND=local` — файлы в `backend/uploads/` (`kb/`, `tasks/`);
-- `STORAGE_BACKEND=minio` — объекты в bucket (`MINIO_BUCKET`), публичный URL через `MINIO_PUBLIC_BASE_URL`.
+- `STORAGE_BACKEND=local` — `backend/uploads/` (`kb/`, `tasks/`, `notes/`, `uspd/`);
+- `STORAGE_BACKEND=minio` — объекты в bucket, публичный URL через `MINIO_PUBLIC_BASE_URL`.
 
-Используется для изображений БЗ и вложений задач.
+Картинки БЗ, УСПД, вложения задач и личных заметок в `pg_dump` не входят.
 
 ## Права (permissions)
 
-Коды заданы в `app/permissions.py` и сидятся миграциями/ролями (например `tasks.read.all`, `schedule.read`, `knowledge.manage.all`, `employee_directory.read`, …).
+Коды — `app/permissions.py`. Тексты для админки (название, описание, пояснение) — `app/permission_texts.py`.
 
-Проверки: `deps.require_permission`, сервисы `services/authz.py`, `services/task_policy.py`, `services/knowledge_access.py`.
+Проверки: `deps.require_permission` / `require_admin_access`, `services/authz.py`, `services/task_policy.py`, `services/knowledge_access.py`, `services/admin_privileges.py`.
+
+Уволенные сотрудники (`employee_profiles.is_dismissed`) исключаются из графика, назначений и кадровых уведомлений; учётка при этом может оставаться активной.
+
+Любое право из блока админки открывает раздел «Администрирование» на просмотр; мутации требуют своего кода.
 
 ## Скрипты
 
 | Скрипт | Назначение |
 |---|---|
 | `scripts/docker-entrypoint.sh` | миграции + uvicorn в контейнере |
-| `scripts/infer_employee_genders.py` | вывести/записать пол по ФИО (`--write`) |
-| `scripts/publish-release-note.sh` | публикация release note в уведомления (CI/CD) |
+| `scripts/infer_employee_genders.py` | пол по ФИО (`--write`) |
+| `scripts/restore_database_backup.py` | восстановить PostgreSQL из `.dump` |
+| `scripts/publish-release-note.sh` | «Что нового» в уведомления (CI/CD) |
 | `scripts/parser_excel.py` | вспомогательный парсинг Excel |
-
-В Docker:
 
 ```bash
 docker compose exec api python scripts/infer_employee_genders.py --write
-# или
 docker compose --profile jobs run --rm api-job scripts/infer_employee_genders.py --write
 ```
+
+Восстановление БД — в [корневом README](../README.md).
 
 ## Docker
 
@@ -154,11 +163,11 @@ docker compose --profile jobs run --rm api-job scripts/infer_employee_genders.py
 
 - порт хоста: `API_PORT` (по умолчанию 8822 → 8000);
 - `MINIO_ENDPOINT` внутри сети: `http://minio:9000`;
-- `extra_hosts: host.docker.internal` для доступа к Postgres на хосте.
+- `extra_hosts: host.docker.internal` для Postgres на хосте.
 
 ## Соглашения
 
-- Роутер тонкий: валидация схем + вызов service / policy.
-- Ответы задач/статей — через явные `_to_out` / `model_validate`, с `selectinload` нужных связей.
-- Ошибки для клиента — понятный `detail` на русском, где это UX-сообщение.
+- Роутер тонкий: схема + service / policy.
+- Ответы — явные `_to_out` / `model_validate`, с `selectinload`.
+- Сообщения об ошибках для UI — на русском, где это текст для пользователя.
 - Секреты только в env, не в репозитории.

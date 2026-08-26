@@ -15,6 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Board, KanbanColumn, System, Task, User
+from app.services.employee_status import user_is_not_dismissed
 from app.models.task import TaskPriority
 from app.schemas.task_excel_import import (
     TaskExcelImportBatchOut,
@@ -270,7 +271,7 @@ async def import_tasks_from_excel(
     assert used_sheet is not None
 
     users = list(
-        (await session.execute(select(User).where(User.is_active.is_(True)))).scalars().unique().all()
+        (await session.execute(select(User).where(User.is_active.is_(True), user_is_not_dismissed()))).scalars().unique().all()
     )
     by_surname: dict[str, list[User]] = {}
     for u in users:

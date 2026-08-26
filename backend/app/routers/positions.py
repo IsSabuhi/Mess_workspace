@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.deps import get_current_user, require_permission
 from app.models import Position, User
+from app.services.employee_status import user_is_not_dismissed
 from app.permissions import POSITIONS_MANAGE
 from app.schemas.position import PositionCreate, PositionMemberOut, PositionOut, PositionUpdate
 
@@ -17,7 +18,7 @@ router = APIRouter(prefix="/positions", tags=["positions"])
 async def _user_counts_by_position(session: AsyncSession) -> dict[uuid.UUID, int]:
     rows = await session.execute(
         select(User.position_id, func.count(User.id))
-        .where(User.position_id.is_not(None), User.is_active.is_(True))
+        .where(User.position_id.is_not(None), User.is_active.is_(True), user_is_not_dismissed())
         .group_by(User.position_id)
     )
     return {pid: int(cnt) for pid, cnt in rows.all() if pid is not None}
@@ -55,7 +56,7 @@ async def list_position_members(
 
     stmt = (
         select(User)
-        .where(User.position_id == position_id, User.is_active.is_(True))
+        .where(User.position_id == position_id, User.is_active.is_(True), user_is_not_dismissed())
         .order_by(User.full_name, User.email)
     )
     rows = (await session.execute(stmt)).scalars().all()

@@ -11,6 +11,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import ScheduleEntry, User
+from app.services.employee_status import user_is_not_dismissed
 
 _MONTH_SHEET_NAMES = {
     1: "январь",
@@ -137,7 +138,7 @@ async def import_schedule_month_excel(
     if err:
         return {"error": err}
 
-    users = (await session.execute(select(User).where(User.is_active.is_(True)))).scalars().all()
+    users = (await session.execute(select(User).where(User.is_active.is_(True), user_is_not_dismissed()))).scalars().all()
     by_name: dict[str, User] = {}
     for u in users:
         nk = _norm_name(u.full_name)

@@ -15,6 +15,7 @@ from app.models import ScheduleEntry, ScheduleRowColor, System, User
 from app.models.employee_work_schedule import normalize_profile_schedule
 from app.models.schedule_mode import SCHEDULE_MODE_VALUES, ScheduleMode
 from app.models.user_system import UserSystem
+from app.services.employee_status import user_is_not_dismissed
 from app.permissions import SCHEDULE_MANAGE, SCHEDULE_READ
 from app.schemas.schedule import (
     ScheduleAutofillIn,
@@ -340,7 +341,7 @@ async def get_schedule_month(
     users = (
         await session.execute(
             select(User)
-            .where(User.is_active.is_(True), User.position_id.is_not(None))
+            .where(User.is_active.is_(True), User.position_id.is_not(None), user_is_not_dismissed())
             .options(
                 selectinload(User.system_memberships).selectinload(UserSystem.system),
                 selectinload(User.employee_profile),
@@ -650,6 +651,7 @@ async def regenerate_schedule(
                 User.id == body.user_id,
                 User.is_active.is_(True),
                 User.position_id.is_not(None),
+                user_is_not_dismissed(),
             )
         )
     ).scalar_one_or_none()

@@ -22,6 +22,7 @@ from app.models.role import RolePermission, UserRole
 from app.models.system_setting import SystemSetting
 from app.models.task import task_assignees_table
 from app.permissions import EMPLOYEE_DIRECTORY_COMPLIANCE_NOTIFICATIONS_RECEIVE
+from app.services.employee_status import user_is_not_dismissed
 
 NOTIFICATIONS_LAST_CLEANUP_AT_KEY = "notifications_last_cleanup_at"
 NOTIFICATIONS_CLEANUP_ENABLED_KEY = "notifications_cleanup_enabled"
@@ -253,7 +254,7 @@ async def _compliance_notification_recipient_ids(session: AsyncSession) -> set:
         .outerjoin(UserRole, UserRole.user_id == User.id)
         .outerjoin(RolePermission, RolePermission.role_id == UserRole.role_id)
         .outerjoin(Permission, Permission.id == RolePermission.permission_id)
-        .where(User.is_active.is_(True))
+        .where(User.is_active.is_(True), user_is_not_dismissed())
         .where(
             or_(
                 User.is_superuser.is_(True),
@@ -345,7 +346,7 @@ async def sync_employee_compliance_notifications(session: AsyncSession) -> int:
             EmployeeProfile.is_remote,
         )
         .join(EmployeeProfile, EmployeeProfile.user_id == User.id)
-        .where(User.is_active.is_(True))
+        .where(User.is_active.is_(True), EmployeeProfile.is_dismissed.is_(False))
         .where(
             or_(
                 and_(

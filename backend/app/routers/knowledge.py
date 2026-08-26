@@ -24,6 +24,7 @@ from app.models import (
 )
 from app.models.knowledge import ArticleStatus, SpaceMemberRole
 from app.permissions import ADMIN_IMPORT_KNOWLEDGE, KNOWLEDGE_MANAGE_ALL, KNOWLEDGE_READ_ALL
+from app.services.employee_status import user_is_not_dismissed
 from app.schemas.knowledge import (
     KnowledgeArticleCreate,
     KnowledgeArticleOut,
@@ -349,7 +350,7 @@ async def space_user_directory(
     if not await can_manage_space_acl(session, user, space):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
 
-    stmt = select(User.id, User.email, User.full_name).where(User.is_active.is_(True))
+    stmt = select(User.id, User.email, User.full_name).where(User.is_active.is_(True), user_is_not_dismissed())
     if q.strip():
         pat = f"%{q.strip()}%"
         stmt = stmt.where(or_(User.email.ilike(pat), User.full_name.ilike(pat)))

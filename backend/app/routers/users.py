@@ -23,6 +23,7 @@ from app.models import Board, Position, Role, System, User, UserRole
 from app.models.board import BOARD_SCOPE_SYSTEM
 from app.models.user_system import UserSystem
 from app.permissions import ADMIN_IMPORT_USERS, USERS_STAFF_CODES
+from app.services.employee_status import user_is_not_dismissed
 from app.schemas.employee_import import EmployeeImportOut
 from app.schemas.user import UserCreate, UserListOut, UserOut, UserUpdate
 from app.security import hash_password
@@ -93,7 +94,7 @@ async def list_assignee_candidates(
                 return []
             stmt = (
                 select(User)
-                .where(User.id.in_(allowed), User.is_active.is_(True))
+                .where(User.id.in_(allowed), User.is_active.is_(True), user_is_not_dismissed())
                 .options(*USER_LOAD_OPTIONS)
                 .order_by(User.full_name, User.email)
             )
@@ -101,7 +102,7 @@ async def list_assignee_candidates(
             return [user_to_out(u) for u in result.scalars().unique().all()]
 
     if await user_sees_all_tasks(session, current):
-        stmt = select(User).where(User.is_active.is_(True)).options(*USER_LOAD_OPTIONS).order_by(User.email)
+        stmt = select(User).where(User.is_active.is_(True), user_is_not_dismissed()).options(*USER_LOAD_OPTIONS).order_by(User.email)
         result = await session.execute(stmt)
         return [user_to_out(u) for u in result.scalars().unique().all()]
 
@@ -112,7 +113,7 @@ async def list_assignee_candidates(
     peer_subq = select(UserSystem.user_id).where(UserSystem.system_id.in_(system_ids)).distinct()
     stmt = (
         select(User)
-        .where(User.id.in_(peer_subq), User.is_active.is_(True))
+        .where(User.id.in_(peer_subq), User.is_active.is_(True), user_is_not_dismissed())
         .options(*USER_LOAD_OPTIONS)
         .order_by(User.email)
     )

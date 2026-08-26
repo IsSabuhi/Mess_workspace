@@ -55,6 +55,8 @@ class EmployeeDirectoryRowOut(BaseModel):
     is_field_worker: bool = False
     position_assigned_at: date | None = None
     personnel_number: str | None = None
+    is_dismissed: bool = False
+    dismissed_at: date | None = None
 
 
 class EmployeeDirectoryPatch(BaseModel):
@@ -83,6 +85,8 @@ class EmployeeDirectoryPatch(BaseModel):
     is_field_worker: bool | None = None
     position_assigned_at: date | None = None
     personnel_number: str | None = Field(None, max_length=64)
+    is_dismissed: bool | None = None
+    dismissed_at: date | None = None
 
     @model_validator(mode="after")
     def limit_vacation_periods(self) -> "EmployeeDirectoryPatch":

@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models import ScheduleEntry, User
+from app.services.employee_status import user_is_not_dismissed
 from app.models.user_system import UserSystem
 from app.models.employee_work_schedule import (
     EMPLOYEE_GENDER_FEMALE,
@@ -604,7 +605,7 @@ async def run_schedule_autofill(
     users = (
         await session.execute(
             select(User)
-            .where(User.is_active.is_(True), User.position_id.is_not(None))
+            .where(User.is_active.is_(True), User.position_id.is_not(None), user_is_not_dismissed())
             .options(
                 selectinload(User.employee_profile),
                 selectinload(User.system_memberships).selectinload(UserSystem.system),
@@ -744,7 +745,7 @@ async def run_schedule_regenerate_from_manual(
     users = (
         await session.execute(
             select(User)
-            .where(User.is_active.is_(True), User.position_id.is_not(None))
+            .where(User.is_active.is_(True), User.position_id.is_not(None), user_is_not_dismissed())
             .options(
                 selectinload(User.employee_profile),
                 selectinload(User.system_memberships).selectinload(UserSystem.system),

@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Board, BoardMember, User, UserSystem
+from app.services.employee_status import user_is_not_dismissed
 from app.models.board import (
     BOARD_MEMBER_ROLE_VIEWER,
     BOARD_SCOPE_SYSTEM,
@@ -19,7 +20,7 @@ async def _active_system_users(session: AsyncSession, system_id: uuid.UUID) -> l
     stmt = (
         select(User)
         .join(UserSystem, UserSystem.user_id == User.id)
-        .where(UserSystem.system_id == system_id, User.is_active.is_(True))
+        .where(UserSystem.system_id == system_id, User.is_active.is_(True), user_is_not_dismissed())
         .order_by(User.full_name, User.email)
     )
     return list((await session.execute(stmt)).scalars().unique().all())
@@ -45,6 +46,7 @@ async def effective_board_member_role(
             UserSystem.user_id == user_id,
             UserSystem.system_id == board.system_id,
             User.is_active.is_(True),
+            user_is_not_dismissed(),
         )
         .limit(1)
     )
@@ -167,7 +169,7 @@ async def allowed_assignee_ids_for_board(session: AsyncSession, board: Board) ->
     member_rows = await session.execute(
         select(BoardMember.user_id)
         .join(User, User.id == BoardMember.user_id)
-        .where(BoardMember.board_id == board.id, User.is_active.is_(True))
+        .where(BoardMember.board_id == board.id, User.is_active.is_(True), user_is_not_dismissed())
     )
     ids.update(member_rows.scalars().all())
     return ids

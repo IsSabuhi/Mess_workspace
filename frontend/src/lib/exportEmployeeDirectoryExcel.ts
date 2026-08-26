@@ -62,6 +62,8 @@ function addReportDataSheet(
   const headers = [
     "ФИО",
     "Email",
+    "Уволен",
+    "Дата увольнения",
     "Должность",
     "Системы",
     "Экзамен ЭБ",
@@ -84,6 +86,8 @@ function addReportDataSheet(
     const row = ws.addRow([
       r.full_name,
       r.email,
+      r.is_dismissed ? "Да" : "Нет",
+      fmtDate(r.dismissed_at),
       r.position?.name ?? "",
       r.systems.map((s) => s.name).join(", "),
       examElectricalPassedLabel(r),
@@ -97,11 +101,11 @@ function addReportDataSheet(
       pass.label,
       r.notes ?? "",
     ]);
-    applyStatusFill(row.getCell(9), exam.status);
-    applyStatusFill(row.getCell(13), pass.status);
+    applyStatusFill(row.getCell(11), exam.status);
+    applyStatusFill(row.getCell(15), pass.status);
   }
 
-  [28, 30, 22, 36, 12, 10, 16, 14, 16, 10, 14, 14, 16, 32].forEach((w, i) => {
+  [28, 30, 10, 14, 22, 36, 12, 10, 16, 14, 16, 10, 14, 14, 16, 32].forEach((w, i) => {
     ws.getColumn(i + 1).width = w;
   });
 }
@@ -110,6 +114,8 @@ const COMPLIANCE_HEADERS = [
   "ФИО",
   "Email",
   "Активен",
+  "Уволен",
+  "Дата увольнения",
   "Должность",
   "Системы",
   "Экзамен ЭБ",
@@ -135,6 +141,8 @@ const PROFILE_HEADERS = [
   "Email",
   "Табельный номер",
   "Активен",
+  "Уволен",
+  "Дата увольнения",
   "Дата рождения",
   "Должность",
   "Дата должности",
@@ -165,6 +173,8 @@ export async function downloadEmployeeDirectoryComplianceExcel(rows: EmployeeDir
       r.full_name,
       r.email,
       r.is_active ? "Да" : "Нет",
+      r.is_dismissed ? "Да" : "Нет",
+      fmtDate(r.dismissed_at),
       r.position?.name ?? "",
       r.systems.map((s) => s.name).join(", "),
       examElectricalPassedLabel(r),
@@ -180,7 +190,7 @@ export async function downloadEmployeeDirectoryComplianceExcel(rows: EmployeeDir
     ]);
   }
 
-  const colWidths = [28, 32, 10, 24, 40, 12, 10, 16, 14, 22, 10, 16, 14, 14, 36];
+  const colWidths = [28, 32, 10, 10, 14, 24, 40, 12, 10, 16, 14, 22, 10, 16, 14, 14, 36];
   colWidths.forEach((w, i) => {
     ws.getColumn(i + 1).width = w;
   });
@@ -216,6 +226,8 @@ export async function downloadEmployeeDirectoryProfileExcel(rows: EmployeeDirect
       r.email,
       r.personnel_number ?? "",
       r.is_active ? "Да" : "Нет",
+      r.is_dismissed ? "Да" : "Нет",
+      fmtDate(r.dismissed_at),
       fmtDate(r.birth_date),
       r.position?.name ?? "",
       fmtDate(r.position_assigned_at),
@@ -235,7 +247,7 @@ export async function downloadEmployeeDirectoryProfileExcel(rows: EmployeeDirect
     ]);
   }
 
-  const colWidths = [28, 32, 16, 10, 14, 24, 14, 40, 14, 18, 12, 34, 12, 36];
+  const colWidths = [28, 32, 16, 10, 10, 14, 14, 24, 14, 40, 14, 18, 12, 34, 12, 36];
   colWidths.forEach((w, i) => {
     ws.getColumn(i + 1).width = w;
   });

@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import KnowledgeSpace, KnowledgeSpaceMember, User, UserSystem
+from app.services.employee_status import user_is_not_dismissed
 from app.models.knowledge import SpaceMemberRole
 from app.schemas.knowledge import SpaceMemberOut
 
@@ -16,7 +17,7 @@ async def _active_system_users(session: AsyncSession, system_id: uuid.UUID) -> l
     stmt = (
         select(User)
         .join(UserSystem, UserSystem.user_id == User.id)
-        .where(UserSystem.system_id == system_id, User.is_active.is_(True))
+        .where(UserSystem.system_id == system_id, User.is_active.is_(True), user_is_not_dismissed())
         .order_by(User.full_name, User.email)
     )
     return list((await session.execute(stmt)).scalars().unique().all())
@@ -43,6 +44,7 @@ async def effective_space_member_role(
             UserSystem.user_id == user_id,
             UserSystem.system_id == space.system_id,
             User.is_active.is_(True),
+            user_is_not_dismissed(),
         )
         .limit(1)
     )

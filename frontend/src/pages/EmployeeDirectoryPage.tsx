@@ -41,6 +41,25 @@ function asInputDate(v: string | null | undefined): string {
   return v ? v.slice(0, 10) : "";
 }
 
+function todayLocalDate(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function DirectoryNameCell({ row }: { row: EmployeeDirectoryRowOut }) {
+  return (
+    <>
+      <p className="font-medium text-slate-900 dark:text-white">{row.full_name}</p>
+      <p className="text-xs text-slate-500">{row.email}</p>
+      {row.is_dismissed ? (
+        <p className="mt-0.5 text-xs font-medium text-slate-600 dark:text-slate-300">
+          Уволен{row.dismissed_at ? ` ${asInputDate(row.dismissed_at)}` : ""}
+        </p>
+      ) : null}
+    </>
+  );
+}
+
 /** YYYY-MM-DD → та же дата + 1 год (для 29.02 — 28.02 следующего года). */
 function addOneYearDateInput(isoDate: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate);
@@ -267,6 +286,7 @@ function DirectorySortHeader({
 
 /** Трёхпозиционный фильтр да/нет для API (все = параметр не передаётся). */
 type YesNoFilter = "all" | "yes" | "no";
+type EmploymentFilter = "working" | "dismissed" | "all";
 
 const filterBarSelect =
   "h-9 w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-800 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100";
@@ -328,6 +348,7 @@ export function EmployeeDirectoryPage() {
   const [filterPassHas, setFilterPassHas] = useState<YesNoFilter>("all");
   const [filterRemote, setFilterRemote] = useState<YesNoFilter>("all");
   const [filterFieldWorker, setFilterFieldWorker] = useState<YesNoFilter>("all");
+  const [filterEmployment, setFilterEmployment] = useState<EmploymentFilter>("working");
   const [examValidFrom, setExamValidFrom] = useState("");
   const [examValidTo, setExamValidTo] = useState("");
   const [passValidFrom, setPassValidFrom] = useState("");
@@ -382,6 +403,8 @@ export function EmployeeDirectoryPage() {
     is_field_worker: false,
     position_assigned_at: "",
     personnel_number: "",
+    is_dismissed: false,
+    dismissed_at: "",
   });
 
   const filters = useMemo(
@@ -407,6 +430,9 @@ export function EmployeeDirectoryPage() {
       exam_valid_to_to: activeTab === "report" && examValidTo ? examValidTo : undefined,
       pass_valid_to_from: activeTab === "report" && passValidFrom ? passValidFrom : undefined,
       pass_valid_to_to: activeTab === "report" && passValidTo ? passValidTo : undefined,
+      is_dismissed:
+        filterEmployment === "dismissed" ? true : filterEmployment === "working" ? false : undefined,
+      include_dismissed: filterEmployment === "all" || undefined,
     }),
     [
       activeTab,
@@ -425,6 +451,7 @@ export function EmployeeDirectoryPage() {
       examValidTo,
       passValidFrom,
       passValidTo,
+      filterEmployment,
     ],
   );
 
@@ -442,6 +469,7 @@ export function EmployeeDirectoryPage() {
     if (examValidTo) n++;
     if (passValidFrom) n++;
     if (passValidTo) n++;
+    if (filterEmployment !== "working") n++;
     return n;
   }, [
     filterSystemIds,
@@ -459,6 +487,7 @@ export function EmployeeDirectoryPage() {
     passValidFrom,
     passValidTo,
     activeTab,
+    filterEmployment,
   ]);
 
   useEffect(() => {
@@ -503,10 +532,14 @@ export function EmployeeDirectoryPage() {
   const saveProfileMut = useMutation({
     mutationFn: ({ id, body }: { id: string; body: Parameters<typeof patchEmployeeDirectory>[1] }) =>
       patchEmployeeDirectory(id, body),
-    onSuccess: async () => {
+    onSuccess: async (_data, vars) => {
       await qc.invalidateQueries({ queryKey: ["employee-directory"] });
       await qc.invalidateQueries({ queryKey: ["schedule", "month"] });
-      toastSuccess("Кадровые данные сохранены");
+      if (vars.body.is_dismissed && filterEmployment === "working") {
+        toastSuccess("Сотрудник перенесён в архив уволенных. Откройте фильтр «Уволенные», чтобы увидеть карточку.");
+      } else {
+        toastSuccess("Кадровые данные сохранены");
+      }
       setEditingProfile(null);
     },
     onError: (e: unknown) => toastApiError(e, "Не удалось сохранить"),
@@ -567,6 +600,7 @@ export function EmployeeDirectoryPage() {
     setExamValidTo("");
     setPassValidFrom("");
     setPassValidTo("");
+    setFilterEmployment("working");
   }
 
   function toggleBulkSystem(id: string) {
@@ -702,6 +736,8 @@ export function EmployeeDirectoryPage() {
       is_field_worker: row.is_field_worker ?? false,
       position_assigned_at: asInputDate(row.position_assigned_at),
       personnel_number: row.personnel_number ?? "",
+      is_dismissed: row.is_dismissed ?? false,
+      dismissed_at: asInputDate(row.dismissed_at),
     });
   }
 
@@ -757,6 +793,19 @@ export function EmployeeDirectoryPage() {
                 placeholder="Поиск: ФИО, email или табельный №"
                 className="min-w-[10rem] max-w-sm flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
               />
+              <label className="flex shrink-0 flex-col gap-0.5">
+                <span className="sr-only">Состав списка</span>
+                <select
+                  value={filterEmployment}
+                  onChange={(e) => setFilterEmployment(e.target.value as EmploymentFilter)}
+                  className="h-[2.375rem] rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                  title="Уволенные скрыты, пока не выберете архив"
+                >
+                  <option value="working">Работающие</option>
+                  <option value="dismissed">Уволенные</option>
+                  <option value="all">Все</option>
+                </select>
+              </label>
               <button
                 type="button"
                 onClick={() => setFiltersPanelOpen((v) => !v)}
@@ -789,7 +838,7 @@ export function EmployeeDirectoryPage() {
                   {" "}
                   На «Справочник сотрудника»: пол, график, удалёнщик, выездной. На «Отпуска» даты фильтруются в самой
                   вкладке. Экзамен, пропуск и сроки — на «Экзамены и пропуска» и «Отчётность». Удалёнщики на вкладке
-                  экзаменов не показываются.
+                  экзаменов не показываются. Уволенные в обычном списке скрыты — откройте «Уволенные» или «Все».
                 </p>
                 <div className="flex flex-wrap items-end gap-2">
                   <div className="w-[10.75rem] max-w-full shrink-0">
@@ -1277,8 +1326,7 @@ export function EmployeeDirectoryPage() {
                   {displayRows.map((r) => (
                     <tr key={r.id}>
                       <td className="px-3 py-2">
-                        <p className="font-medium text-slate-900 dark:text-white">{r.full_name}</p>
-                        <p className="text-xs text-slate-500">{r.email}</p>
+                        <DirectoryNameCell row={r} />
                       </td>
                       <td className="px-3 py-2">{r.position?.name ?? "—"}</td>
                       <td className="px-3 py-2 text-xs">{r.systems.map((s) => s.name).join(", ") || "—"}</td>
@@ -1364,8 +1412,7 @@ export function EmployeeDirectoryPage() {
                       return (
                         <tr key={r.id}>
                           <td className="px-3 py-2">
-                            <p className="font-medium text-slate-900 dark:text-white">{r.full_name}</p>
-                            <p className="text-xs text-slate-500">{r.email}</p>
+                            <DirectoryNameCell row={r} />
                           </td>
                           <td className="px-3 py-2">{r.position?.name ?? "—"}</td>
                           <td className="px-3 py-2 text-xs">{r.systems.map((s) => s.name).join(", ") || "—"}</td>
@@ -1439,8 +1486,7 @@ export function EmployeeDirectoryPage() {
                   {displayRows.map((r) => (
                     <tr key={r.id}>
                       <td className="px-3 py-2">
-                        <p className="font-medium text-slate-900 dark:text-white">{r.full_name}</p>
-                        <p className="text-xs text-slate-500">{r.email}</p>
+                        <DirectoryNameCell row={r} />
                       </td>
                       <td className="px-3 py-2 font-mono text-xs">{r.personnel_number?.trim() || "—"}</td>
                       <td className="px-3 py-2 text-xs">{r.birth_date ? asInputDate(r.birth_date) : "—"}</td>
@@ -1681,6 +1727,10 @@ export function EmployeeDirectoryPage() {
             <form
               onSubmit={(e) => {
                 e.preventDefault();
+                if (profileForm.is_dismissed && !profileForm.dismissed_at) {
+                  toastError("Укажите дату увольнения");
+                  return;
+                }
                 const vacation_periods = profileForm.vacation_periods
                   .filter((p) => p.start.trim() && p.end.trim())
                   .map((p) => ({
@@ -1702,6 +1752,8 @@ export function EmployeeDirectoryPage() {
                     is_field_worker: profileForm.is_field_worker,
                     position_assigned_at: profileForm.position_assigned_at || null,
                     personnel_number: profileForm.personnel_number.trim() || null,
+                    is_dismissed: profileForm.is_dismissed,
+                    dismissed_at: profileForm.is_dismissed ? profileForm.dismissed_at || null : null,
                   },
                 });
               }}
@@ -1780,6 +1832,39 @@ export function EmployeeDirectoryPage() {
                     className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
                   />
                 </label>
+              </div>
+              <div className="grid gap-3 rounded-xl border border-slate-200/80 bg-slate-50/80 p-3 dark:border-slate-600 dark:bg-slate-800/40">
+                <label className="flex items-center gap-2 text-sm text-slate-800 dark:text-slate-100">
+                  <input
+                    type="checkbox"
+                    checked={profileForm.is_dismissed}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setProfileForm((p) => ({
+                        ...p,
+                        is_dismissed: checked,
+                        dismissed_at: checked ? p.dismissed_at || todayLocalDate() : "",
+                      }));
+                    }}
+                  />
+                  Уволен
+                </label>
+                {profileForm.is_dismissed ? (
+                  <label className="block text-xs text-slate-500 dark:text-slate-400">
+                    Дата увольнения
+                    <input
+                      type="date"
+                      required
+                      value={profileForm.dismissed_at}
+                      onChange={(e) => setProfileForm((p) => ({ ...p, dismissed_at: e.target.value }))}
+                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+                    />
+                  </label>
+                ) : null}
+                <p className="text-[11px] leading-snug text-slate-500 dark:text-slate-400">
+                  Уволенный скрывается из обычного списка справочника и не попадает в график и назначения.
+                  Учётная запись при этом не блокируется — при необходимости отключите её в админке.
+                </p>
               </div>
               <div className="rounded-xl border border-slate-200/80 bg-slate-50/80 p-3 dark:border-slate-600 dark:bg-slate-800/40">
                 <p className="text-sm font-medium text-slate-800 dark:text-slate-100">Производственные системы</p>

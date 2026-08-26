@@ -47,6 +47,8 @@ class EmployeeProfile(Base):
     # Дата назначения на текущую должность
     position_assigned_at: Mapped[date | None] = mapped_column(Date, nullable=True)
     personnel_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    is_dismissed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    dismissed_at: Mapped[date | None] = mapped_column(Date, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
