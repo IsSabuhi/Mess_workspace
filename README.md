@@ -76,9 +76,18 @@ PostgreSQL **не входит** в Compose — нужна уже развёрн
 ```bash
 cp .env.template .env
 # DATABASE_URL, SECRET_KEY, INITIAL_ADMIN_*, MINIO_PUBLIC_BASE_URL
-# За reverse-proxy с префиксом /mes: VITE_API_BASE=/mes/api
+# VITE_API_BASE оставьте пустым (prod-сборка: /mes/api/api/v1, nginx в web)
 
 docker compose up --build -d
+```
+
+Нужен **Compose V2**: команда `docker compose` (с пробелом). Пакет `docker-compose` 1.29 на новом Docker Engine падает с `KeyError: 'ContainerConfig'` при recreate контейнера.
+
+Если это уже случилось:
+
+```bash
+sudo docker rm -f $(sudo docker ps -aq --filter name=mes_portal)
+sudo docker compose up -d
 ```
 
 Порты из `.env` (значения по умолчанию):

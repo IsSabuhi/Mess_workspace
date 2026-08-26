@@ -1,6 +1,4 @@
-import { ApiError, apiFetch } from "./client";
-
-const API_BASE = import.meta.env.VITE_API_BASE || "/mes/api";
+import { API_BASE, ApiError, apiFetch } from "./client";
 
 export type SystemBackupOut = {
   id: string;

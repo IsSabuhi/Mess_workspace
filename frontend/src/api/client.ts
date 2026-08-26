@@ -1,6 +1,7 @@
 import { formatApiErrorDetail, httpStatusFallbackMessage } from "../lib/apiErrorFormat";
 
-const API_BASE = import.meta.env.VITE_API_BASE ||'/mes/api';
+export const API_BASE = String(import.meta.env.VITE_API_BASE || "").replace(/\/+$/, "")
+  || (import.meta.env.DEV ? "" : "/mes/api");
 
 export class ApiError extends Error {
   status: number;

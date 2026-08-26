@@ -96,9 +96,9 @@ npm run preview   # локальный просмотр dist
 
 | Переменная | Описание |
 |---|---|
-| `VITE_API_BASE` | Префикс API для браузера. Dev: пусто. Prod за reverse-proxy `/mes/api`: часто `/mes/api`. В Docker передаётся как build-arg. |
+| `VITE_API_BASE` | База API. Dev: пусто (прокси Vite). Prod/Docker: пусто → `/mes/api`, запросы `/mes/api/api/v1`. Контейнер `web` это проксирует. |
 
-Клиент: `` `${VITE_API_BASE}/api/v1/...` `` (`src/api/client.ts`). Auth — HttpOnly cookies (`credentials: "include"`).
+Клиент: `` `${API_BASE}/api/v1/...` `` (`src/api/client.ts`). Auth — HttpOnly cookies (`credentials: "include"`).
 
 ## Особенности UI / домена
 
