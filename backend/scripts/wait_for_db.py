@@ -5,8 +5,13 @@ from __future__ import annotations
 import re
 import sys
 import time
-
+from pathlib import Path
 from urllib.parse import urlparse
+
+# Как `python scripts/foo.py`: в sys.path попадает scripts/, а пакет app лежит на уровень выше.
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 from sqlalchemy import create_engine, text
 
