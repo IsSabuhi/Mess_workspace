@@ -312,3 +312,40 @@ export async function downloadEmployeeDirectoryReportExcel(rows: EmployeeDirecto
   a.click();
   URL.revokeObjectURL(url);
 }
+
+export async function downloadEmployeeDirectoryVacationsExcel(rows: EmployeeDirectoryRowOut[]): Promise<void> {
+  const { flattenVacationItems, vacationKindLabel, vacationStatusLabel } = await import("./employeeVacations");
+  const items = flattenVacationItems(rows);
+  const wb = new ExcelJS.Workbook();
+  wb.created = new Date();
+  const ws = wb.addWorksheet("Отпуска", { views: [{ state: "frozen", ySplit: 1 }] });
+  styleReportHeader(
+    ws.addRow(["Сотрудник", "Email", "Должность", "Системы", "Вид", "Начало", "Окончание", "Дней", "Статус"]),
+  );
+  for (const item of items) {
+    ws.addRow([
+      item.fullName,
+      item.email,
+      item.position ?? "",
+      item.systemsLabel,
+      vacationKindLabel(item.kind),
+      item.start,
+      item.end,
+      item.days,
+      vacationStatusLabel(item),
+    ]);
+  }
+  [28, 32, 24, 36, 18, 14, 14, 10, 28].forEach((w, i) => {
+    ws.getColumn(i + 1).width = w;
+  });
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `otpuska_${stampFile()}.xlsx`;
+  a.click();
+  URL.revokeObjectURL(url);
+}

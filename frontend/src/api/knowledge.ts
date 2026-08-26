@@ -254,3 +254,46 @@ export async function uploadKnowledgeImage(file: File): Promise<{ url: string }>
     body: fd,
   });
 }
+
+export type KnowledgeObsidianFileResult = {
+  filename: string;
+  title: string | null;
+  created: boolean;
+  skipped: boolean;
+  images_rewritten: number;
+  missing_images: string[];
+  error: string | null;
+};
+
+export type KnowledgeObsidianImportOut = {
+  created: number;
+  skipped: number;
+  failed: number;
+  images_uploaded: number;
+  folders_created: number;
+  files: KnowledgeObsidianFileResult[];
+};
+
+function fileUploadPath(file: File): string {
+  const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath;
+  return (rel && rel.trim()) || file.name;
+}
+
+export async function importKnowledgeObsidian(
+  spaceId: string,
+  files: File[],
+  archive?: File | null,
+): Promise<KnowledgeObsidianImportOut> {
+  const form = new FormData();
+  form.append("space_id", spaceId);
+  if (archive) {
+    form.append("archive", archive, archive.name);
+  }
+  for (const file of files) {
+    form.append("files", file, fileUploadPath(file));
+  }
+  return apiFetch<KnowledgeObsidianImportOut>("/api/v1/knowledge/import-obsidian", {
+    method: "POST",
+    body: form,
+  });
+}

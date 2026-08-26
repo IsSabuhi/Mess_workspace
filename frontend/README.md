@@ -53,6 +53,7 @@ frontend/
 | `NotificationsPage` | `/notifications` | Уведомления |
 | `SystemsPage` / `PositionsPage` | `/systems`, `/positions` | Справочники |
 | `AdminPage` | `/admin` | Пользователи, роли, аудит |
+| `UspdPage` | `/uspd` | Справочник УСПД в виде заметок (суперпользователь) |
 | `SettingsPage` | `/settings` | Профиль / настройки пользователя |
 
 Права доступа проверяются в `src/lib/permissions.ts` и guards в `App.tsx`.

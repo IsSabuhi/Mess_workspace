@@ -6,9 +6,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.deps import require_any_permission
+from app.deps import require_admin_access, require_any_permission
 from app.models import User
-from app.permissions import ROLES_MANAGE, USERS_MANAGE
+from app.permissions import ADMIN_SETTINGS
 from app.schemas.audit import AuditEventOut, AuditSettingsOut, AuditSettingsPatch
 from app.services.audit import (
     get_audit_enabled,
@@ -19,13 +19,14 @@ from app.services.audit import (
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 
-_ADMIN = require_any_permission(USERS_MANAGE, ROLES_MANAGE)
+_AUDIT_VIEW = require_admin_access
+_SETTINGS = require_any_permission(ADMIN_SETTINGS)
 
 
 @router.get("/settings", response_model=AuditSettingsOut)
 async def get_settings(
     session: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(_ADMIN)],
+    _: Annotated[User, Depends(_AUDIT_VIEW)],
 ) -> AuditSettingsOut:
     return AuditSettingsOut(
         enabled=await get_audit_enabled(session),
@@ -37,7 +38,7 @@ async def get_settings(
 async def patch_settings(
     body: AuditSettingsPatch,
     session: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(_ADMIN)],
+    _: Annotated[User, Depends(_SETTINGS)],
 ) -> AuditSettingsOut:
     enabled, retention_days = await set_audit_settings(
         session, enabled=body.enabled, retention_days=body.retention_days
@@ -48,7 +49,7 @@ async def patch_settings(
 @router.get("/events", response_model=list[AuditEventOut])
 async def get_events(
     session: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(_ADMIN)],
+    _: Annotated[User, Depends(_AUDIT_VIEW)],
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
     entity_type: str | None = None,

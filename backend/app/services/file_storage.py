@@ -6,9 +6,15 @@ from urllib.parse import urlparse
 import boto3
 
 from app.config import get_settings
-from app.paths import UPLOAD_KB_DIR, UPLOAD_NOTES_DIR, UPLOAD_TASKS_DIR
+from app.paths import UPLOAD_KB_DIR, UPLOAD_NOTES_DIR, UPLOAD_TASKS_DIR, UPLOAD_USPD_DIR
 
-_IMAGE_EXT = {"image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp"}
+_IMAGE_EXT = {
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/png": ".png",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+}
 _TASK_EXT = {
     **_IMAGE_EXT,
     "application/pdf": ".pdf",
@@ -103,6 +109,10 @@ def _store(raw: bytes, content_type: str, prefix: str, local_dir: Path, url_pref
 
 def save_kb_image(raw: bytes, content_type: str) -> str:
     return _store(raw, content_type, "kb", UPLOAD_KB_DIR, "/uploads/kb")
+
+
+def save_uspd_image(raw: bytes, content_type: str) -> str:
+    return _store(raw, content_type, "uspd", UPLOAD_USPD_DIR, "/uploads/uspd")
 
 
 def save_note_file(raw: bytes, content_type: str, original_filename: str | None = None) -> str:

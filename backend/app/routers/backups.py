@@ -8,10 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.deps import require_any_permission
+from app.deps import require_admin_access, require_any_permission
 from app.models import User
 from app.models.system_backup import SystemBackup
-from app.permissions import ROLES_MANAGE, USERS_MANAGE
+from app.permissions import ADMIN_BACKUPS
 from app.schemas.backup import BackupSettingsOut, BackupSettingsPatch, SystemBackupOut
 from app.schemas.common import Message
 from app.services.audit import record_audit_event
@@ -28,17 +28,24 @@ from app.services.db_backup import (
 )
 
 router = APIRouter(prefix="/backups", tags=["backups"])
-_ADMIN = require_any_permission(USERS_MANAGE, ROLES_MANAGE)
+_ADMIN = require_any_permission(ADMIN_BACKUPS)
+_VIEW = require_admin_access
+
+
+def _backup_source(row: SystemBackup) -> str:
+    raw = getattr(row, "source", None)
+    if raw in ("manual", "scheduled"):
+        return raw
+    return "scheduled" if row.created_by_id is None else "manual"
 
 
 def _to_out(row: SystemBackup) -> SystemBackupOut:
+    source = _backup_source(row)
     if row.created_by is not None:
         name = row.created_by.full_name
-    elif row.created_by_id is None:
-        name = "по расписанию"
     else:
         name = None
-    return SystemBackupOut.model_validate(row).model_copy(update={"created_by_name": name})
+    return SystemBackupOut.model_validate(row).model_copy(update={"created_by_name": name, "source": source})
 
 
 def _settings_out(cfg: BackupScheduleSettings) -> BackupSettingsOut:
@@ -58,14 +65,14 @@ def _settings_out(cfg: BackupScheduleSettings) -> BackupSettingsOut:
 @router.get("", response_model=list[SystemBackupOut])
 async def list_backups(
     session: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(_ADMIN)],
+    _: Annotated[User, Depends(_VIEW)],
 ) -> list[SystemBackupOut]:
     rows = (
         await session.execute(
             select(SystemBackup)
             .options(selectinload(SystemBackup.created_by))
             .order_by(SystemBackup.created_at.desc())
-            .limit(50)
+            .limit(80)
         )
     ).scalars().all()
     return [_to_out(r) for r in rows]
@@ -74,7 +81,7 @@ async def list_backups(
 @router.get("/settings", response_model=BackupSettingsOut)
 async def get_backup_settings(
     session: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(_ADMIN)],
+    _: Annotated[User, Depends(_VIEW)],
 ) -> BackupSettingsOut:
     return _settings_out(await get_backup_schedule_settings(session))
 
@@ -119,7 +126,7 @@ async def create_backup(
             status_code=status.HTTP_409_CONFLICT,
             detail="Уже идёт создание резервной копии. Дождитесь завершения.",
         )
-    row = await create_backup_record(session, actor_user_id=user.id)
+    row = await create_backup_record(session, actor_user_id=user.id, source="manual")
     await record_audit_event(
         session,
         entity_type="system_backup",

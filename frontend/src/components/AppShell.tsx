@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useState, type ReactNode } from "react";
 
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
@@ -21,6 +21,11 @@ type Props = {
   narrow?: boolean;
 };
 
+/** Не даём странице перерисовываться при сворачивании сайдбара. */
+const PageBody = memo(function PageBody({ children }: { children: ReactNode }) {
+  return <>{children}</>;
+});
+
 export function AppShell({ title, subtitle, children, narrow }: Props) {
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(STORAGE_KEY) === "1");
 
@@ -28,12 +33,16 @@ export function AppShell({ title, subtitle, children, narrow }: Props) {
     localStorage.setItem(STORAGE_KEY, collapsed ? "1" : "0");
   }, [collapsed]);
 
+  const toggleCollapsed = useCallback(() => {
+    setCollapsed((c) => !c);
+  }, []);
+
   const margin = collapsed ? "ml-[4.5rem]" : "ml-64";
 
   return (
     <div className="min-h-screen overflow-x-clip">
-      <Sidebar collapsed={collapsed} onToggleCollapse={() => setCollapsed((c) => !c)} />
-      <div className={`min-h-screen min-w-0 overflow-x-clip transition-[margin] duration-300 ease-out ${margin}`}>
+      <Sidebar collapsed={collapsed} onToggleCollapse={toggleCollapsed} />
+      <div className={`min-h-screen min-w-0 overflow-x-clip ${margin}`}>
         <div
           className={
             narrow
@@ -42,7 +51,9 @@ export function AppShell({ title, subtitle, children, narrow }: Props) {
           }
         >
           <TopBar title={title} subtitle={subtitle} />
-          <main className="mt-6 min-w-0">{children}</main>
+          <main className="mt-6 min-w-0">
+            <PageBody>{children}</PageBody>
+          </main>
         </div>
       </div>
     </div>

@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     minio_public_base_url: str = "/mes/files"
     # Публичный base path фронта (BrowserRouter basename) для ссылок в HTML статей
     public_app_base: str = "/mes"
+    # Ключ Fernet для паролей УСПД. Если пусто — берётся SHA-256 от SECRET_KEY.
+    uspd_secrets_key: str = ""
 
 
 @lru_cache

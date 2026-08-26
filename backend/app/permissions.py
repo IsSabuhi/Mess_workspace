@@ -16,7 +16,19 @@ SYSTEMS_MANAGE = "systems.manage"
 POSITIONS_MANAGE = "positions.manage"
 
 USERS_MANAGE = "users.manage"
+USERS_CREATE = "users.create"
+USERS_PASSWORD_RESET = "users.password.reset"
+USERS_DELETE = "users.delete"
 ROLES_MANAGE = "roles.manage"
+
+ADMIN_SETTINGS = "admin.settings.manage"
+ADMIN_BACKUPS = "admin.backups.manage"
+ADMIN_AUDIT = "admin.audit.read"
+ADMIN_IMPORT_USERS = "admin.import.users"
+ADMIN_IMPORT_TASKS = "admin.import.tasks"
+ADMIN_IMPORT_VACATIONS = "admin.import.vacations"
+ADMIN_IMPORT_KNOWLEDGE = "admin.import.knowledge"
+ADMIN_IMPORT_USPD = "admin.import.uspd"
 
 KNOWLEDGE_READ_ALL = "knowledge.read.all"
 KNOWLEDGE_MANAGE_ALL = "knowledge.manage.all"
@@ -45,7 +57,18 @@ ALL_PERMISSION_CODES: tuple[str, ...] = (
     SYSTEMS_MANAGE,
     POSITIONS_MANAGE,
     USERS_MANAGE,
+    USERS_CREATE,
+    USERS_PASSWORD_RESET,
+    USERS_DELETE,
     ROLES_MANAGE,
+    ADMIN_SETTINGS,
+    ADMIN_BACKUPS,
+    ADMIN_AUDIT,
+    ADMIN_IMPORT_USERS,
+    ADMIN_IMPORT_TASKS,
+    ADMIN_IMPORT_VACATIONS,
+    ADMIN_IMPORT_KNOWLEDGE,
+    ADMIN_IMPORT_USPD,
     KNOWLEDGE_READ_ALL,
     KNOWLEDGE_MANAGE_ALL,
     KNOWLEDGE_SPACE_MANAGE,
@@ -57,3 +80,30 @@ ALL_PERMISSION_CODES: tuple[str, ...] = (
     SCHEDULE_READ,
     SCHEDULE_MANAGE,
 )
+
+# Любое из этих прав открывает раздел «Администрирование».
+ADMIN_SECTION_CODES: tuple[str, ...] = (
+    USERS_MANAGE,
+    USERS_CREATE,
+    USERS_PASSWORD_RESET,
+    USERS_DELETE,
+    ROLES_MANAGE,
+    ADMIN_SETTINGS,
+    ADMIN_BACKUPS,
+    ADMIN_AUDIT,
+    ADMIN_IMPORT_USERS,
+    ADMIN_IMPORT_TASKS,
+    ADMIN_IMPORT_VACATIONS,
+    ADMIN_IMPORT_KNOWLEDGE,
+    ADMIN_IMPORT_USPD,
+)
+
+USERS_STAFF_CODES: tuple[str, ...] = (
+    USERS_MANAGE,
+    USERS_CREATE,
+    USERS_PASSWORD_RESET,
+    USERS_DELETE,
+)
+
+# Права, которые нельзя выдать «выше своих» при назначении роли.
+PRIVILEGED_ASSIGN_CODES: frozenset[str] = frozenset(ADMIN_SECTION_CODES)

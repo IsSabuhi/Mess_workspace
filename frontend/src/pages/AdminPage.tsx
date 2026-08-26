@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Database, Download, Eye, EyeOff, FileSpreadsheet, Loader2, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Database, Download, Eye, EyeOff, FileArchive, FileSpreadsheet, FileText, Loader2, Plus, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useSearchParams } from "react-router-dom";
 
 import type { UserOut } from "../api/auth";
@@ -31,13 +31,19 @@ import type { SystemOut } from "../api/systems";
 import { getTaskArchiveSettings, listSystems, updateTaskArchiveSettings } from "../api/systems";
 import { importTasksFromExcel } from "../api/tasks";
 import type { TaskExcelImportBatchOut } from "../api/tasks";
+import { importEmployeeVacationsExcel } from "../api/employeeDirectory";
+import { importKnowledgeObsidian, listKnowledgeSpaces } from "../api/knowledge";
+import { importUspdObsidian, importUspdSimExcel } from "../api/uspd";
 import type { UserCreate, UserListOut, UserUpdate } from "../api/users";
 import { createUser, deleteUser, importUsersFromExcel, listUsers, updateUser } from "../api/users";
 import { AppShell } from "../components/AppShell";
+import { NeedPermission, toastInsufficientRights } from "../components/NeedPermission";
+import { PermissionNoteIcon } from "../components/PermissionNoteIcon";
 import { useAuth } from "../context/AuthContext";
 import { auditActionLabel, formatAuditDetails } from "../lib/auditFormat";
 import { invalidateAndRefetch } from "../lib/queryClient";
-import { PERM, canAdminAccess, hasPermission } from "../lib/permissions";
+import { parsePermissionText } from "../lib/permissionText";
+import { PERM, canAdminAccess, canAssignRole, canCreateUsers, canDeleteUsers, canResetUserPassword, canStaffUsers, canToggleAdminPermission, canUpdateUsers, hasPermission } from "../lib/permissions";
 import { toastApiError, toastError, toastSuccess } from "../lib/toast";
 import { useToastQueryError } from "../lib/useToastQueryError";
 import { useModalLayer } from "../lib/useModalLayer";
@@ -60,11 +66,13 @@ function groupPermissions(perms: PermissionOut[]): Map<string, PermissionOut[]> 
 
 const PERM_GROUP_LABELS: Record<string, string> = {
   tasks: "Задачи",
-  board: "Структура доски",
+  board: "Настройки доски",
+  boards: "Доски",
   systems: "Производственные системы",
   positions: "Должности",
   users: "Пользователи",
   roles: "Роли",
+  admin: "Админка",
   knowledge: "База знаний",
   employee_directory: "Справочник сотрудников",
   schedule: "График",
@@ -73,20 +81,6 @@ const PERM_GROUP_LABELS: Record<string, string> = {
 
 function permissionGroupTitle(prefix: string): string {
   return PERM_GROUP_LABELS[prefix] ?? prefix;
-}
-
-function permissionCardTitle(p: PermissionOut): string {
-  if (p.description?.trim()) {
-    const line = p.description.split(/\r?\n/)[0]?.trim();
-    if (line) return line;
-  }
-  return p.code.replace(/\./g, " · ");
-}
-
-function permissionCardSubtitle(p: PermissionOut): string {
-  const lines = p.description?.split(/\r?\n/).map((x) => x.trim()).filter(Boolean) ?? [];
-  if (lines.length > 1) return lines.slice(1).join(" ");
-  return p.code;
 }
 
 function PermToggle({
@@ -129,6 +123,27 @@ function PermToggle({
   );
 }
 
+function AdminLock({
+  allowed,
+  hint,
+  children,
+}: {
+  allowed: boolean;
+  hint: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      {children}
+      {!allowed && (
+        <p className="mt-2 text-xs font-medium text-amber-800 dark:text-amber-200">
+          {hint} Нажмите на заблокированную кнопку — появится сообщение.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function RolesPermissionsBoard({
   roles,
   filteredRoles,
@@ -144,7 +159,9 @@ function RolesPermissionsBoard({
   onDeleteRole,
   onToggle,
   busyKey,
+  canManage,
   canEditSystemRoles,
+  canTogglePerm,
 }: {
   roles: RoleOut[];
   filteredRoles: RoleOut[];
@@ -160,7 +177,9 @@ function RolesPermissionsBoard({
   onDeleteRole: (r: RoleOut) => void;
   onToggle: (role: RoleOut, permId: string, next: boolean) => void;
   busyKey: string | null;
+  canManage: boolean;
   canEditSystemRoles: boolean;
+  canTogglePerm: (code: string) => boolean;
 }) {
   const selected = selectedId ? roles.find((r) => r.id === selectedId) : null;
 
@@ -175,13 +194,15 @@ function RolesPermissionsBoard({
             Настройте права доступа для ролей в системе
           </p>
         </div>
-        <button
-          type="button"
-          onClick={onCreateRole}
-          className="shrink-0 rounded-xl bg-sky-500 px-4 py-2.5 text-sm font-semibold text-white shadow-md hover:bg-sky-600"
-        >
-          + Создать роль
-        </button>
+        <NeedPermission allowed={canManage}>
+          <button
+            type="button"
+            onClick={onCreateRole}
+            className="shrink-0 rounded-xl bg-sky-500 px-4 py-2.5 text-sm font-semibold text-white shadow-md hover:bg-sky-600"
+          >
+            + Создать роль
+          </button>
+        </NeedPermission>
       </div>
 
       <div className="grid shrink-0 gap-3 sm:grid-cols-3">
@@ -309,6 +330,7 @@ function RolesPermissionsBoard({
                       Карточка роли
                     </button>
                     {!selected.is_system && (
+                      <NeedPermission allowed={canManage}>
                       <button
                         type="button"
                         onClick={() => onDeleteRole(selected)}
@@ -316,6 +338,7 @@ function RolesPermissionsBoard({
                       >
                         Удалить роль
                       </button>
+                      </NeedPermission>
                     )}
                   </div>
                 </div>
@@ -333,22 +356,26 @@ function RolesPermissionsBoard({
                     <div className="space-y-3">
                       {items.map((p) => {
                         const has = selected.permissions.some((x) => x.id === p.id);
-                        const disabled = selected.is_system && !canEditSystemRoles;
+                        const lockedPerm = !canManage || !canTogglePerm(p.code);
+                        const disabled = (selected.is_system && !canEditSystemRoles) || lockedPerm;
                         const busy = busyKey === `${selected.id}:${p.id}`;
+                        const parsed = parsePermissionText(p.code, p.description);
                         return (
                           <div
                             key={p.id}
                             className="flex items-start justify-between gap-4 rounded-2xl border border-slate-200/90 bg-slate-50/80 px-4 py-3 dark:border-slate-600/80 dark:bg-slate-800/40"
                           >
                             <div className="min-w-0">
-                              <p className="font-medium text-slate-900 dark:text-white">
-                                {permissionCardTitle(p)}
+                              <p className="flex items-center gap-1.5 font-medium text-slate-900 dark:text-white">
+                                <span>{parsed.title}</span>
+                                {parsed.note ? <PermissionNoteIcon note={parsed.note} /> : null}
                               </p>
                               <p className="mt-0.5 text-sm text-slate-600 dark:text-slate-400">
-                                {permissionCardSubtitle(p)}
+                                {parsed.subtitle}
                               </p>
                             </div>
-                            <PermToggle
+                            <NeedPermission allowed={!disabled}>
+                              <PermToggle
                               checked={has}
                               disabled={disabled}
                               busy={busy}
@@ -357,6 +384,7 @@ function RolesPermissionsBoard({
                               }}
                               ariaLabel={`${has ? "Отключить" : "Включить"} право ${p.code}`}
                             />
+                            </NeedPermission>
                           </div>
                         );
                       })}
@@ -401,89 +429,36 @@ export function AdminPage() {
     return <Navigate to="/" replace />;
   }
 
-  const showUsers = hasPermission(user, PERM.USERS_MANAGE);
-  const showRoles = hasPermission(user, PERM.ROLES_MANAGE);
-  // Настройки системы и журнал аудита — только у тех, кто уже в админке (users/roles).
-  const canManageTaskArchive = canAdminAccess(user);
-
-  useEffect(() => {
-    const visibleTabs: Tab[] = [];
-    if (showUsers) visibleTabs.push("users");
-    if (showRoles) visibleTabs.push("roles");
-    if (canManageTaskArchive) visibleTabs.push("system-settings");
-    if (canManageTaskArchive) visibleTabs.push("audit-log");
-    if (!visibleTabs.length) return;
-    if (!visibleTabs.includes(tab)) {
-      setTab(visibleTabs[0]);
-    }
-  }, [showUsers, showRoles, canManageTaskArchive, tab, setTab]);
+  const tabBtn = (id: Tab, label: string) => (
+    <button
+      type="button"
+      onClick={() => setTab(id)}
+      className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
+        tab === id
+          ? "bg-sky-500 text-white shadow-md"
+          : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+      }`}
+    >
+      {label}
+    </button>
+  );
 
   return (
     <AppShell
       title="Администрирование"
       subtitle="Пользователи, роли и системные настройки"
     >
-      {(showUsers || showRoles || canManageTaskArchive) && (
-        <div className="mb-6 flex flex-wrap gap-2 rounded-2xl border border-slate-200/80 bg-white/70 p-1.5 dark:border-slate-700 dark:bg-slate-900/50">
-          {showUsers && (
-            <button
-              type="button"
-              onClick={() => setTab("users")}
-              className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
-                tab === "users"
-                  ? "bg-sky-500 text-white shadow-md"
-                  : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
-              }`}
-            >
-              Пользователи
-            </button>
-          )}
-          {showRoles && (
-            <button
-              type="button"
-              onClick={() => setTab("roles")}
-              className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
-                tab === "roles"
-                  ? "bg-sky-500 text-white shadow-md"
-                  : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
-              }`}
-            >
-              Роли и права
-            </button>
-          )}
-          {canManageTaskArchive && (
-            <button
-              type="button"
-              onClick={() => setTab("system-settings")}
-              className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
-                tab === "system-settings"
-                  ? "bg-sky-500 text-white shadow-md"
-                  : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
-              }`}
-            >
-              Настройки системы
-            </button>
-          )}
-          {canManageTaskArchive && (
-            <button
-              type="button"
-              onClick={() => setTab("audit-log")}
-              className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
-                tab === "audit-log"
-                  ? "bg-sky-500 text-white shadow-md"
-                  : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
-              }`}
-            >
-              Журнал аудита
-            </button>
-          )}
-        </div>
-      )}
+      <div className="mb-6 flex flex-wrap gap-2 rounded-2xl border border-slate-200/80 bg-white/70 p-1.5 dark:border-slate-700 dark:bg-slate-900/50">
+        {tabBtn("users", "Пользователи")}
+        {tabBtn("roles", "Роли и права")}
+        {tabBtn("system-settings", "Настройки системы")}
+        {tabBtn("audit-log", "Журнал аудита")}
+      </div>
 
-      {tab === "users" && showUsers && <UsersSection />}
-      {tab === "roles" && showRoles && <RolesSection />}
-      {tab === "system-settings" && canManageTaskArchive && <SystemSettingsSection />}
-      {tab === "audit-log" && canManageTaskArchive && <AuditLogSection />}
+      {tab === "users" && <UsersSection />}
+      {tab === "roles" && <RolesSection />}
+      {tab === "system-settings" && <SystemSettingsSection />}
+      {tab === "audit-log" && <AuditLogSection />}
     </AppShell>
   );
 }
@@ -491,7 +466,13 @@ export function AdminPage() {
 function SystemSettingsSection() {
   const { state } = useAuth();
   const currentUser = state.status === "authenticated" ? state.user : null;
-  const canImportUsers = !!(currentUser && hasPermission(currentUser, PERM.USERS_MANAGE));
+  const canManageSettings = !!(currentUser && hasPermission(currentUser, PERM.ADMIN_SETTINGS));
+  const canManageBackups = !!(currentUser && hasPermission(currentUser, PERM.ADMIN_BACKUPS));
+  const canImportUsers = !!(currentUser && hasPermission(currentUser, PERM.ADMIN_IMPORT_USERS));
+  const canImportTasks = !!(currentUser && hasPermission(currentUser, PERM.ADMIN_IMPORT_TASKS));
+  const canImportVacations = !!(currentUser && hasPermission(currentUser, PERM.ADMIN_IMPORT_VACATIONS));
+  const canImportKnowledge = !!(currentUser && hasPermission(currentUser, PERM.ADMIN_IMPORT_KNOWLEDGE));
+  const canImportUspd = !!(currentUser && hasPermission(currentUser, PERM.ADMIN_IMPORT_USPD));
   const qc = useQueryClient();
   const [autoArchiveDays, setAutoArchiveDays] = useState("60");
   const [auditRetentionDays, setAuditRetentionDays] = useState("180");
@@ -627,6 +608,11 @@ function SystemSettingsSection() {
 
   return (
     <div className="space-y-6">
+      <AdminLock
+        allowed={canManageSettings}
+        hint="Нет права менять настройки — блоки можно смотреть, кнопки сохранения недоступны."
+      >
+        <div className="space-y-6">
       <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-5 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
         <h3 className="text-base font-semibold text-slate-900 dark:text-white">Автоархивация выполненных задач</h3>
         <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
@@ -636,6 +622,10 @@ function SystemSettingsSection() {
           className="mt-4 flex flex-wrap items-end gap-3"
           onSubmit={(e) => {
             e.preventDefault();
+            if (!canManageSettings) {
+              toastInsufficientRights();
+              return;
+            }
             const parsed = Number(autoArchiveDays);
             if (!Number.isFinite(parsed) || parsed < 1) {
               toastError("Введите число дней от 1");
@@ -656,13 +646,15 @@ function SystemSettingsSection() {
               className="ml-2 w-28 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
             />
           </label>
-          <button
-            type="submit"
-            disabled={taskArchiveQuery.isPending || taskArchiveMut.isPending}
-            className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-md hover:bg-sky-600 disabled:opacity-60"
-          >
-            {taskArchiveMut.isPending ? "Сохранение…" : "Сохранить"}
-          </button>
+          <NeedPermission allowed={canManageSettings}>
+            <button
+              type="submit"
+              disabled={taskArchiveQuery.isPending || taskArchiveMut.isPending}
+              className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-md hover:bg-sky-600 disabled:opacity-60"
+            >
+              {taskArchiveMut.isPending ? "Сохранение…" : "Сохранить"}
+            </button>
+          </NeedPermission>
         </form>
       </div>
       <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-5 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
@@ -671,19 +663,25 @@ function SystemSettingsSection() {
           Управление настройками аудита по системе: можно отключить запись и настроить срок хранения.
         </p>
         <div className="mt-4 space-y-3">
-          <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-            <input
-              type="checkbox"
-              checked={auditSettingsQuery.data?.enabled ?? true}
-              disabled={auditSettingsQuery.isPending || auditSettingsMut.isPending}
-              onChange={(e) => auditSettingsMut.mutate({ enabled: e.target.checked })}
-            />
-            Включить аудит
-          </label>
+          <NeedPermission allowed={canManageSettings} className="flex">
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+              <input
+                type="checkbox"
+                checked={auditSettingsQuery.data?.enabled ?? true}
+                disabled={auditSettingsQuery.isPending || auditSettingsMut.isPending}
+                onChange={(e) => auditSettingsMut.mutate({ enabled: e.target.checked })}
+              />
+              Включить аудит
+            </label>
+          </NeedPermission>
           <form
             className="flex flex-wrap items-end gap-3"
             onSubmit={(e) => {
               e.preventDefault();
+              if (!canManageSettings) {
+                toastInsufficientRights();
+                return;
+              }
               const parsed = Number(auditRetentionDays);
               if (!Number.isFinite(parsed) || parsed < 7) {
                 toastError("Введите число дней от 7");
@@ -704,13 +702,15 @@ function SystemSettingsSection() {
                 className="ml-2 w-28 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
               />
             </label>
-            <button
-              type="submit"
-              disabled={auditSettingsQuery.isPending || auditSettingsMut.isPending}
-              className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-md hover:bg-sky-600 disabled:opacity-60"
-            >
-              {auditSettingsMut.isPending ? "Сохранение…" : "Сохранить"}
-            </button>
+            <NeedPermission allowed={canManageSettings}>
+              <button
+                type="submit"
+                disabled={auditSettingsQuery.isPending || auditSettingsMut.isPending}
+                className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-md hover:bg-sky-600 disabled:opacity-60"
+              >
+                {auditSettingsMut.isPending ? "Сохранение…" : "Сохранить"}
+              </button>
+            </NeedPermission>
           </form>
         </div>
       </div>
@@ -721,19 +721,25 @@ function SystemSettingsSection() {
           заметкам хранятся отдельно — ежедневные копятся быстрее.
         </p>
         <div className="mt-4 space-y-3">
-          <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-            <input
-              type="checkbox"
-              checked={notificationSettingsQuery.data?.enabled ?? true}
-              disabled={notificationSettingsQuery.isPending || notificationSettingsMut.isPending}
-              onChange={(e) => notificationSettingsMut.mutate({ enabled: e.target.checked })}
-            />
-            Включить ротацию
-          </label>
+          <NeedPermission allowed={canManageSettings} className="flex">
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+              <input
+                type="checkbox"
+                checked={notificationSettingsQuery.data?.enabled ?? true}
+                disabled={notificationSettingsQuery.isPending || notificationSettingsMut.isPending}
+                onChange={(e) => notificationSettingsMut.mutate({ enabled: e.target.checked })}
+              />
+              Включить ротацию
+            </label>
+          </NeedPermission>
           <form
             className="flex flex-wrap items-end gap-3"
             onSubmit={(e) => {
               e.preventDefault();
+              if (!canManageSettings) {
+                toastInsufficientRights();
+                return;
+              }
               const readDays = Number(notifReadDays);
               const unreadDays = Number(notifUnreadDays);
               const noteDays = Number(notifNoteDays);
@@ -786,18 +792,45 @@ function SystemSettingsSection() {
                 className="ml-2 w-24 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
               />
             </label>
-            <button
-              type="submit"
-              disabled={notificationSettingsQuery.isPending || notificationSettingsMut.isPending}
-              className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-md hover:bg-sky-600 disabled:opacity-60"
-            >
-              {notificationSettingsMut.isPending ? "Сохранение…" : "Сохранить"}
-            </button>
+            <NeedPermission allowed={canManageSettings}>
+              <button
+                type="submit"
+                disabled={notificationSettingsQuery.isPending || notificationSettingsMut.isPending}
+                className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-md hover:bg-sky-600 disabled:opacity-60"
+              >
+                {notificationSettingsMut.isPending ? "Сохранение…" : "Сохранить"}
+              </button>
+            </NeedPermission>
           </form>
         </div>
       </div>
-      <DatabaseBackupSection />
-      {canImportUsers && (
+        </div>
+      </AdminLock>
+      <AdminLock
+        allowed={canManageBackups}
+        hint="Нет права на резервные копии — список можно смотреть, создание и скачивание недоступны."
+      >
+        <DatabaseBackupSection allowed={canManageBackups} />
+      </AdminLock>
+      <AdminLock
+        allowed={canImportUspd}
+        hint="Нет права импорта УСПД — форму можно смотреть, импорт недоступен."
+      >
+        <div className="space-y-6">
+          <UspdObsidianImportSection allowed={canImportUspd} />
+          <UspdSimExcelImportSection allowed={canImportUspd} />
+        </div>
+      </AdminLock>
+      <AdminLock
+        allowed={canImportKnowledge}
+        hint="Нет права импорта базы знаний — форму можно смотреть, импорт недоступен."
+      >
+        <KnowledgeObsidianImportSection allowed={canImportKnowledge} />
+      </AdminLock>
+      <AdminLock
+        allowed={canImportUsers}
+        hint="Нет права импорта сотрудников — форму можно смотреть, импорт недоступен."
+      >
         <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-5 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
           <h3 className="text-base font-semibold text-slate-900 dark:text-white">Импорт сотрудников из Excel</h3>
           <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
@@ -826,6 +859,10 @@ function SystemSettingsSection() {
             className="mt-3 flex flex-wrap items-center gap-3"
             onSubmit={(e) => {
               e.preventDefault();
+              if (!canImportUsers) {
+                toastInsufficientRights();
+                return;
+              }
               if (!importFile) {
                 toastError("Выберите файл Excel");
                 return;
@@ -840,20 +877,22 @@ function SystemSettingsSection() {
               disabled={importUsersMut.isPending}
               className="max-w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
             />
-            <button
-              type="submit"
-              disabled={importUsersMut.isPending || !importFile}
-              className="inline-flex items-center gap-2 rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-md hover:bg-sky-600 disabled:opacity-60"
-            >
-              {importUsersMut.isPending ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Импорт…
-                </>
-              ) : (
-                "Импортировать"
-              )}
-            </button>
+            <NeedPermission allowed={canImportUsers}>
+              <button
+                type="submit"
+                disabled={importUsersMut.isPending || !importFile}
+                className="inline-flex items-center gap-2 rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-md hover:bg-sky-600 disabled:opacity-60"
+              >
+                {importUsersMut.isPending ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Импорт…
+                  </>
+                ) : (
+                  "Импортировать"
+                )}
+              </button>
+            </NeedPermission>
           </form>
 
           {importUsersMut.data && importResultOpen && (
@@ -894,27 +933,40 @@ function SystemSettingsSection() {
             </div>
           )}
         </div>
-      )}
+      </AdminLock>
 
+      <AdminLock
+        allowed={canImportVacations}
+        hint="Нет права импорта отпусков — форму можно смотреть, импорт недоступен."
+      >
+        <VacationExcelImportSection allowed={canImportVacations} />
+      </AdminLock>
+
+      <AdminLock
+        allowed={canImportTasks}
+        hint="Нет права импорта задач — форму можно смотреть, импорт недоступен."
+      >
       <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-5 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
         <h3 className="text-base font-semibold text-slate-900 dark:text-white">Импорт задач из задачника Excel</h3>
         <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
           Можно загрузить <strong>несколько файлов</strong> сразу (по одному на систему). Система определяется по
           имени файла/листа (например «Задачник СМЗиС.xlsx» → СМЗиС).
         </p>
-        <button
-          type="button"
-          onClick={() => {
-            setTaskImportResult(null);
-            setTaskImportFiles([]);
-            setTaskImportSystemId("");
-            setTaskImportOpen(true);
-          }}
-          className="mt-4 inline-flex items-center gap-2 rounded-xl border border-emerald-200/90 bg-gradient-to-br from-emerald-500 via-teal-500 to-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-md hover:from-emerald-400 hover:via-teal-400 hover:to-cyan-500"
-        >
-          <FileSpreadsheet className="h-4 w-4" aria-hidden />
-          Из Excel…
-        </button>
+        <NeedPermission allowed={canImportTasks}>
+          <button
+            type="button"
+            onClick={() => {
+              setTaskImportResult(null);
+              setTaskImportFiles([]);
+              setTaskImportSystemId("");
+              setTaskImportOpen(true);
+            }}
+            className="mt-4 inline-flex items-center gap-2 rounded-xl border border-emerald-200/90 bg-gradient-to-br from-emerald-500 via-teal-500 to-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-md hover:from-emerald-400 hover:via-teal-400 hover:to-cyan-500"
+          >
+            <FileSpreadsheet className="h-4 w-4" aria-hidden />
+            Из Excel…
+          </button>
+        </NeedPermission>
         {taskImportResult && (
           <div className="mt-4 space-y-3 rounded-xl border border-slate-200 bg-slate-50/80 p-3 text-sm dark:border-slate-700 dark:bg-slate-800/50">
             <p className="font-medium text-slate-900 dark:text-white">
@@ -972,6 +1024,7 @@ function SystemSettingsSection() {
           </div>
         )}
       </div>
+      </AdminLock>
 
       {taskImportOpen && (
         <div
@@ -1053,6 +1106,7 @@ function SystemSettingsSection() {
               >
                 Отмена
               </button>
+              <NeedPermission allowed={canImportTasks}>
               <button
                 type="button"
                 disabled={!taskImportFiles.length || importTasksMut.isPending}
@@ -1068,6 +1122,7 @@ function SystemSettingsSection() {
                   `Импортировать (${taskImportFiles.length || 0})`
                 )}
               </button>
+              </NeedPermission>
             </div>
           </div>
         </div>
@@ -1092,7 +1147,661 @@ function backupStatusLabel(status: string): string {
   return status;
 }
 
-function DatabaseBackupSection() {
+function backupSourceOf(row: { source?: string; created_by_id?: string | null }): "manual" | "scheduled" {
+  if (row.source === "scheduled" || row.source === "manual") return row.source;
+  return row.created_by_id ? "manual" : "scheduled";
+}
+
+function formatBackupWhen(iso: string | null): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleString("ru-RU");
+}
+
+function UspdObsidianImportSection({ allowed }: { allowed: boolean }) {
+  const qc = useQueryClient();
+  const [files, setFiles] = useState<File[]>([]);
+  const importMut = useMutation({
+    mutationFn: (picked: File[]) => importUspdObsidian(picked),
+    onSuccess: async (result) => {
+      await invalidateAndRefetch(qc, ["uspd"]);
+      const parts = [
+        result.created ? `создано ${result.created}` : null,
+        result.skipped ? `пропущено ${result.skipped}` : null,
+        result.failed ? `ошибок ${result.failed}` : null,
+      ].filter(Boolean);
+      toastSuccess(parts.length ? `Импорт: ${parts.join(", ")}` : "Импорт завершён");
+    },
+    onError: (e: unknown) => toastApiError(e, "Не удалось импортировать"),
+  });
+
+  return (
+    <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-5 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
+      <h3 className="text-base font-semibold text-slate-900 dark:text-white">Импорт УСПД из Obsidian</h3>
+      <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+        Имя файла — название объекта. Берётся первая таблица Object / Ip / Cred / Comment. Device EUI у БС подтягивается из ссылок {" "}
+        <code className="rounded bg-slate-100 px-1 dark:bg-slate-800">[GW](url) - eui</code>. Если объект с таким именем уже есть — файл пропускается.
+      </p>
+      <form
+        className="mt-4 flex flex-wrap items-center gap-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!allowed) {
+            toastInsufficientRights();
+            return;
+          }
+          if (!files.length) {
+            toastError("Выберите один или несколько .md");
+            return;
+          }
+          importMut.mutate(files);
+        }}
+      >
+        <input
+          type="file"
+          accept=".md,.markdown,.txt,text/markdown"
+          multiple
+          onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
+          disabled={importMut.isPending}
+          className="max-w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+        />
+        <NeedPermission allowed={allowed}>
+          <button
+            type="submit"
+            disabled={importMut.isPending || files.length === 0}
+            className="inline-flex items-center gap-2 rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-md hover:bg-sky-600 disabled:opacity-60"
+          >
+          {importMut.isPending ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+              Импорт…
+            </>
+          ) : (
+            <>
+              <FileText className="h-4 w-4" aria-hidden />
+              Импортировать
+            </>
+          )}
+        </button>
+        </NeedPermission>
+      </form>
+      {files.length > 0 && !importMut.data && (
+        <p className="mt-2 text-xs text-slate-500">Выбрано файлов: {files.length}</p>
+      )}
+      {importMut.data && (
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className="text-slate-500">
+                <th className="py-1 pr-3 font-medium">Файл</th>
+                <th className="py-1 pr-3 font-medium">Объект</th>
+                <th className="py-1 pr-3 font-medium">Результат</th>
+              </tr>
+            </thead>
+            <tbody>
+              {importMut.data.files.map((row) => (
+                <tr key={row.filename} className="border-t border-slate-100 dark:border-slate-800">
+                  <td className="py-1.5 pr-3 font-mono">{row.filename}</td>
+                  <td className="py-1.5 pr-3">{row.site_name || "—"}</td>
+                  <td className="py-1.5 pr-3">
+                    {row.created && `создан, строк ${row.entries}`}
+                    {row.skipped && (row.error || "пропущен")}
+                    {!row.created && !row.skipped && (row.error || "ошибка")}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function isObsidianImportFile(file: File): boolean {
+  const rel = ((file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name).replace(
+    /\\/g,
+    "/",
+  );
+  const parts = rel.split("/").map((p) => p.toLowerCase());
+  if (parts.some((p) => p === ".obsidian" || p === ".trash" || p === ".git" || p === "__macosx")) {
+    return false;
+  }
+  return /\.(md|markdown|txt|png|jpe?g|gif|webp|bmp)$/i.test(file.name);
+}
+
+type FolderBatch = { id: string; rootName: string; files: File[] };
+
+function folderBatchFromList(files: File[]): FolderBatch | null {
+  const picked = files.filter(isObsidianImportFile);
+  if (!picked.length) return null;
+  const rel = ((picked[0] as File & { webkitRelativePath?: string }).webkitRelativePath || picked[0].name).replace(
+    /\\/g,
+    "/",
+  );
+  const rootName = rel.split("/").filter(Boolean)[0] || "папка";
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    rootName,
+    files: picked,
+  };
+}
+
+function KnowledgeObsidianImportSection({ allowed }: { allowed: boolean }) {
+  const qc = useQueryClient();
+  const [spaceId, setSpaceId] = useState("");
+  const [archive, setArchive] = useState<File | null>(null);
+  const [mdFiles, setMdFiles] = useState<File[]>([]);
+  const [imageFiles, setImageFiles] = useState<File[]>([]);
+  const [folderBatches, setFolderBatches] = useState<FolderBatch[]>([]);
+  const folderInputRef = useRef<HTMLInputElement>(null);
+  const spaceSelectRef = useRef<HTMLSelectElement>(null);
+  const [spaceError, setSpaceError] = useState(false);
+  const spacesQuery = useQuery({
+    queryKey: ["knowledge", "spaces"],
+    queryFn: listKnowledgeSpaces,
+  });
+  useToastQueryError(spacesQuery.error, "Не удалось загрузить пространства базы знаний");
+  const editableSpaces = spacesQuery.data ?? [];
+  useEffect(() => {
+    if (!spaceId && editableSpaces.length === 1) setSpaceId(editableSpaces[0].id);
+  }, [editableSpaces, spaceId]);
+
+  const allFiles = useMemo(() => {
+    const byPath = new Map<string, File>();
+    const add = (file: File) => {
+      if (!isObsidianImportFile(file)) return;
+      const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+      byPath.set(rel, file);
+    };
+    mdFiles.forEach(add);
+    imageFiles.forEach(add);
+    folderBatches.forEach((batch) => batch.files.forEach(add));
+    return [...byPath.values()];
+  }, [mdFiles, imageFiles, folderBatches]);
+  const mdCount = allFiles.filter((f) => /\.(md|markdown|txt)$/i.test(f.name)).length;
+  const imageCount = allFiles.filter((f) => /\.(png|jpe?g|gif|webp|bmp)$/i.test(f.name)).length;
+
+  const importMut = useMutation({
+    mutationFn: () => importKnowledgeObsidian(spaceId, archive ? [] : allFiles, archive),
+    onSuccess: async (result) => {
+      await invalidateAndRefetch(qc, ["knowledge"]);
+      const parts = [
+        result.created ? `статей ${result.created}` : null,
+        result.folders_created ? `папок ${result.folders_created}` : null,
+        result.skipped ? `пропущено ${result.skipped}` : null,
+        result.failed ? `ошибок ${result.failed}` : null,
+        result.images_uploaded ? `картинок ${result.images_uploaded}` : null,
+      ].filter(Boolean);
+      toastSuccess(parts.length ? `Импорт: ${parts.join(", ")}` : "Импорт завершён");
+    },
+    onError: (e: unknown) => toastApiError(e, "Не удалось импортировать"),
+  });
+
+  return (
+    <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-5 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
+      <h3 className="text-base font-semibold text-slate-900 dark:text-white">Импорт базы знаний из Obsidian</h3>
+      <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+        Лучше загрузить один zip: папки с заметками и папка <code className="rounded bg-slate-100 px-1 dark:bg-slate-800">PNG</code>{" "}
+        (png/jpg/gif/webp) вместе. Можно выбрать несколько папок по очереди и импортировать их одним нажатием — дерево
+        каждой папки сохранится. Если в пространстве уже есть страница «Главная» или «Оглавление», импорт кладётся туда
+        дочерними статьями — родитель остаётся на месте. Папка PNG с картинками не создаётся как раздел. Имя .md — заголовок статьи. Картинки
+        уходят в хранилище, ссылки <code className="rounded bg-slate-100 px-1 dark:bg-slate-800">![[файл.png]]</code>{" "}
+        подменяются на новые адреса. Выбор тысяч файлов браузером ломается (лимит ~1000), zip этого не касается.
+      </p>
+      <form
+        className="mt-4 space-y-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!allowed) {
+            toastInsufficientRights();
+            return;
+          }
+          if (!spaceId) {
+            setSpaceError(true);
+            toastError("Выберите пространство базы знаний — без него импортировать некуда");
+            spaceSelectRef.current?.focus();
+            return;
+          }
+          setSpaceError(false);
+          if (archive) {
+            importMut.mutate();
+            return;
+          }
+          if (!mdCount) {
+            toastError("Добавьте zip, папку или хотя бы один .md");
+            return;
+          }
+          if (allFiles.length > 900) {
+            toastError("Слишком много файлов. Запакуйте хранилище (папки с .md + PNG) в zip и загрузите архив.");
+            return;
+          }
+          importMut.mutate();
+        }}
+      >
+        <label className="flex flex-col gap-1 text-sm text-slate-700 dark:text-slate-300">
+          Пространство
+          <select
+            ref={spaceSelectRef}
+            value={spaceId}
+            aria-invalid={spaceError}
+            onChange={(e) => {
+              setSpaceId(e.target.value);
+              if (e.target.value) setSpaceError(false);
+            }}
+            disabled={spacesQuery.isPending || importMut.isPending}
+            className={`max-w-lg rounded-xl border bg-white px-3 py-2 text-sm dark:bg-slate-800 ${
+              spaceError
+                ? "border-rose-400 ring-2 ring-rose-300/70 dark:border-rose-500 dark:ring-rose-700/50"
+                : "border-slate-200 dark:border-slate-600"
+            }`}
+          >
+            <option value="">Выберите пространство</option>
+            {editableSpaces.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+          {spaceError && (
+            <span className="text-xs font-medium text-rose-600 dark:text-rose-400">
+              Сначала выберите пространство — иначе неясно, куда класть статьи.
+            </span>
+          )}
+        </label>
+        <label className="flex flex-col gap-1 text-sm text-slate-700 dark:text-slate-300">
+          Zip хранилища (рекомендуется)
+          <input
+            type="file"
+            accept=".zip,application/zip"
+            onChange={(e) => setArchive(e.target.files?.[0] ?? null)}
+            disabled={importMut.isPending}
+            className="max-w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+          />
+        </label>
+        {archive && (
+          <p className="text-xs text-slate-500">
+            Архив: {archive.name} ({Math.max(1, Math.round(archive.size / (1024 * 1024)))} МБ)
+          </p>
+        )}
+        <label className="flex flex-col gap-1 text-sm text-slate-700 dark:text-slate-300">
+          Или заметки .md по отдельности
+          <input
+            type="file"
+            accept=".md,.markdown,.txt,text/markdown"
+            multiple
+            onChange={(e) => setMdFiles(Array.from(e.target.files ?? []))}
+            disabled={importMut.isPending || Boolean(archive)}
+            className="max-w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-sm text-slate-700 dark:text-slate-300">
+          Или картинки (папка PNG)
+          <input
+            type="file"
+            accept="image/png,image/jpeg,image/gif,image/webp,image/bmp,.png,.jpg,.jpeg,.gif,.webp,.bmp"
+            multiple
+            onChange={(e) => setImageFiles(Array.from(e.target.files ?? []))}
+            disabled={importMut.isPending || Boolean(archive)}
+            className="max-w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+          />
+        </label>
+        <div className="flex flex-col gap-1 text-sm text-slate-700 dark:text-slate-300">
+          <span>Или папки целиком (можно несколько, по одной)</span>
+          <input
+            ref={folderInputRef}
+            type="file"
+            multiple
+            {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
+            onChange={(e) => {
+              const batch = folderBatchFromList(Array.from(e.target.files ?? []));
+              e.target.value = "";
+              if (!batch) return;
+              setFolderBatches((prev) => [...prev, batch]);
+            }}
+            disabled={importMut.isPending || Boolean(archive)}
+            className="max-w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+          />
+          {folderBatches.length > 0 && (
+            <ul className="mt-1 space-y-1">
+              {folderBatches.map((batch) => {
+                const notes = batch.files.filter((f) => /\.(md|markdown|txt)$/i.test(f.name)).length;
+                const images = batch.files.length - notes;
+                return (
+                  <li
+                    key={batch.id}
+                    className="flex items-center justify-between gap-2 rounded-lg bg-slate-50 px-2.5 py-1.5 text-xs dark:bg-slate-800/80"
+                  >
+                    <span>
+                      <span className="font-medium text-slate-800 dark:text-slate-100">{batch.rootName}</span>
+                      <span className="text-slate-500">
+                        {" "}
+                        · {notes} замет.{images ? `, ${images} карт.` : ""}
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setFolderBatches((prev) => prev.filter((b) => b.id !== batch.id))}
+                      disabled={importMut.isPending}
+                      className="rounded p-0.5 text-slate-400 hover:text-red-600"
+                      title="Убрать папку"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          {folderBatches.length > 0 && (
+            <button
+              type="button"
+              onClick={() => folderInputRef.current?.click()}
+              disabled={importMut.isPending || Boolean(archive)}
+              className="inline-flex w-fit items-center gap-1 text-xs font-medium text-sky-700 hover:underline dark:text-sky-300"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Добавить ещё папку
+            </button>
+          )}
+        </div>
+        <NeedPermission allowed={allowed}>
+        <button
+          type="submit"
+          disabled={importMut.isPending}
+          className="inline-flex items-center gap-2 rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-md hover:bg-sky-600 disabled:opacity-60"
+        >
+          {importMut.isPending ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+              Импорт…
+            </>
+          ) : (
+            <>
+              {archive ? <FileArchive className="h-4 w-4" aria-hidden /> : <FileText className="h-4 w-4" aria-hidden />}
+              Импортировать
+            </>
+          )}
+        </button>
+        </NeedPermission>
+      </form>
+      {!archive && (mdCount > 0 || imageCount > 0) && !importMut.data && (
+        <p className="mt-2 text-xs text-slate-500">
+          К загрузке: {mdCount} заметок, {imageCount} картинок
+          {allFiles.length > 900 ? " — слишком много, нужен zip" : ""}
+        </p>
+      )}
+      {editableSpaces.length === 0 && !spacesQuery.isPending && (
+        <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
+          Нет пространств, куда можно писать. Сначала создайте пространство в базе знаний.
+        </p>
+      )}
+      {importMut.data && (
+        <div className="mt-4 overflow-x-auto">
+          <p className="mb-2 text-xs text-slate-500">
+            Загружено картинок в хранилище: {importMut.data.images_uploaded}
+          </p>
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className="text-slate-500">
+                <th className="py-1 pr-3 font-medium">Файл</th>
+                <th className="py-1 pr-3 font-medium">Статья</th>
+                <th className="py-1 pr-3 font-medium">Результат</th>
+              </tr>
+            </thead>
+            <tbody>
+              {importMut.data.files.map((row) => (
+                <tr key={row.filename} className="border-t border-slate-100 dark:border-slate-800">
+                  <td className="py-1.5 pr-3 font-mono">{row.filename}</td>
+                  <td className="py-1.5 pr-3">{row.title || "—"}</td>
+                  <td className="py-1.5 pr-3">
+                    {row.created &&
+                      `создана${row.images_rewritten ? `, картинок ${row.images_rewritten}` : ""}`}
+                    {row.skipped && (row.error || "пропущена")}
+                    {!row.created && !row.skipped && (row.error || "ошибка")}
+                    {row.missing_images.length > 0 && (
+                      <div className="mt-0.5 text-amber-700 dark:text-amber-300">
+                        нет файла: {row.missing_images.slice(0, 4).join(", ")}
+                        {row.missing_images.length > 4 ? "…" : ""}
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function UspdSimExcelImportSection({ allowed }: { allowed: boolean }) {
+  const qc = useQueryClient();
+  const [file, setFile] = useState<File | null>(null);
+  const importMut = useMutation({
+    mutationFn: (picked: File) => importUspdSimExcel(picked),
+    onSuccess: async (result) => {
+      await invalidateAndRefetch(qc, ["uspd"]);
+      const parts = [
+        result.created ? `добавлено ${result.created}` : null,
+        result.skipped ? `уже были ${result.skipped}` : null,
+        result.unmatched ? `без GSM ${result.unmatched}` : null,
+      ].filter(Boolean);
+      toastSuccess(parts.length ? `SIM: ${parts.join(", ")}` : "Импорт SIM завершён");
+    },
+    onError: (e: unknown) => toastApiError(e, "Не удалось импортировать SIM"),
+  });
+
+  return (
+    <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-5 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
+      <h3 className="text-base font-semibold text-slate-900 dark:text-white">Импорт SIM к GSM из Excel</h3>
+      <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+        Первый лист, 1-я строка — заголовки. Колонки: <strong>H</strong> номер телефона, <strong>K</strong> номер
+        SIM (ICCID), <strong>Q</strong> IP, <strong>R</strong> адрес установки (в Comment). IP из Q сопоставляется с
+        IP в строке GSM (подойдёт и <code className="rounded bg-slate-100 px-1 dark:bg-slate-800">https://217.8.2.1</code>
+        ). Если такая SIM уже есть — строка пропускается.
+      </p>
+      <form
+        className="mt-4 flex flex-wrap items-center gap-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!allowed) {
+            toastInsufficientRights();
+            return;
+          }
+          if (!file) {
+            toastError("Выберите файл .xlsx");
+            return;
+          }
+          importMut.mutate(file);
+        }}
+      >
+        <input
+          type="file"
+          accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+          disabled={importMut.isPending}
+          className="max-w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+        />
+        <NeedPermission allowed={allowed}>
+        <button
+          type="submit"
+          disabled={importMut.isPending || !file}
+          className="inline-flex items-center gap-2 rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-md hover:bg-sky-600 disabled:opacity-60"
+        >
+          {importMut.isPending ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+              Импорт…
+            </>
+          ) : (
+            <>
+              <FileSpreadsheet className="h-4 w-4" aria-hidden />
+              Импортировать SIM
+            </>
+          )}
+        </button>
+        </NeedPermission>
+      </form>
+      {importMut.data && (
+        <div className="mt-4">
+          <p className="text-sm text-slate-600 dark:text-slate-400">
+            Добавлено {importMut.data.created}, уже были {importMut.data.skipped}, без GSM {importMut.data.unmatched}
+            {importMut.data.empty ? `, без IP ${importMut.data.empty}` : ""}.
+          </p>
+          <div className="mt-2 max-h-64 overflow-auto">
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="text-slate-500">
+                  <th className="py-1 pr-3 font-medium">Строка</th>
+                  <th className="py-1 pr-3 font-medium">Телефон</th>
+                  <th className="py-1 pr-3 font-medium">IP</th>
+                  <th className="py-1 pr-3 font-medium">Объект</th>
+                  <th className="py-1 pr-3 font-medium">Результат</th>
+                </tr>
+              </thead>
+              <tbody>
+                {importMut.data.rows.map((row) => (
+                  <tr key={row.sheet_row} className="border-t border-slate-100 dark:border-slate-800">
+                    <td className="py-1.5 pr-3 tabular-nums">{row.sheet_row}</td>
+                    <td className="py-1.5 pr-3 font-mono">{row.phone || "—"}</td>
+                    <td className="py-1.5 pr-3 font-mono">{row.ip || "—"}</td>
+                    <td className="py-1.5 pr-3">{row.site_name || "—"}</td>
+                    <td className="py-1.5 pr-3">
+                      {row.status === "created" && "добавлена"}
+                      {row.status === "skipped" && (row.error || "пропущена")}
+                      {row.status === "unmatched" && (row.error || "нет GSM")}
+                      {row.status === "empty" && (row.error || "нет IP")}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function vacationImportStatusLabel(status: string, error: string | null): string {
+  if (status === "created") return "добавлен";
+  if (status === "updated") return "обновлён";
+  if (status === "skipped") return "уже был";
+  if (status === "unmatched") return error || "не найден";
+  if (status === "invalid") return error || "ошибка";
+  return status;
+}
+
+function VacationExcelImportSection({ allowed }: { allowed: boolean }) {
+  const qc = useQueryClient();
+  const [file, setFile] = useState<File | null>(null);
+  const importMut = useMutation({
+    mutationFn: (picked: File) => importEmployeeVacationsExcel(picked),
+    onSuccess: async (result) => {
+      await invalidateAndRefetch(qc, ["employee-directory"]);
+      const parts = [
+        result.created ? `добавлено ${result.created}` : null,
+        result.updated ? `обновлено ${result.updated}` : null,
+        result.skipped ? `без изменений ${result.skipped}` : null,
+        result.unmatched ? `не найдено ${result.unmatched}` : null,
+        result.invalid ? `ошибок ${result.invalid}` : null,
+      ].filter(Boolean);
+      toastSuccess(parts.length ? `Отпуска: ${parts.join(", ")}` : "Импорт отпусков завершён");
+    },
+    onError: (e: unknown) => toastApiError(e, "Не удалось импортировать отпуска"),
+  });
+
+  return (
+    <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-5 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
+      <h3 className="text-base font-semibold text-slate-900 dark:text-white">Импорт отпусков из Excel</h3>
+      <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
+        График отпусков (форма Т-7 или похожий .xlsx / .xlsm). Берутся ФИО, табельный номер, даты начала и окончания.
+        Сопоставление: сначала табельный, иначе ФИО. Новые периоды добавляются, совпадение по дате начала — обновляет
+        окончание. Больничные и уже введённые отпуска с другими датами не удаляются.
+      </p>
+      <form
+        className="mt-4 flex flex-wrap items-center gap-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!allowed) {
+            toastInsufficientRights();
+            return;
+          }
+          if (!file) {
+            toastError("Выберите файл .xlsx или .xlsm");
+            return;
+          }
+          importMut.mutate(file);
+        }}
+      >
+        <input
+          type="file"
+          accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel.sheet.macroEnabled.12"
+          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+          disabled={importMut.isPending}
+          className="max-w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+        />
+        <NeedPermission allowed={allowed}>
+        <button
+          type="submit"
+          disabled={importMut.isPending || !file}
+          className="inline-flex items-center gap-2 rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-md hover:bg-sky-600 disabled:opacity-60"
+        >
+          {importMut.isPending ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+              Импорт…
+            </>
+          ) : (
+            <>
+              <FileSpreadsheet className="h-4 w-4" aria-hidden />
+              Импортировать отпуска
+            </>
+          )}
+        </button>
+        </NeedPermission>
+      </form>
+      {importMut.data && (
+        <div className="mt-4">
+          <p className="text-sm text-slate-600 dark:text-slate-400">
+            Добавлено {importMut.data.created}, обновлено {importMut.data.updated}, без изменений{" "}
+            {importMut.data.skipped}, не найдено {importMut.data.unmatched}
+            {importMut.data.invalid ? `, ошибок ${importMut.data.invalid}` : ""}.
+          </p>
+          <div className="mt-2 max-h-64 overflow-auto">
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="text-slate-500">
+                  <th className="py-1 pr-3 font-medium">Строка</th>
+                  <th className="py-1 pr-3 font-medium">ФИО в файле</th>
+                  <th className="py-1 pr-3 font-medium">Сотрудник</th>
+                  <th className="py-1 pr-3 font-medium">Период</th>
+                  <th className="py-1 pr-3 font-medium">Результат</th>
+                </tr>
+              </thead>
+              <tbody>
+                {importMut.data.rows.map((row) => (
+                  <tr key={row.sheet_row} className="border-t border-slate-100 dark:border-slate-800">
+                    <td className="py-1.5 pr-3 tabular-nums">{row.sheet_row}</td>
+                    <td className="py-1.5 pr-3">{row.full_name || "—"}</td>
+                    <td className="py-1.5 pr-3">{row.employee_name || "—"}</td>
+                    <td className="py-1.5 pr-3 font-mono">
+                      {row.start && row.end ? `${row.start} — ${row.end}` : "—"}
+                    </td>
+                    <td className="py-1.5 pr-3">{vacationImportStatusLabel(row.status, row.error)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DatabaseBackupSection({ allowed }: { allowed: boolean }) {
   const qc = useQueryClient();
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [retentionDays, setRetentionDays] = useState("10");
@@ -1103,7 +1812,7 @@ function DatabaseBackupSection() {
     refetchInterval: (q) => {
       const rows = q.state.data;
       if (rows?.some((r) => r.status === "pending" || r.status === "running")) return 2500;
-      return false;
+      return 15_000;
     },
   });
   const settingsQuery = useQuery({
@@ -1148,6 +1857,7 @@ function DatabaseBackupSection() {
   const rows = backupsQuery.data ?? [];
   const busy = rows.some((r) => r.status === "pending" || r.status === "running");
   const settings = settingsQuery.data;
+  const lastScheduled = rows.find((r) => backupSourceOf(r) === "scheduled") ?? null;
 
   return (
     <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-5 shadow-soft dark:border-slate-700 dark:bg-slate-900/60">
@@ -1157,27 +1867,50 @@ function DatabaseBackupSection() {
       </h3>
       <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
         Полный дамп PostgreSQL (формат pg_dump custom). Картинки базы знаний
-        и вложения в дамп не входят.
+        и вложения в дамп не входят. В списке ниже — и ручные, и автоматические копии; готовую любого типа
+        можно скачать.
       </p>
       <div className="mt-4 space-y-3 rounded-xl border border-slate-200 bg-slate-50/80 p-4 dark:border-slate-700 dark:bg-slate-800/40">
-        <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-          <input
-            type="checkbox"
-            checked={settings?.enabled ?? true}
-            disabled={settingsQuery.isPending || settingsMut.isPending}
-            onChange={(e) => settingsMut.mutate({ enabled: e.target.checked })}
-          />
-          Ежедневный автоматический бэкап
-        </label>
+        <NeedPermission allowed={allowed} className="flex">
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+            <input
+              type="checkbox"
+              checked={settings?.enabled ?? true}
+              disabled={settingsQuery.isPending || settingsMut.isPending}
+              onChange={(e) => settingsMut.mutate({ enabled: e.target.checked })}
+            />
+            Ежедневный автоматический бэкап
+          </label>
+        </NeedPermission>
         <p className="text-xs text-slate-500 dark:text-slate-400">
-          Один успешный дамп в сутки. Если сегодня уже есть готовая копия (в том числе ручная), повторно не
-          создаётся. Если воркер пропустил время — догонит позже в тот же день. 24-часовой формат по UTC+7:
-          07:00 — утро, 19:00 — вечер.
+          Один успешный автоматический дамп в сутки. Ручная копия за сегодня его не заменяет — ночной тоже
+          появится в списке. Если воркер пропустил время — догонит позже в тот же день. 24-часовой формат по
+          UTC+7: 07:00 — утро, 19:00 — вечер.
         </p>
+        {lastScheduled && (
+          <p className="text-xs text-slate-600 dark:text-slate-300">
+            Последний по расписанию: {backupStatusLabel(lastScheduled.status).toLowerCase()}
+            {lastScheduled.finished_at
+              ? ` · выполнен ${formatBackupWhen(lastScheduled.finished_at)}`
+              : ` · запущен ${formatBackupWhen(lastScheduled.created_at)}`}
+            {lastScheduled.status === "failed" && lastScheduled.error_message
+              ? ` — ${lastScheduled.error_message}`
+              : ""}
+          </p>
+        )}
+        {!lastScheduled && !backupsQuery.isPending && (
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            Автоматических копий пока нет — первая появится после ближайшего запуска по расписанию.
+          </p>
+        )}
         <form
           className="flex flex-wrap items-end gap-3"
           onSubmit={(e) => {
             e.preventDefault();
+            if (!allowed) {
+              toastInsufficientRights();
+              return;
+            }
             const days = Number(retentionDays);
             const match = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(backupTime.trim());
             if (!Number.isFinite(days) || days < 1 || days > 365) {
@@ -1218,13 +1951,15 @@ function DatabaseBackupSection() {
               className="ml-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
             />
           </label>
-          <button
-            type="submit"
-            disabled={settingsQuery.isPending || settingsMut.isPending}
-            className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-md hover:bg-sky-600 disabled:opacity-60"
-          >
-            {settingsMut.isPending ? "Сохранение…" : "Сохранить"}
-          </button>
+          <NeedPermission allowed={allowed}>
+            <button
+              type="submit"
+              disabled={settingsQuery.isPending || settingsMut.isPending}
+              className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-md hover:bg-sky-600 disabled:opacity-60"
+            >
+              {settingsMut.isPending ? "Сохранение…" : "Сохранить"}
+            </button>
+          </NeedPermission>
         </form>
         <p className="text-xs text-slate-500 dark:text-slate-400">
           Место на диске ≈ число дней × размер одного дампа
@@ -1235,27 +1970,30 @@ function DatabaseBackupSection() {
         </p>
       </div>
       <div className="mt-4">
-        <button
-          type="button"
-          disabled={createMut.isPending || busy}
-          onClick={() => createMut.mutate()}
-          className="inline-flex items-center gap-2 rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-md hover:bg-sky-600 disabled:opacity-60"
-        >
-          {createMut.isPending || busy ? (
-            <>
-              <Loader2 className="h-4 w-4 animate-spin" />
-              {busy ? "Идёт создание…" : "Запуск…"}
-            </>
-          ) : (
-            "Создать резервную копию"
-          )}
-        </button>
+        <NeedPermission allowed={allowed}>
+          <button
+            type="button"
+            disabled={createMut.isPending || busy}
+            onClick={() => createMut.mutate()}
+            className="inline-flex items-center gap-2 rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-md hover:bg-sky-600 disabled:opacity-60"
+          >
+            {createMut.isPending || busy ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                {busy ? "Идёт создание…" : "Запуск…"}
+              </>
+            ) : (
+              "Создать резервную копию"
+            )}
+          </button>
+        </NeedPermission>
       </div>
       <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700">
-        <table className="w-full min-w-[36rem] text-left text-sm">
+        <table className="w-full min-w-[42rem] text-left text-sm">
           <thead className="bg-slate-50 text-xs font-medium uppercase tracking-wide text-slate-500 dark:bg-slate-800/80 dark:text-slate-400">
             <tr>
               <th className="px-3 py-2">Файл</th>
+              <th className="px-3 py-2">Тип</th>
               <th className="px-3 py-2">Создан</th>
               <th className="px-3 py-2">Размер</th>
               <th className="px-3 py-2">Статус</th>
@@ -1265,23 +2003,25 @@ function DatabaseBackupSection() {
           <tbody>
             {backupsQuery.isPending && (
               <tr>
-                <td colSpan={5} className="px-3 py-4 text-slate-500">
+                <td colSpan={6} className="px-3 py-4 text-slate-500">
                   Загрузка…
                 </td>
               </tr>
             )}
             {!backupsQuery.isPending && rows.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-3 py-4 text-slate-500">
+                <td colSpan={6} className="px-3 py-4 text-slate-500">
                   Пока нет резервных копий
                 </td>
               </tr>
             )}
-            {rows.map((row) => (
+            {rows.map((row) => {
+              const source = backupSourceOf(row);
+              return (
               <tr key={row.id} className="border-t border-slate-100 dark:border-slate-800">
                 <td className="px-3 py-2 font-medium text-slate-800 dark:text-slate-100">
                   <div>{row.filename}</div>
-                  {row.created_by_name && (
+                  {source === "manual" && row.created_by_name && (
                     <div className="text-xs font-normal text-slate-500">{row.created_by_name}</div>
                   )}
                   {row.status === "failed" && row.error_message && (
@@ -1290,14 +2030,25 @@ function DatabaseBackupSection() {
                     </div>
                   )}
                 </td>
+                <td className="whitespace-nowrap px-3 py-2">
+                  <span
+                    className={
+                      source === "scheduled"
+                        ? "inline-flex rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-medium text-sky-800 dark:bg-sky-950/50 dark:text-sky-200"
+                        : "inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                    }
+                  >
+                    {source === "scheduled" ? "По расписанию" : "Вручную"}
+                  </span>
+                </td>
                 <td className="whitespace-nowrap px-3 py-2 text-slate-600 dark:text-slate-300">
-                  {new Date(row.created_at).toLocaleString("ru-RU")}
+                  {formatBackupWhen(row.created_at)}
                 </td>
                 <td className="whitespace-nowrap px-3 py-2 text-slate-600 dark:text-slate-300">
                   {formatBackupSize(row.size_bytes)}
                 </td>
                 <td className="whitespace-nowrap px-3 py-2">
-                  <span
+                  <div
                     className={
                       row.status === "completed"
                         ? "text-emerald-700 dark:text-emerald-400"
@@ -1307,10 +2058,16 @@ function DatabaseBackupSection() {
                     }
                   >
                     {backupStatusLabel(row.status)}
-                  </span>
+                  </div>
+                  {row.finished_at && (
+                    <div className="text-xs text-slate-500 dark:text-slate-400">
+                      {formatBackupWhen(row.finished_at)}
+                    </div>
+                  )}
                 </td>
                 <td className="px-3 py-2">
                   <div className="flex justify-end gap-2">
+                    <NeedPermission allowed={allowed}>
                     <button
                       type="button"
                       disabled={row.status !== "completed" || downloadingId === row.id}
@@ -1334,6 +2091,8 @@ function DatabaseBackupSection() {
                       )}
                       Скачать
                     </button>
+                    </NeedPermission>
+                    <NeedPermission allowed={allowed}>
                     <button
                       type="button"
                       disabled={
@@ -1348,10 +2107,12 @@ function DatabaseBackupSection() {
                       <Trash2 className="h-3.5 w-3.5" />
                       Удалить
                     </button>
+                    </NeedPermission>
                   </div>
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -1540,7 +2301,10 @@ const USERS_PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
 
 function UsersSection() {
   const { state: authState } = useAuth();
-  const currentUserId = authState.status === "authenticated" ? authState.user.id : "";
+  const currentUser = authState.status === "authenticated" ? authState.user : null;
+  const currentUserId = currentUser?.id ?? "";
+  const staff = !!(currentUser && canStaffUsers(currentUser));
+  const allowCreate = !!(currentUser && canCreateUsers(currentUser));
   const qc = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
   const [editUser, setEditUser] = useState<UserOut | null>(null);
@@ -1604,19 +2368,27 @@ function UsersSection() {
   };
 
   return (
+    <>
+    <AdminLock
+      allowed={staff}
+      hint="Нет права управлять пользователями — список можно смотреть, создание и изменение недоступны."
+    >
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-slate-600 dark:text-slate-400">
           Учётные записи, роли и производственные системы. По системам ограничивается видимость задач на доске (кроме
           ролей с полным доступом к задачам).
         </p>
-        <button
-          type="button"
-          onClick={() => setCreateOpen(true)}
-          className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-md hover:bg-sky-600"
-        >
-          + Пользователь
-        </button>
+        <NeedPermission allowed={allowCreate}>
+          <button
+            type="button"
+            disabled={!allowCreate}
+            onClick={() => setCreateOpen(true)}
+            className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-md hover:bg-sky-600 disabled:opacity-50"
+          >
+            + Пользователь
+          </button>
+        </NeedPermission>
       </div>
 
       {bootLoading && <p className="text-slate-500">Загрузка…</p>}
@@ -1746,7 +2518,10 @@ function UsersSection() {
         </div>
       )}
 
-      {createOpen && (
+    </div>
+    </AdminLock>
+
+      {createOpen && allowCreate && (
         <UserFormModal
           title="Новый пользователь"
           roles={roles}
@@ -1776,17 +2551,19 @@ function UsersSection() {
             setEditUser(null);
             await refreshUsers();
           }}
-          onDelete={async () => {
-            await deleteUser(editUser.id);
-            setEditUser(null);
-            await refreshUsers();
-            await qc.invalidateQueries({ queryKey: ["employee-directory"] });
-            await qc.invalidateQueries({ queryKey: ["schedule"] });
-            await qc.invalidateQueries({ queryKey: ["users", "assignee-candidates"] });
-          }}
+          onDelete={
+            async () => {
+              await deleteUser(editUser.id);
+              setEditUser(null);
+              await refreshUsers();
+              await qc.invalidateQueries({ queryKey: ["employee-directory"] });
+              await qc.invalidateQueries({ queryKey: ["schedule"] });
+              await qc.invalidateQueries({ queryKey: ["users", "assignee-candidates"] });
+            }
+          }
         />
       )}
-    </div>
+    </>
   );
 }
 
@@ -1836,6 +2613,15 @@ function UserFormModal({
   );
   const [saving, setSaving] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  const { state: authState } = useAuth();
+  const actor = authState.status === "authenticated" ? authState.user : null;
+  const allowUpdate = !!(actor && canUpdateUsers(actor));
+  const allowPassword = !!(actor && canResetUserPassword(actor));
+  const allowDelete = !!(actor && canDeleteUsers(actor));
+  const profileLocked = !!initial && !allowUpdate;
+  const passwordLocked = initial ? !allowPassword : false;
+  const canWrite = !initial || allowUpdate || allowPassword;
+  const canSetSuperuser = !!actor?.is_superuser;
 
   const { backdropProps: userFormBackdrop, stopPanelPointer: userFormPanelStop } = useModalLayer(true, onClose, {
     closeOnBackdrop: false,
@@ -1843,6 +2629,8 @@ function UserFormModal({
   });
 
   const toggleRole = (id: string) => {
+    const role = roles.find((r) => r.id === id);
+    if (!actor || !role || !canAssignRole(actor, role)) return;
     setRoleIds((prev) => {
       const n = new Set(prev);
       if (n.has(id)) n.delete(id);
@@ -1879,6 +2667,10 @@ function UserFormModal({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (!canWrite) {
+      toastInsufficientRights();
+      return;
+    }
     setSaving(true);
     try {
       if (!initial) {
@@ -1896,7 +2688,7 @@ function UserFormModal({
           email: email.trim(),
           full_name: fullName.trim(),
           password,
-          is_superuser: isSuperuser,
+          is_superuser: canSetSuperuser && isSuperuser,
           role_ids: [...roleIds],
           system_ids: [...systemIds],
           position_id: positionId || null,
@@ -1904,16 +2696,17 @@ function UserFormModal({
           must_change_password: mustChangePassword,
         });
       } else {
-        const payload: UserUpdate = {
-          email: email.trim(),
-          full_name: fullName.trim(),
-          is_active: isActive,
-          is_superuser: isSuperuser,
-          role_ids: [...roleIds],
-          system_ids: [...systemIds],
-          position_id: positionId || null,
-          birth_date: birthDate.trim() || null,
-        };
+        const payload: UserUpdate = {};
+        if (!profileLocked) {
+          payload.email = email.trim();
+          payload.full_name = fullName.trim();
+          payload.is_active = isActive;
+          payload.is_superuser = canSetSuperuser ? isSuperuser : initial.is_superuser;
+          payload.role_ids = [...roleIds];
+          payload.system_ids = [...systemIds];
+          payload.position_id = positionId || null;
+          payload.birth_date = birthDate.trim() || null;
+        }
         if (password.length > 0) {
           if (password.length < 8) {
             toastError("Новый пароль: минимум 8 символов");
@@ -1921,12 +2714,22 @@ function UserFormModal({
             return;
           }
           if (password !== passwordConfirm) {
-              toastError("Пароли не совпадают");
+            toastError("Пароли не совпадают");
+            setSaving(false);
+            return;
+          }
+          if (passwordLocked) {
+            toastError("Нет права сбрасывать пароль");
             setSaving(false);
             return;
           }
           payload.password = password;
           payload.must_change_password = mustChangePassword;
+        }
+        if (Object.keys(payload).length === 0) {
+          toastError("Нет полей, которые вам разрешено менять");
+          setSaving(false);
+          return;
         }
         await onUpdate?.(payload);
       }
@@ -1960,11 +2763,17 @@ function UserFormModal({
           </button>
         </div>
         <form onSubmit={submit} className="space-y-4">
+          {profileLocked && (
+            <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-100">
+              Карточка только для чтения. Можно сбросить пароль, если есть это право.
+            </p>
+          )}
           <div>
             <label className="mb-1 block text-sm font-medium">ФИО</label>
             <input
               required
               value={fullName}
+              disabled={profileLocked}
               onChange={(e) => setFullName(e.target.value)}
               className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800"
             />
@@ -1975,6 +2784,7 @@ function UserFormModal({
               type="email"
               required
               value={email}
+              disabled={profileLocked}
               onChange={(e) => setEmail(e.target.value)}
               className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800"
             />
@@ -1983,6 +2793,7 @@ function UserFormModal({
             <label className="mb-1 block text-sm font-medium">Должность (справочник)</label>
             <select
               value={positionId}
+              disabled={profileLocked}
               onChange={(e) => setPositionId(e.target.value)}
               className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800"
             >
@@ -2007,6 +2818,7 @@ function UserFormModal({
                   <input
                     type="checkbox"
                     checked={systemIds.has(s.id)}
+                    disabled={profileLocked}
                     onChange={() => toggleSystem(s.id)}
                     className="mt-0.5"
                   />
@@ -2028,6 +2840,7 @@ function UserFormModal({
             <input
               type="date"
               value={birthDate}
+              disabled={profileLocked}
               onChange={(e) => setBirthDate(e.target.value)}
               className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800"
             />
@@ -2042,6 +2855,7 @@ function UserFormModal({
                 minLength={initial ? 0 : 8}
                 required={!initial}
                 value={password}
+                disabled={passwordLocked}
                 onChange={(e) => setPassword(e.target.value)}
                 className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 pr-12 dark:border-slate-600 dark:bg-slate-800"
               />
@@ -2064,6 +2878,7 @@ function UserFormModal({
                 minLength={initial ? 0 : 8}
                 required={!initial}
                 value={passwordConfirm}
+                disabled={passwordLocked}
                 onChange={(e) => setPasswordConfirm(e.target.value)}
                 className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 pr-12 dark:border-slate-600 dark:bg-slate-800"
               />
@@ -2103,6 +2918,7 @@ function UserFormModal({
                 <input
                   type="checkbox"
                   checked={isActive}
+                  disabled={profileLocked}
                   onChange={(e) => setIsActive(e.target.checked)}
                 />
                 Активен
@@ -2113,6 +2929,7 @@ function UserFormModal({
             <input
               type="checkbox"
               checked={isSuperuser}
+              disabled={!canSetSuperuser || profileLocked}
               onChange={(e) => setIsSuperuser(e.target.checked)}
             />
             Суперпользователь (все права без ролей)
@@ -2120,26 +2937,36 @@ function UserFormModal({
           <div>
             <p className="mb-2 text-sm font-medium">Роли</p>
             <div className="max-h-40 space-y-2 overflow-y-auto rounded-xl border border-slate-200 p-3 dark:border-slate-600">
-              {roles.map((r) => (
+              {roles.map((r) => {
+                const assignable = actor ? canAssignRole(actor, r) : false;
+                return (
                 <label key={r.id} className="flex cursor-pointer items-start gap-2 text-sm">
                   <input
                     type="checkbox"
                     checked={roleIds.has(r.id)}
+                    disabled={profileLocked || !assignable}
                     onChange={() => toggleRole(r.id)}
                     className="mt-0.5"
                   />
                   <span>
                     <span className="font-medium text-slate-800 dark:text-slate-100">{r.name}</span>
                     <span className="font-mono text-xs text-slate-500"> {r.slug}</span>
+                    {!assignable && (
+                      <span className="mt-0.5 block text-[11px] text-slate-500">
+                        Выше ваших прав — назначить нельзя
+                      </span>
+                    )}
                   </span>
                 </label>
-              ))}
+                );
+              })}
               {!roles.length && <p className="text-sm text-slate-500">Нет ролей — создайте во вкладке «Роли».</p>}
             </div>
           </div>
           <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
             <div>
               {initial && onDelete && initial.id !== currentUserId && (
+                <NeedPermission allowed={allowDelete}>
                 <button
                   type="button"
                   disabled={saving || deleteBusy}
@@ -2165,6 +2992,7 @@ function UserFormModal({
                 >
                   {deleteBusy ? "Удаление…" : "Удалить пользователя"}
                 </button>
+                </NeedPermission>
               )}
             </div>
             <div className="flex gap-2">
@@ -2175,6 +3003,7 @@ function UserFormModal({
               >
                 Отмена
               </button>
+              <NeedPermission allowed={canWrite}>
               <button
                 type="submit"
                 disabled={saving}
@@ -2182,6 +3011,7 @@ function UserFormModal({
               >
                 {saving ? "Сохранение…" : "Сохранить"}
               </button>
+              </NeedPermission>
             </div>
           </div>
         </form>
@@ -2193,6 +3023,8 @@ function UserFormModal({
 function RolesSection() {
   const { state } = useAuth();
   const isSuperuser = state.status === "authenticated" && state.user.is_superuser;
+  const currentUser = state.status === "authenticated" ? state.user : null;
+  const canRoles = !!(currentUser && hasPermission(currentUser, PERM.ROLES_MANAGE));
   const qc = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
   const [editRole, setEditRole] = useState<RoleOut | null>(null);
@@ -2265,6 +3097,8 @@ function RolesSection() {
 
   async function handleToggle(role: RoleOut, permId: string, next: boolean) {
     if (role.is_system && !isSuperuser) return;
+    const perm = perms.find((p) => p.id === permId);
+    if (currentUser && perm && !canToggleAdminPermission(currentUser, perm.code)) return;
     const ids = new Set(role.permissions.map((x) => x.id));
     if (next) ids.add(permId);
     else ids.delete(permId);
@@ -2285,6 +3119,11 @@ function RolesSection() {
   }
 
   return (
+    <>
+    <AdminLock
+      allowed={canRoles}
+      hint="Нет права менять роли — матрицу можно смотреть, создание и переключатели недоступны."
+    >
     <div className="space-y-6">
       {loading && <p className="text-slate-500">Загрузка…</p>}
 
@@ -2304,7 +3143,9 @@ function RolesSection() {
           onDeleteRole={handleDeleteRole}
           onToggle={handleToggle}
           busyKey={busyKey}
+          canManage={canRoles}
           canEditSystemRoles={isSuperuser}
+          canTogglePerm={(code) => (currentUser ? canToggleAdminPermission(currentUser, code) : false)}
         />
       )}
 
@@ -2313,6 +3154,8 @@ function RolesSection() {
           Нет данных ролей или справочника прав. Проверьте права доступа и перезагрузите страницу.
         </p>
       )}
+    </div>
+    </AdminLock>
 
       {createOpen && (
         <RoleFormModal
@@ -2341,7 +3184,7 @@ function RolesSection() {
           }}
         />
       )}
-    </div>
+    </>
   );
 }
 
@@ -2370,6 +3213,9 @@ function RoleFormModal({
     () => new Set(initial?.permissions.map((p) => p.id) ?? []),
   );
   const [saving, setSaving] = useState(false);
+  const { state: authState } = useAuth();
+  const actor = authState.status === "authenticated" ? authState.user : null;
+  const canSaveRole = !!(actor && hasPermission(actor, PERM.ROLES_MANAGE));
 
   const { backdropProps: roleFormBackdrop, stopPanelPointer: roleFormPanelStop } = useModalLayer(true, onClose, {
     closeOnBackdrop: !saving,
@@ -2377,6 +3223,8 @@ function RoleFormModal({
   });
 
   const toggle = (id: string) => {
+    const perm = [...permGroups.values()].flat().find((p) => p.id === id);
+    if (actor && perm && !canToggleAdminPermission(actor, perm.code)) return;
     setSelected((prev) => {
       const n = new Set(prev);
       if (n.has(id)) n.delete(id);
@@ -2387,6 +3235,10 @@ function RoleFormModal({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (!canSaveRole) {
+      toastInsufficientRights();
+      return;
+    }
     if (initial?.is_system && !isSuperuser) return;
     setSaving(true);
     try {
@@ -2490,25 +3342,32 @@ function RoleFormModal({
                 {[...permGroups.entries()].map(([group, items]) => (
                   <div key={group}>
                     <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-                      {group}
+                      {permissionGroupTitle(group)}
                     </p>
                     <div className="space-y-2">
-                      {items.map((p) => (
+                      {items.map((p) => {
+                        const locked = actor ? !canToggleAdminPermission(actor, p.code) : true;
+                        const parsed = parsePermissionText(p.code, p.description);
+                        return (
                         <label key={p.id} className="flex cursor-pointer items-start gap-2 text-sm">
                           <input
                             type="checkbox"
                             checked={selected.has(p.id)}
+                            disabled={locked}
                             onChange={() => toggle(p.id)}
                             className="mt-0.5"
                           />
-                          <span>
-                            <span className="font-mono text-xs text-sky-700 dark:text-sky-300"> {p.code}</span>
-                            {p.description && (
-                              <span className="block text-slate-600 dark:text-slate-400">{p.description}</span>
-                            )}
+                          <span className="min-w-0">
+                            <span className="inline-flex items-center gap-1 font-medium text-slate-800 dark:text-slate-100">
+                              {parsed.title}
+                              {parsed.note ? <PermissionNoteIcon note={parsed.note} /> : null}
+                            </span>
+                            <span className="block text-slate-600 dark:text-slate-400">{parsed.subtitle}</span>
+                            <span className="font-mono text-[10px] text-slate-400">{p.code}</span>
                           </span>
                         </label>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 ))}
@@ -2524,6 +3383,7 @@ function RoleFormModal({
               {systemLocked ? "Закрыть" : "Отмена"}
             </button>
             {!systemLocked && (
+              <NeedPermission allowed={canSaveRole}>
               <button
                 type="submit"
                 disabled={saving}
@@ -2531,6 +3391,7 @@ function RoleFormModal({
               >
                 {saving ? "Сохранение…" : "Сохранить"}
               </button>
+              </NeedPermission>
             )}
           </div>
         </form>

@@ -56,6 +56,7 @@ backend/
 | `schedule` | график смен, autofill, Excel |
 | `employee_directory` | справочник сотрудника |
 | `knowledge` | пространства, статьи, поиск, upload |
+| `uspd` | справочник УСПД (заметки Object/IP/Cred, суперпользователь) |
 | `notifications` | центр уведомлений |
 | `release_notes` | «Что нового» |
 | `audit` | журнал аудита |
@@ -97,6 +98,7 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 |---|---|
 | БД | `DATABASE_URL` (`postgresql+asyncpg://...`) |
 | Auth | `SECRET_KEY`, `ACCESS_TOKEN_EXPIRE_MINUTES`, `REFRESH_TOKEN_EXPIRE_DAYS`, `AUTH_COOKIE_*` |
+| УСПД | `USPD_SECRETS_KEY` (Fernet; если пусто — SHA-256 от `SECRET_KEY`) |
 | CORS | `CORS_ORIGINS` (через запятую; для Vite — `http://localhost:5173`) |
 | Bootstrap | `INITIAL_ADMIN_EMAIL`, `INITIAL_ADMIN_PASSWORD`, `INITIAL_ADMIN_FULL_NAME` |
 | Миграции | `AUTO_MIGRATE_ON_STARTUP` |

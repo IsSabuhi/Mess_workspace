@@ -1,4 +1,5 @@
 import type { ScheduleDayInfo, ScheduleGroupOut } from "../api/schedule";
+import { isVacationCellCode } from "./scheduleSameShiftMatch";
 
 const MONTH_NAMES_RU = [
   "Январь",
@@ -28,6 +29,8 @@ const COLORS = {
   weekend: "#f1f5f9",
   holiday: "#fef3c7",
   coverage: "#ffe4e6",
+  vacation: "#FCE4D6",
+  vacationText: "#0f172a",
   systemBg: "#f8fafc",
   hours: "#0f766e",
 } as const;
@@ -270,13 +273,16 @@ export async function downloadSchedulePng(input: ScheduleImageInput): Promise<vo
         const d = dayNumbers[i]!;
         const x = daysX + i * dayW;
         const colTint = dayColumnFill(d, dayByNum, gapSet);
-        ctx.fillStyle = color ? baseFill : colTint;
+        const code = codeAt(row, d);
+        const vacation = isVacationCellCode(code);
+        ctx.fillStyle = vacation ? COLORS.vacation : color ? baseFill : colTint;
         ctx.fillRect(x, y, dayW, rowH);
         ctx.strokeStyle = COLORS.border;
         ctx.strokeRect(x + 0.5, y + 0.5, dayW - 1, rowH - 1);
-        const code = codeAt(row, d);
-        ctx.fillStyle = COLORS.text;
-        ctx.font = '500 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+        ctx.fillStyle = vacation ? COLORS.vacationText : COLORS.text;
+        ctx.font = vacation
+          ? '700 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'
+          : '500 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
         ctx.textAlign = "center";
         ctx.fillText(code || "", x + dayW / 2, y + rowH / 2);
       }

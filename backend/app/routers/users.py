@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.deps import get_current_user, require_permission
+from app.deps import get_current_user, require_admin_access, require_any_permission
 from app.http_errors import (
     DELETE_LAST_SUPERUSER,
     DELETE_USER_SELF,
@@ -22,14 +22,22 @@ from app.http_errors import (
 from app.models import Board, Position, Role, System, User, UserRole
 from app.models.board import BOARD_SCOPE_SYSTEM
 from app.models.user_system import UserSystem
-from app.permissions import USERS_MANAGE
+from app.permissions import ADMIN_IMPORT_USERS, USERS_STAFF_CODES
 from app.schemas.employee_import import EmployeeImportOut
 from app.schemas.user import UserCreate, UserListOut, UserOut, UserUpdate
 from app.security import hash_password
+from app.services.admin_privileges import (
+    assert_can_assign_roles,
+    assert_can_set_superuser,
+    user_can_create_users,
+    user_can_delete_users,
+    user_can_reset_password,
+    user_can_update_users,
+    user_has_admin_access,
+)
 from app.services.authz import (
     USER_LOAD_OPTIONS,
     get_user_by_id,
-    user_has_permission,
     user_sees_all_tasks,
 )
 from app.services.board_members import allowed_assignee_ids_for_board, effective_board_member_role
@@ -115,7 +123,7 @@ async def list_assignee_candidates(
 @router.get("", response_model=UserListOut)
 async def list_users(
     session: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(require_permission(USERS_MANAGE))],
+    _: Annotated[User, Depends(require_admin_access)],
     limit: Annotated[int, Query(ge=1, le=500)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
     q: Annotated[str | None, Query(max_length=200)] = None,
@@ -149,8 +157,10 @@ async def list_users(
 async def create_user(
     body: UserCreate,
     session: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(require_permission(USERS_MANAGE))],
+    current: Annotated[User, Depends(require_any_permission(*USERS_STAFF_CODES))],
 ) -> UserOut:
+    if not await user_can_create_users(session, current):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
     existing = await session.scalar(select(User.id).where(User.email == body.email))
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=EMAIL_ALREADY_REGISTERED)
@@ -160,13 +170,17 @@ async def create_user(
         if not pos:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=INVALID_POSITION)
 
+    assert_can_set_superuser(current, body.is_superuser)
+    want_super = bool(body.is_superuser) if current.is_superuser else False
+    await assert_can_assign_roles(session, current, body.role_ids)
+
     user = User(
         email=body.email,
         full_name=body.full_name,
         position_id=body.position_id,
         birth_date=body.birth_date,
         hashed_password=hash_password(body.password),
-        is_superuser=body.is_superuser,
+        is_superuser=want_super,
         is_active=True,
         must_change_password=bool(body.must_change_password),
     )
@@ -209,7 +223,7 @@ async def create_user(
 )
 async def import_users_from_excel(
     session: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(require_permission(USERS_MANAGE))],
+    _: Annotated[User, Depends(require_any_permission(ADMIN_IMPORT_USERS))],
     file: UploadFile = File(..., description="Excel .xlsx"),
 ) -> EmployeeImportOut:
     fname = (file.filename or "").lower()
@@ -233,12 +247,14 @@ async def import_users_from_excel(
 async def delete_user(
     user_id: uuid.UUID,
     session: Annotated[AsyncSession, Depends(get_db)],
-    current: Annotated[User, Depends(require_permission(USERS_MANAGE))],
+    current: Annotated[User, Depends(require_any_permission(*USERS_STAFF_CODES))],
 ) -> None:
     """
     Полное удаление учётной записи. Задачи остаются: исполнитель и автор сбрасываются в NULL (правила БД).
     Удаляются профиль сотрудника, роли, системы, ячейки графика, уведомления, членство в БЗ и т.д.
     """
+    if not await user_can_delete_users(session, current):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
     if current.id == user_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=DELETE_USER_SELF)
 
@@ -265,7 +281,7 @@ async def get_user(
     session: Annotated[AsyncSession, Depends(get_db)],
     current: Annotated[User, Depends(get_current_user)],
 ) -> UserOut:
-    if current.id != user_id and not (await _can_manage_users(session, current)):
+    if current.id != user_id and not (await user_has_admin_access(session, current)):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=USER_VIEW_FORBIDDEN)
     u = await get_user_by_id(session, user_id)
     if not u:
@@ -273,20 +289,32 @@ async def get_user(
     return user_to_out(u)
 
 
-async def _can_manage_users(session: AsyncSession, user: User) -> bool:
-    return user.is_superuser or await user_has_permission(session, user, USERS_MANAGE)
-
-
 @router.patch("/{user_id}", response_model=UserOut)
 async def update_user(
     user_id: uuid.UUID,
     body: UserUpdate,
     session: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(require_permission(USERS_MANAGE))],
+    current: Annotated[User, Depends(require_any_permission(*USERS_STAFF_CODES))],
 ) -> UserOut:
     u = await get_user_by_id(session, user_id)
     if not u:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=USER_NOT_FOUND)
+
+    can_update = await user_can_update_users(session, current)
+    can_password = await user_can_reset_password(session, current)
+    patch = body.model_dump(exclude_unset=True)
+    password_keys = {"password", "must_change_password"}
+    other_keys = set(patch) - password_keys
+    if other_keys and not can_update:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Недостаточно прав, чтобы менять карточку пользователя (нужно «Управление пользователями»)",
+        )
+    if ("password" in patch or "must_change_password" in patch) and not can_password:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Недостаточно прав для сброса пароля",
+        )
 
     if body.email is not None:
         u.email = body.email
@@ -301,9 +329,9 @@ async def update_user(
     if body.is_active is not None:
         u.is_active = body.is_active
     if body.is_superuser is not None:
-        u.is_superuser = body.is_superuser
+        assert_can_set_superuser(current, body.is_superuser)
+        u.is_superuser = body.is_superuser if current.is_superuser else u.is_superuser
 
-    patch = body.model_dump(exclude_unset=True)
     if "birth_date" in patch:
         u.birth_date = patch["birth_date"]
     if "schedule_mode" in patch:
@@ -323,6 +351,7 @@ async def update_user(
         u.position_id = pid
 
     if body.role_ids is not None:
+        await assert_can_assign_roles(session, current, body.role_ids)
         await session.execute(delete(UserRole).where(UserRole.user_id == user_id))
         if body.role_ids:
             roles = (await session.execute(select(Role).where(Role.id.in_(body.role_ids)))).scalars().all()

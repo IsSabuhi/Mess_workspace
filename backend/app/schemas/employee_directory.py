@@ -118,3 +118,23 @@ class EmployeeDirectoryBulkProfileIn(BaseModel):
 
 class EmployeeDirectoryBulkProfileOut(BaseModel):
     updated: int
+
+
+class VacationExcelRowResult(BaseModel):
+    sheet_row: int
+    full_name: str | None = None
+    personnel_number: str | None = None
+    start: date | None = None
+    end: date | None = None
+    status: str
+    employee_name: str | None = None
+    error: str | None = None
+
+
+class VacationExcelImportOut(BaseModel):
+    created: int
+    updated: int
+    skipped: int
+    unmatched: int
+    invalid: int
+    rows: list[VacationExcelRowResult]

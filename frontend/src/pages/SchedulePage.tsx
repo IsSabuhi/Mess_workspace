@@ -41,6 +41,7 @@ import { AppShell } from "../components/AppShell";
 import { useAuth } from "../context/AuthContext";
 import { PERM, canViewSchedule, hasPermission } from "../lib/permissions";
 import type { ScheduleExcelSheetInput } from "../lib/exportScheduleExcel";
+import { isVacationCellCode } from "../lib/scheduleSameShiftMatch";
 import { toastApiError, toastSuccess } from "../lib/toast";
 import { useModalLayer } from "../lib/useModalLayer";
 import { useToastQueryError } from "../lib/useToastQueryError";
@@ -115,6 +116,10 @@ function formatHoursTotal(v: number): string {
     return String(Math.round(rounded));
   }
   return rounded.toFixed(1).replace(/\.0$/, "");
+}
+
+function vacationCellClass(): string {
+  return "bg-[#FCE4D6] text-slate-900 dark:bg-[#FCE4D6] dark:text-slate-900";
 }
 
 function dayHeaderClass(d: ScheduleDayInfo | undefined, coverageGap?: boolean): string {
@@ -737,7 +742,8 @@ export function SchedulePage() {
               <p className="font-medium text-slate-800 dark:text-slate-100">Коды в ячейках</p>
               <ul className="mt-2 list-inside list-disc space-y-1 text-xs leading-relaxed">
                 <li>
-                  <span className="font-mono">о</span> — отпуск (даты задаются в кадровом справочнике)
+                  <span className="font-mono">о</span> — отпуск (даты задаются в кадровом справочнике), ячейка
+                  подсвечивается персиковым
                 </li>
                 <li>
                   <span className="font-mono">у</span> — учебный отпуск
@@ -1168,25 +1174,40 @@ export function SchedulePage() {
                       const key = String(d);
                       const val = String(cellForScheduleDay(row, d) ?? "");
                       const di = dayByNum.get(d);
+                      const vacation = isVacationCellCode(val);
                       const isColoredRow = !!effectiveRowColor;
-                      const headTint = isColoredRow
-                        ? ""
-                        : di?.is_ru_holiday
-                          ? "bg-amber-100/45 dark:bg-amber-950/35"
-                          : di?.is_weekend
-                            ? "bg-slate-100/55 dark:bg-slate-800/70"
-                            : "";
+                      const headTint = vacation
+                        ? vacationCellClass()
+                        : isColoredRow
+                          ? ""
+                          : di?.is_ru_holiday
+                            ? "bg-amber-100/45 dark:bg-amber-950/35"
+                            : di?.is_weekend
+                              ? "bg-slate-100/55 dark:bg-slate-800/70"
+                              : "";
                       return (
-                        <td key={key} style={rowBgStyle} className={`p-0 ${rowBgClassName} ${headTint}`}>
+                        <td
+                          key={key}
+                          style={vacation ? undefined : rowBgStyle}
+                          title={vacation ? "Отпуск" : undefined}
+                          className={`p-0 ${vacation ? "" : rowBgClassName} ${headTint}`}
+                        >
                           {canManage ? (
                             <ScheduleCellInput
                               initialValue={val}
                               cellKey={`${row.user_id}-${year}-${month}-${d}-${val}`}
                               onCommit={(next) => saveCell(row.user_id, d, next)}
                               disabled={patchMut.isPending}
+                              vacation={vacation}
                             />
                           ) : (
-                            <div className="flex h-7 min-w-[2.35rem] items-center justify-center text-center font-mono text-[11px] text-slate-800 dark:text-slate-200">
+                            <div
+                              className={`flex h-7 min-w-[2.35rem] items-center justify-center text-center font-mono text-[11px] ${
+                                vacation
+                                  ? "font-semibold text-slate-900"
+                                  : "text-slate-800 dark:text-slate-200"
+                              }`}
+                            >
                               {val || <span className="text-slate-400 dark:text-slate-600">—</span>}
                             </div>
                           )}
@@ -1225,11 +1246,13 @@ function ScheduleCellInput({
   cellKey,
   onCommit,
   disabled,
+  vacation,
 }: {
   initialValue: string;
   cellKey: string;
   onCommit: (v: string) => void;
   disabled?: boolean;
+  vacation?: boolean;
 }) {
   return (
     <input
@@ -1237,7 +1260,12 @@ function ScheduleCellInput({
       defaultValue={initialValue}
       disabled={disabled}
       maxLength={8}
-      className="h-7 w-full min-w-[2.35rem] border-0 bg-transparent text-center font-mono text-[11px] text-slate-900 outline-none ring-inset transition-colors placeholder:text-slate-400 focus:bg-sky-50/80 focus:ring-2 focus:ring-sky-400/60 dark:text-slate-100 dark:placeholder:text-slate-600 dark:hover:bg-slate-800/50 dark:focus:bg-slate-800/70 dark:focus:ring-sky-500/45"
+      aria-label={vacation ? "Отпуск" : undefined}
+      className={`h-7 w-full min-w-[2.35rem] border-0 bg-transparent text-center font-mono text-[11px] outline-none ring-inset transition-colors placeholder:text-slate-400 focus:bg-sky-50/80 focus:ring-2 focus:ring-sky-400/60 dark:placeholder:text-slate-600 dark:focus:bg-slate-800/70 dark:focus:ring-sky-500/45 ${
+        vacation
+          ? "font-semibold text-slate-900"
+          : "text-slate-900 dark:text-slate-100 dark:hover:bg-slate-800/50"
+      }`}
       onBlur={(e) => {
         const v = e.target.value;
         if (v.trim() !== (initialValue || "").trim()) {

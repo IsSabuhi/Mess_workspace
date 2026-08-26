@@ -34,7 +34,7 @@ from app.models import (
 )
 from app.models.board import BOARD_SCOPE_SYSTEM
 from app.models.task import task_assignees_table
-from app.permissions import ROLES_MANAGE, TASKS_READ_ASSIGNED, USERS_MANAGE
+from app.permissions import ADMIN_IMPORT_TASKS, TASKS_READ_ASSIGNED
 from app.schemas.audit import AuditEventOut
 from app.schemas.task import (
     ChecklistItem,
@@ -573,7 +573,7 @@ async def create_task(
 )
 async def import_tasks_excel(
     session: Annotated[AsyncSession, Depends(get_db)],
-    editor: Annotated[User, Depends(require_any_permission(USERS_MANAGE, ROLES_MANAGE))],
+    editor: Annotated[User, Depends(require_any_permission(ADMIN_IMPORT_TASKS))],
     files: Annotated[list[UploadFile], File(..., description="Один или несколько .xlsx задачника")],
     system_id: Annotated[uuid.UUID | None, Form()] = None,
     sheet_name: str | None = Form(None),

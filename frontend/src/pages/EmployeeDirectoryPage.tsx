@@ -16,6 +16,7 @@ import {
 import { listPositions } from "../api/positions";
 import { listSystems } from "../api/systems";
 import { AppShell } from "../components/AppShell";
+import { EmployeeVacationsPanel } from "../components/EmployeeVacationsPanel";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import {
   examElectricalPassedLabel,
@@ -71,7 +72,7 @@ function formatScheduleSummary(row: EmployeeDirectoryRowOut): string {
   return `5/2 · ${norm}`;
 }
 
-type TabId = "compliance" | "profile" | "report";
+type TabId = "compliance" | "profile" | "vacations" | "report";
 type SortDir = "asc" | "desc";
 type SortKey =
   | "name"
@@ -109,6 +110,7 @@ const TAB_SORT_KEYS: Record<TabId, readonly SortKey[]> = {
     "fieldWorker",
     "vacation",
   ],
+  vacations: ["name"],
 };
 
 const STATUS_SORT_RANK: Record<ValidityStatus, number> = {
@@ -301,9 +303,11 @@ export function EmployeeDirectoryPage() {
   const activeTab: TabId =
     tabParam === "report"
       ? "report"
-      : tabParam === "profile" && showProfileTab
-        ? "profile"
-        : "compliance";
+      : tabParam === "vacations"
+        ? "vacations"
+        : tabParam === "profile" && showProfileTab
+          ? "profile"
+          : "compliance";
 
   useEffect(() => {
     if (tabParam === "profile" && !showProfileTab) {
@@ -464,7 +468,7 @@ export function EmployeeDirectoryPage() {
       setFilterFieldWorker("all");
       return;
     }
-    if (activeTab === "profile") {
+    if (activeTab === "profile" || activeTab === "vacations") {
       setFilterExamElectrical("all");
       setFilterPassHas("all");
       setExpiredOnly(false);
@@ -726,11 +730,12 @@ export function EmployeeDirectoryPage() {
   return (
     <AppShell
       title="Сотрудники"
-      subtitle="Экзамены и пропуска, справочник сотрудника и отчётность по срокам. Права на редактирование задаются в роли."
+      subtitle="Экзамены и пропуска, справочник, отпуска и отчётность по срокам. Права на редактирование задаются в роли."
     >
       <div className="mb-4 flex flex-wrap gap-2 border-b border-slate-200 pb-2 dark:border-slate-700">
         {tabBtn("compliance", "Экзамены и пропуска")}
         {showProfileTab && tabBtn("profile", "Справочник сотрудника")}
+        {tabBtn("vacations", "Отпуска")}
         {tabBtn("report", "Отчётность")}
       </div>
 
@@ -782,8 +787,9 @@ export function EmployeeDirectoryPage() {
                   Системы и должности: без выбора — все; несколько отмеченных — подходит сотрудник с{" "}
                   <span className="font-medium text-slate-600 dark:text-slate-300">любой</span> из них.
                   {" "}
-                  На «Справочник сотрудника»: пол, график, удалёнщик, выездной. Экзамен, пропуск и сроки — на
-                  «Экзамены и пропуска» и «Отчётность». Удалёнщики на вкладке экзаменов не показываются.
+                  На «Справочник сотрудника»: пол, график, удалёнщик, выездной. На «Отпуска» даты фильтруются в самой
+                  вкладке. Экзамен, пропуск и сроки — на «Экзамены и пропуска» и «Отчётность». Удалёнщики на вкладке
+                  экзаменов не показываются.
                 </p>
                 <div className="flex flex-wrap items-end gap-2">
                   <div className="w-[10.75rem] max-w-full shrink-0">
@@ -1234,6 +1240,9 @@ export function EmployeeDirectoryPage() {
                   } else if (activeTab === "report") {
                     const { downloadEmployeeDirectoryReportExcel } = await import("../lib/exportEmployeeDirectoryExcel");
                     await downloadEmployeeDirectoryReportExcel(displayRows);
+                  } else if (activeTab === "vacations") {
+                    const { downloadEmployeeDirectoryVacationsExcel } = await import("../lib/exportEmployeeDirectoryExcel");
+                    await downloadEmployeeDirectoryVacationsExcel(displayRows);
                   } else {
                     const { downloadEmployeeDirectoryProfileExcel } = await import("../lib/exportEmployeeDirectoryExcel");
                     await downloadEmployeeDirectoryProfileExcel(displayRows);
@@ -1478,6 +1487,8 @@ export function EmployeeDirectoryPage() {
               </table>
             </div>
           )}
+
+          {activeTab === "vacations" && <EmployeeVacationsPanel rows={displayRows} />}
         </>
       )}
 

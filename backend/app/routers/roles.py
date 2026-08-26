@@ -7,12 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.http_errors import PERMISSION_DENIED
-from app.deps import get_current_user, require_permission
+from app.deps import get_current_user, require_admin_access, require_permission
 from app.models import Permission, Role, RolePermission, User, UserRole
-from app.permissions import ROLES_MANAGE, USERS_MANAGE
+from app.permissions import ROLES_MANAGE
 from app.schemas.role import PermissionOut, RoleCreate, RoleOut, RoleUpdate
-from app.services.authz import user_has_permission
+from app.services.admin_privileges import assert_can_grant_permission_codes
 
 router = APIRouter(prefix="/roles", tags=["roles"])
 
@@ -52,14 +51,8 @@ async def list_permissions_catalog(
 @router.get("", response_model=list[RoleOut])
 async def list_roles(
     session: Annotated[AsyncSession, Depends(get_db)],
-    user: Annotated[User, Depends(get_current_user)],
+    _: Annotated[User, Depends(require_admin_access)],
 ) -> list[RoleOut]:
-    if not (
-        user.is_superuser
-        or await user_has_permission(session, user, ROLES_MANAGE)
-        or await user_has_permission(session, user, USERS_MANAGE)
-    ):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=PERMISSION_DENIED)
     stmt = (
         select(Role)
         .options(selectinload(Role.permissions).selectinload(RolePermission.permission))
@@ -75,7 +68,7 @@ async def list_roles(
 async def create_role(
     body: RoleCreate,
     session: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(require_permission(ROLES_MANAGE))],
+    current: Annotated[User, Depends(require_permission(ROLES_MANAGE))],
 ) -> RoleOut:
     existing = await session.scalar(select(Role.id).where(Role.slug == body.slug))
     if existing:
@@ -89,6 +82,7 @@ async def create_role(
         perms = (await session.execute(select(Permission).where(Permission.id.in_(body.permission_ids)))).scalars().all()
         if len(perms) != len(set(body.permission_ids)):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown permission id")
+        await assert_can_grant_permission_codes(session, current, {p.code for p in perms})
         for p in perms:
             session.add(RolePermission(role_id=role.id, permission_id=p.id))
 
@@ -129,15 +123,22 @@ async def update_role(
         role.description = body.description
 
     if body.permission_ids is not None:
-        await session.execute(delete(RolePermission).where(RolePermission.role_id == role_id))
+        old_codes = {
+            rp.permission.code
+            for rp in role.permissions
+            if rp.permission
+        }
+        perms = []
         if body.permission_ids:
             perms = (
                 await session.execute(select(Permission).where(Permission.id.in_(body.permission_ids)))
             ).scalars().all()
             if len(perms) != len(set(body.permission_ids)):
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown permission id")
-            for p in perms:
-                session.add(RolePermission(role_id=role.id, permission_id=p.id))
+        await assert_can_grant_permission_codes(session, user, {p.code for p in perms}, old_codes)
+        await session.execute(delete(RolePermission).where(RolePermission.role_id == role_id))
+        for p in perms:
+            session.add(RolePermission(role_id=role.id, permission_id=p.id))
 
     await session.flush()
     stmt = (

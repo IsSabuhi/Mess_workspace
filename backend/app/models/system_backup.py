@@ -11,7 +11,7 @@ from app.database import Base
 
 
 class SystemBackup(Base):
-    """Полный дамп PostgreSQL, созданный из админки."""
+    """Полный дамп PostgreSQL: вручную из админки или по расписанию воркера."""
 
     __tablename__ = "system_backups"
 
@@ -20,6 +20,7 @@ class SystemBackup(Base):
     storage_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", index=True)
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="manual", index=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True

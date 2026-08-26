@@ -31,10 +31,20 @@ const ACTION_LABELS: Record<string, string> = {
   "schedule.user_mode.updated": "Режим графика пользователя",
   "employee_directory.profile.updated": "Обновлён профиль сотрудника",
   "employee_directory.bulk_profile.updated": "Массовое обновление профилей",
+  "employee_directory.vacations.imported": "Импорт отпусков из Excel",
   "system_backup.requested": "Запрошена резервная копия БД",
   "system_backup.downloaded": "Скачана резервная копия БД",
   "system_backup.deleted": "Удалена резервная копия БД",
   "system_backup.settings_updated": "Изменены настройки резервных копий",
+  "uspd.created": "Создан объект УСПД",
+  "uspd.updated": "Изменён объект УСПД",
+  "uspd.deleted": "Удалён объект УСПД",
+  "uspd.entry.created": "Добавлена строка УСПД",
+  "uspd.entry.updated": "Изменена строка УСПД",
+  "uspd.entry.deleted": "Удалена строка УСПД",
+  "uspd.model.created": "Добавлена модель УСПД",
+  "uspd.imported": "Импорт УСПД из Obsidian",
+  "uspd.sim.imported": "Импорт SIM УСПД из Excel",
 };
 
 const FIELD_LABELS: Record<string, string> = {

@@ -2,7 +2,7 @@ import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import { useAuth } from "./context/AuthContext";
-import { canViewManagerTeamDashboard, canViewSchedule } from "./lib/permissions";
+import { canViewManagerTeamDashboard, canViewSchedule, canViewUspd } from "./lib/permissions";
 
 const AdminPage = lazy(() => import("./pages/AdminPage").then((m) => ({ default: m.AdminPage })));
 const BoardSettingsPage = lazy(() => import("./pages/BoardSettingsPage").then((m) => ({ default: m.BoardSettingsPage })));
@@ -24,6 +24,7 @@ const SchedulePage = lazy(() => import("./pages/SchedulePage").then((m) => ({ de
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
 const SystemsPage = lazy(() => import("./pages/SystemsPage").then((m) => ({ default: m.SystemsPage })));
 const TasksPage = lazy(() => import("./pages/TasksPage").then((m) => ({ default: m.TasksPage })));
+const UspdPage = lazy(() => import("./pages/UspdPage").then((m) => ({ default: m.UspdPage })));
 const UsersRedirectPage = lazy(() => import("./pages/UsersRedirectPage").then((m) => ({ default: m.UsersRedirectPage })));
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -62,6 +63,17 @@ function RequireManagerTeamDashboard({ children }: { children: React.ReactNode }
     return null;
   }
   if (!canViewManagerTeamDashboard(state.user)) {
+    return <Navigate to="/" replace />;
+  }
+  return children;
+}
+
+function RequireUspdAccess({ children }: { children: React.ReactNode }) {
+  const { state } = useAuth();
+  if (state.status !== "authenticated") {
+    return null;
+  }
+  if (!canViewUspd(state.user)) {
     return <Navigate to="/" replace />;
   }
   return children;
@@ -199,6 +211,16 @@ export default function App() {
         element={
           <ProtectedRoute>
             <NotesPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/uspd"
+        element={
+          <ProtectedRoute>
+            <RequireUspdAccess>
+              <UspdPage />
+            </RequireUspdAccess>
           </ProtectedRoute>
         }
       />

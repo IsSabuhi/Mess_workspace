@@ -16,6 +16,7 @@ import {
   Kanban,
   CalendarDays,
   PlusCircle,
+  Radio,
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { NavLink, useLocation } from 'react-router-dom';
@@ -28,6 +29,7 @@ import {
   canCreateBoards,
   canViewManagerTeamDashboard,
   canViewSchedule,
+  canViewUspd,
   PERM,
   hasPermission,
 } from '../lib/permissions';
@@ -69,6 +71,8 @@ export function Sidebar({ collapsed, onToggleCollapse }: Props) {
       hasPermission(state.user, PERM.EMPLOYEE_DIRECTORY_MANAGE) ||
       hasPermission(state.user, PERM.EMPLOYEE_DIRECTORY_COMPLIANCE_MANAGE) ||
       hasPermission(state.user, PERM.EMPLOYEE_DIRECTORY_PROFILE_MANAGE));
+  const showUspd =
+    state.status === 'authenticated' && canViewUspd(state.user);
   const showManagerTeamDashboard =
     state.status === 'authenticated' && canViewManagerTeamDashboard(state.user);
   const visibleTaskBoards = boardsQuery.data ?? [];
@@ -86,7 +90,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: Props) {
 
   return (
     <aside
-      className={`fixed left-0 top-0 z-40 flex h-screen flex-col border-r border-slate-200/80 bg-white/90 shadow-soft transition-[width] duration-300 ease-out dark:border-slate-700/80 dark:bg-slate-900/90 ${
+      className={`fixed left-0 top-0 z-40 flex h-screen flex-col border-r border-slate-200/80 bg-white/90 shadow-soft dark:border-slate-700/80 dark:bg-slate-900/90 ${
         collapsed ? 'w-[4.5rem]' : 'w-64'
       }`}>
       <div
@@ -260,6 +264,23 @@ export function Sidebar({ collapsed, onToggleCollapse }: Props) {
             }>
             <IdCard className='h-5 w-5 shrink-0 opacity-90' aria-hidden />
             {!collapsed && <span>Сотрудники</span>}
+          </NavLink>
+        )}
+        {showUspd && (
+          <NavLink
+            to='/uspd'
+            title={collapsed ? 'УСПД' : undefined}
+            className={({ isActive }) =>
+              [
+                'group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition',
+                collapsed ? 'justify-center' : '',
+                isActive
+                  ? 'bg-sky-500/15 text-sky-700 shadow-sm dark:bg-sky-400/10 dark:text-sky-300'
+                  : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800',
+              ].join(' ')
+            }>
+            <Radio className='h-5 w-5 shrink-0 opacity-90' aria-hidden />
+            {!collapsed && <span>УСПД</span>}
           </NavLink>
         )}
 

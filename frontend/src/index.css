@@ -88,6 +88,20 @@ body {
 }
 
 /* TipTap / база знаний — класс kb-editor-content висит на самом корне ProseMirror */
+.md-notes-content.kb-editor-content.ProseMirror {
+  min-height: 8rem;
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+.md-notes-content.md-notes-compact.kb-editor-content.ProseMirror {
+  min-height: 6rem;
+}
+.md-notes-content.md-notes-readonly.kb-editor-content.ProseMirror {
+  min-height: 0;
+  cursor: default;
+  padding: 0;
+}
+
 .kb-editor-content.ProseMirror {
   min-height: min(72vh, 640px);
   width: 100%;

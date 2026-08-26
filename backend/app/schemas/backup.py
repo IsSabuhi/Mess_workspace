@@ -11,6 +11,7 @@ class SystemBackupOut(ORMModel):
     filename: str
     size_bytes: int | None
     status: str
+    source: str = "manual"
     error_message: str | None
     created_by_id: uuid.UUID | None
     created_by_name: str | None = None

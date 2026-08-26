@@ -138,3 +138,22 @@ class KnowledgeArticleRestoreIn(BaseModel):
 class KnowledgeSearchResultOut(ORMModel):
     article: KnowledgeArticleOut
     snippet: str | None = None
+
+
+class KnowledgeObsidianFileResult(ORMModel):
+    filename: str
+    title: str | None = None
+    created: bool = False
+    skipped: bool = False
+    images_rewritten: int = 0
+    missing_images: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+class KnowledgeObsidianImportOut(ORMModel):
+    created: int = 0
+    skipped: int = 0
+    failed: int = 0
+    images_uploaded: int = 0
+    folders_created: int = 0
+    files: list[KnowledgeObsidianFileResult] = Field(default_factory=list)

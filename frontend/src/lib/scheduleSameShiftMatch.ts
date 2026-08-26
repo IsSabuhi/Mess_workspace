@@ -1,5 +1,11 @@
 import type { ScheduleUserRow } from "../api/schedule";
 
+/** Код отпуска в ячейке: кириллическая «о» или латинская «o». */
+export function isVacationCellCode(raw: string | null | undefined): boolean {
+  const t = String(raw ?? "").trim().toLowerCase();
+  return t === "о" || t === "o";
+}
+
 /** Нормализация для сравнения «одной смены» в ячейке (как на бэкенде: о/у не считаются сменами). */
 export function normalizeScheduleCellForMatch(raw: string | null | undefined): string | null {
   if (raw == null) return null;

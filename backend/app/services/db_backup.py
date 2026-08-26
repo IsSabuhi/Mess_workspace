@@ -225,6 +225,7 @@ async def has_completed_backup_on_local_date(session: AsyncSession, local_day: d
     row = await session.scalar(
         select(SystemBackup.id)
         .where(SystemBackup.status == "completed")
+        .where(SystemBackup.source == "scheduled")
         .where(SystemBackup.created_at >= start)
         .where(SystemBackup.created_at < end)
         .limit(1)
@@ -232,12 +233,20 @@ async def has_completed_backup_on_local_date(session: AsyncSession, local_day: d
     return row is not None
 
 
-async def create_backup_record(session: AsyncSession, *, actor_user_id: uuid.UUID | None) -> SystemBackup:
+async def create_backup_record(
+    session: AsyncSession,
+    *,
+    actor_user_id: uuid.UUID | None,
+    source: str = "manual",
+) -> SystemBackup:
+    kind = source if source in ("manual", "scheduled") else "manual"
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%S")
-    filename = f"mess_db_{stamp}.dump"
+    suffix = "_auto" if kind == "scheduled" else ""
+    filename = f"mess_db_{stamp}{suffix}.dump"
     row = SystemBackup(
         filename=filename,
         status="pending",
+        source=kind,
         created_by_id=actor_user_id,
     )
     session.add(row)
@@ -280,7 +289,7 @@ async def maybe_enqueue_scheduled_backup(session: AsyncSession, redis=None) -> s
         return "already_today"
     if await has_active_backup(session):
         return "active"
-    row = await create_backup_record(session, actor_user_id=None)
+    row = await create_backup_record(session, actor_user_id=None, source="scheduled")
     await session.commit()
     try:
         await enqueue_create_backup(row.id, redis)

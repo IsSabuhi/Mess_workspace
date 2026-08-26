@@ -7,6 +7,7 @@ export type SystemBackupOut = {
   filename: string;
   size_bytes: number | null;
   status: "pending" | "running" | "completed" | "failed" | string;
+  source: "manual" | "scheduled" | string;
   error_message: string | null;
   created_by_id: string | null;
   created_by_name: string | null;

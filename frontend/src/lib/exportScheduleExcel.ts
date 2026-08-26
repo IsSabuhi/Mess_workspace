@@ -1,6 +1,7 @@
 import ExcelJS from "exceljs";
 
 import type { ScheduleGroupOut, ScheduleUserRow } from "../api/schedule";
+import { isVacationCellCode } from "./scheduleSameShiftMatch";
 
 function fileStamp(): string {
   return new Date().toISOString().slice(0, 10);
@@ -81,6 +82,17 @@ function buildSheet(wb: ExcelJS.Workbook, sheet: ScheduleExcelSheetInput): void 
         for (let c = 2; c <= colCount; c += 1) {
           ws.getCell(excelRow, c).fill = fill;
         }
+      }
+      const vacationFill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "FFFCE4D6" },
+      } as const;
+      for (let i = 0; i < dayNumbers.length; i += 1) {
+        if (!isVacationCellCode(codeAt(row, dayNumbers[i]!))) continue;
+        const cell = ws.getCell(excelRow, 3 + i);
+        cell.fill = vacationFill;
+        cell.font = { ...(cell.font ?? {}), color: { argb: "FF000000" }, bold: true };
       }
       excelRow += 1;
     }

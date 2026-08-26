@@ -6,10 +6,12 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.http_errors import NOT_AUTHENTICATED, PERMISSION_DENIED, SUPERUSER_REQUIRED
+from app.http_errors import NOT_AUTHENTICATED, PERMISSION_DENIED, SUPERUSER_REQUIRED, USPD_ACCESS_DENIED
 from app.models import User
+from app.permissions import ADMIN_SECTION_CODES
 from app.security import decode_token
 from app.services.authz import get_user_by_id, user_has_permission
+from app.services.uspd_access import user_can_access_uspd
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
 
@@ -47,6 +49,12 @@ async def get_current_superuser(user: Annotated[User, Depends(get_current_user)]
     return user
 
 
+async def get_current_uspd_user(user: Annotated[User, Depends(get_current_user)]) -> User:
+    if not user_can_access_uspd(user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=USPD_ACCESS_DENIED)
+    return user
+
+
 def require_permission(code: str):
     async def _dep(
         session: Annotated[AsyncSession, Depends(get_db)],
@@ -74,3 +82,7 @@ def require_any_permission(*codes: str):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=PERMISSION_DENIED)
 
     return _dep
+
+
+# Любое право раздела «Администрирование» — просмотр вкладок без права на действие.
+require_admin_access = require_any_permission(*ADMIN_SECTION_CODES)

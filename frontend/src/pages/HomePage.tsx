@@ -10,6 +10,7 @@ import {
   CalendarDays,
   ChevronRight,
   LayoutGrid,
+  Radio,
   Server,
   Settings,
   Shield,
@@ -30,6 +31,7 @@ import {
   canEmployeeDirectoryAccess,
   canViewManagerTeamDashboard,
   canViewSchedule,
+  canViewUspd,
 } from "../lib/permissions";
 import { taskDueStatus } from "../lib/taskAnalyticsFilters";
 import { taskIsActiveForDashboard, taskIsOverdueForDashboard } from "../lib/taskStatus";
@@ -166,6 +168,7 @@ export function HomePage() {
 
   const showAdmin = user ? canAdminAccess(user) : false;
   const showScheduleQuick = !!user && canViewSchedule(user);
+  const showUspdQuick = !!user && canViewUspd(user);
 
   const quickLinks: {
     to: string;
@@ -182,6 +185,9 @@ export function HomePage() {
       : []),
     { to: "/systems", label: "Системы", icon: Server, description: "Каталог систем" },
     { to: "/knowledge", label: "База знаний", icon: BookOpen, description: "Статьи и процессы" },
+    ...(showUspdQuick
+      ? [{ to: "/uspd", label: "УСПД", icon: Radio, description: "Объекты и оборудование" }]
+      : []),
     { to: "/positions", label: "Должности", icon: Briefcase, description: "Справочник" },
     { to: "/settings", label: "Настройки", icon: Settings, description: "Профиль и безопасность" },
   ];

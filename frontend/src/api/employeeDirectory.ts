@@ -147,3 +147,32 @@ export async function bulkEmployeeDirectoryProfile(body: {
     body: JSON.stringify(body),
   });
 }
+
+export type VacationExcelRowResult = {
+  sheet_row: number;
+  full_name: string | null;
+  personnel_number: string | null;
+  start: string | null;
+  end: string | null;
+  status: string;
+  employee_name: string | null;
+  error: string | null;
+};
+
+export type VacationExcelImportOut = {
+  created: number;
+  updated: number;
+  skipped: number;
+  unmatched: number;
+  invalid: number;
+  rows: VacationExcelRowResult[];
+};
+
+export async function importEmployeeVacationsExcel(file: File): Promise<VacationExcelImportOut> {
+  const form = new FormData();
+  form.append("file", file);
+  return apiFetch<VacationExcelImportOut>("/api/v1/employee-directory/import-vacations", {
+    method: "POST",
+    body: form,
+  });
+}

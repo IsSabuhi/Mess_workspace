@@ -8,9 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.deps import get_current_user, require_any_permission
+from app.deps import get_current_user, require_admin_access, require_any_permission
 from app.models import Notification, User
-from app.permissions import ROLES_MANAGE, USERS_MANAGE
+from app.permissions import ADMIN_SETTINGS
 from app.schemas.common import Message
 from app.schemas.notification import (
     NotificationOut,
@@ -25,7 +25,8 @@ from app.services.notifications import (
 )
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
-_ADMIN = require_any_permission(USERS_MANAGE, ROLES_MANAGE)
+_ADMIN = require_any_permission(ADMIN_SETTINGS)
+_VIEW = require_admin_access
 
 
 def _notification_to_out(item: Notification) -> NotificationOut:
@@ -61,7 +62,7 @@ async def list_notifications(
 @router.get("/settings", response_model=NotificationSettingsOut)
 async def get_notification_settings(
     session: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(_ADMIN)],
+    _: Annotated[User, Depends(_VIEW)],
 ) -> NotificationSettingsOut:
     enabled, read_days, unread_days, note_reminder_days = await get_notification_retention_settings(session)
     return NotificationSettingsOut(

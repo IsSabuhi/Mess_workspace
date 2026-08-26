@@ -1,14 +1,17 @@
 import uuid
 from typing import Annotated
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from sqlalchemy import and_, or_, select
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from starlette.datastructures import UploadFile as StarletteUploadFile
+from starlette.formparsers import MultiPartException
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.http_errors import FORBIDDEN, INVALID_PASSWORD
-from app.deps import get_current_user, require_permission
+from app.deps import get_current_user, require_any_permission, require_permission
 from app.models import (
     KnowledgeArticle,
     KnowledgeArticleRevision,
@@ -20,7 +23,7 @@ from app.models import (
     UserSystem,
 )
 from app.models.knowledge import ArticleStatus, SpaceMemberRole
-from app.permissions import KNOWLEDGE_MANAGE_ALL, KNOWLEDGE_READ_ALL
+from app.permissions import ADMIN_IMPORT_KNOWLEDGE, KNOWLEDGE_MANAGE_ALL, KNOWLEDGE_READ_ALL
 from app.schemas.knowledge import (
     KnowledgeArticleCreate,
     KnowledgeArticleOut,
@@ -29,6 +32,8 @@ from app.schemas.knowledge import (
     KnowledgeArticleRestoreIn,
     KnowledgeSpaceCreate,
     KnowledgeSpaceDeleteIn,
+    KnowledgeObsidianImportOut,
+    KnowledgeObsidianFileResult,
     KnowledgeSearchResultOut,
     KnowledgeSpaceOut,
     KnowledgeDirectoryUser,
@@ -50,6 +55,23 @@ from app.services.knowledge_space_members import (
     user_in_space_system,
 )
 from app.services.file_storage import rewrite_stored_media_urls, save_kb_image
+from app.services.knowledge_obsidian import (
+    ImportItems,
+    add_import_bytes,
+    basename_key,
+    detect_common_root,
+    find_space_import_hub,
+    folder_title_from_segment,
+    image_content_type,
+    normalize_hub_title,
+    normalize_relpath,
+    note_folder_segments,
+    parse_note,
+    slugify_title,
+    unique_slug,
+    unpack_obsidian_zip,
+    upload_kind,
+)
 from app.services.audit import record_audit_event
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
@@ -83,6 +105,7 @@ _ALLOWED_IMAGE_CT = {
     "image/png",
     "image/gif",
     "image/webp",
+    "image/bmp",
 }
 
 
@@ -148,7 +171,9 @@ async def list_spaces(
     session: Annotated[AsyncSession, Depends(get_db)],
     user: Annotated[User, Depends(get_current_user)],
 ) -> list[KnowledgeSpaceOut]:
-    if user.is_superuser or await user_has_permission(session, user, KNOWLEDGE_READ_ALL):
+    if user.is_superuser or await user_has_permission(session, user, KNOWLEDGE_READ_ALL) or await user_has_permission(
+        session, user, ADMIN_IMPORT_KNOWLEDGE
+    ):
         stmt = select(KnowledgeSpace).order_by(KnowledgeSpace.name)
         result = await session.execute(stmt)
         spaces = result.scalars().all()
@@ -433,6 +458,294 @@ async def upload_knowledge_image(
     if len(raw) > _MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File too large (max 8MB)")
     return UploadOut(url=save_kb_image(raw, ct))
+
+
+_MAX_MD_BYTES = 2 * 1024 * 1024
+_MAX_IMPORT_FILES = 8000
+_MAX_ZIP_BYTES = 400 * 1024 * 1024
+_MAX_ZIP_UNCOMPRESSED = 1_200 * 1024 * 1024
+_KB_IMPORT_ADMIN = require_any_permission(ADMIN_IMPORT_KNOWLEDGE, KNOWLEDGE_MANAGE_ALL)
+
+
+def _as_uploads(value: object) -> list[StarletteUploadFile]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [v for v in value if isinstance(v, StarletteUploadFile)]
+    if isinstance(value, StarletteUploadFile):
+        return [value]
+    return []
+
+
+@router.post("/import-obsidian", response_model=KnowledgeObsidianImportOut)
+async def import_obsidian_knowledge(
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(_KB_IMPORT_ADMIN)],
+) -> KnowledgeObsidianImportOut:
+    try:
+        form = await request.form(
+            max_files=_MAX_IMPORT_FILES,
+            max_fields=50,
+            max_part_size=_MAX_ZIP_BYTES,
+        )
+    except MultiPartException as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Слишком много файлов за раз. Запакуйте хранилище (папки с .md и PNG) в один zip.",
+        ) from exc
+
+    try:
+        space_raw = form.get("space_id")
+        try:
+            space_id = UUID(str(space_raw or "").strip())
+        except ValueError:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Не указано пространство") from None
+        space = await session.get(KnowledgeSpace, space_id)
+        if not space:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пространство не найдено")
+        if not await can_edit_article(session, user, space) and not await user_has_permission(
+            session, user, ADMIN_IMPORT_KNOWLEDGE
+        ):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
+
+        uploads = _as_uploads(form.getlist("files"))
+        archives = _as_uploads(form.get("archive")) or _as_uploads(form.getlist("archive"))
+        if not uploads and not archives:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Выберите zip или файлы")
+        if len(uploads) > _MAX_IMPORT_FILES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Слишком много файлов за раз. Запакуйте хранилище в один zip.",
+            )
+
+        items = ImportItems()
+        for archive in archives:
+            name = (archive.filename or "").lower()
+            raw = await archive.read()
+            if not raw:
+                continue
+            if len(raw) > _MAX_ZIP_BYTES:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Zip больше 400 МБ",
+                )
+            if not (name.endswith(".zip") or (archive.content_type or "").endswith("zip")):
+                if raw[:4] != b"PK\x03\x04" and raw[:4] != b"PK\x05\x06":
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Архив должен быть в формате zip",
+                    )
+            try:
+                unpacked = unpack_obsidian_zip(
+                    raw,
+                    max_md_bytes=_MAX_MD_BYTES,
+                    max_image_bytes=_MAX_UPLOAD_BYTES,
+                    max_files=_MAX_IMPORT_FILES,
+                    max_uncompressed=_MAX_ZIP_UNCOMPRESSED,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+            items.notes.extend(unpacked.notes)
+            items.images.extend(unpacked.images)
+
+        for upload in uploads:
+            filename = normalize_relpath(upload.filename or "") or (upload.filename or "без имени")
+            if upload_kind(filename) is None:
+                continue
+            raw = await upload.read()
+            add_import_bytes(
+                items,
+                filename,
+                raw,
+                declared_type=upload.content_type,
+                max_md_bytes=_MAX_MD_BYTES,
+                max_image_bytes=_MAX_UPLOAD_BYTES,
+            )
+
+        notes, images = items.notes, items.images
+        if not notes:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Не найдено ни одной заметки .md",
+            )
+    finally:
+        await form.close()
+
+    url_by_path: dict[str, str] = {}
+    url_by_name: dict[str, str] = {}
+    images_uploaded = 0
+    for filename, raw, ct in images:
+        url = save_kb_image(raw, ct)
+        url_by_path[normalize_relpath(filename).lower()] = url
+        url_by_name[basename_key(filename)] = url
+        images_uploaded += 1
+
+    existing_rows = (
+        await session.execute(
+            select(KnowledgeArticle.id, KnowledgeArticle.title, KnowledgeArticle.parent_id, KnowledgeArticle.slug).where(
+                KnowledgeArticle.space_id == space_id
+            )
+        )
+    ).all()
+    existing_by_parent_title: dict[tuple[uuid.UUID | None, str], uuid.UUID] = {}
+    taken_slugs: set[str] = set()
+    for aid, title, pid, slug in existing_rows:
+        existing_by_parent_title[(pid, (title or "").strip().lower())] = aid
+        if slug:
+            taken_slugs.add(slug)
+
+    common_root = detect_common_root([fn for fn, _ in notes])
+    notes = sorted(notes, key=lambda item: normalize_relpath(item[0]).lower())
+    hub = find_space_import_hub(existing_rows)
+    hub_id: uuid.UUID | None = hub[0] if hub else None
+    hub_title = hub[1] if hub else ""
+    hub_title_key = normalize_hub_title(hub_title)
+
+    results: list[KnowledgeObsidianFileResult] = []
+    created = skipped = failed = folders_created = 0
+    parents_to_sync: set[uuid.UUID] = set()
+    if hub_id is not None:
+        parents_to_sync.add(hub_id)
+
+    async def ensure_folders(segments: list[str]) -> uuid.UUID | None:
+        nonlocal folders_created
+        parent_id: uuid.UUID | None = hub_id
+        for seg in segments:
+            folder_title = folder_title_from_segment(seg)
+            if hub_id is not None and parent_id == hub_id and normalize_hub_title(folder_title) == hub_title_key:
+                continue
+            key = (parent_id, folder_title.lower())
+            found = existing_by_parent_title.get(key)
+            if found:
+                parent_id = found
+                continue
+            slug = unique_slug(slugify_title(folder_title, fallback="folder"), taken_slugs, fallback="folder")
+            async with session.begin_nested():
+                folder = KnowledgeArticle(
+                    space_id=space_id,
+                    title=folder_title,
+                    slug=slug,
+                    content=None,
+                    parent_id=parent_id,
+                    status=ArticleStatus.published,
+                    position=0,
+                    created_by_id=user.id,
+                )
+                session.add(folder)
+                await session.flush()
+                await _save_article_revision(session, folder, user)
+                await record_audit_event(
+                    session,
+                    entity_type="knowledge",
+                    entity_id=folder.id,
+                    action="knowledge.imported",
+                    actor_user_id=user.id,
+                    details={
+                        "title": folder_title,
+                        "folder": True,
+                        "space_id": str(space_id),
+                    },
+                )
+            existing_by_parent_title[key] = folder.id
+            taken_slugs.add(slug)
+            folders_created += 1
+            if parent_id is not None:
+                parents_to_sync.add(parent_id)
+            parent_id = folder.id
+        return parent_id
+
+    for filename, text in notes:
+        title = None
+        try:
+            if not text:
+                raise ValueError("Не удалось прочитать файл (кодировка или больше 2 МБ)")
+            parsed = parse_note(filename, text, url_by_path, url_by_name)
+            title = parsed.title
+            if not title:
+                raise ValueError("Не удалось определить заголовок")
+            parent_id = await ensure_folders(note_folder_segments(filename, common_root))
+            if hub_id is not None and parent_id == hub_id and normalize_hub_title(title) == hub_title_key:
+                skipped += 1
+                results.append(
+                    KnowledgeObsidianFileResult(
+                        filename=filename,
+                        title=title,
+                        skipped=True,
+                        error="Совпадает с родительской страницей пространства — не дублируем",
+                    )
+                )
+                continue
+            dup_key = (parent_id, title.lower())
+            if dup_key in existing_by_parent_title:
+                skipped += 1
+                results.append(
+                    KnowledgeObsidianFileResult(
+                        filename=filename,
+                        title=title,
+                        skipped=True,
+                        error="Статья с таким названием уже есть в этой папке",
+                    )
+                )
+                continue
+            slug = unique_slug(slugify_title(title), taken_slugs)
+            async with session.begin_nested():
+                article = KnowledgeArticle(
+                    space_id=space_id,
+                    title=title,
+                    slug=slug,
+                    content=parsed.html or None,
+                    parent_id=parent_id,
+                    status=ArticleStatus.published,
+                    position=0,
+                    created_by_id=user.id,
+                )
+                session.add(article)
+                await session.flush()
+                await _save_article_revision(session, article, user)
+                await record_audit_event(
+                    session,
+                    entity_type="knowledge",
+                    entity_id=article.id,
+                    action="knowledge.imported",
+                    actor_user_id=user.id,
+                    details={"title": title, "file": filename, "space_id": str(space_id)},
+                )
+            existing_by_parent_title[dup_key] = article.id
+            taken_slugs.add(slug)
+            created += 1
+            if parent_id is not None:
+                parents_to_sync.add(parent_id)
+            results.append(
+                KnowledgeObsidianFileResult(
+                    filename=filename,
+                    title=title,
+                    created=True,
+                    images_rewritten=parsed.images_rewritten,
+                    missing_images=parsed.missing_images,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            failed += 1
+            results.append(
+                KnowledgeObsidianFileResult(
+                    filename=filename,
+                    title=title,
+                    error=str(exc)[:400],
+                )
+            )
+
+    for pid in parents_to_sync:
+        await sync_parent_children_toc(session, space_id, pid, sync_ancestors=True)
+
+    return KnowledgeObsidianImportOut(
+        created=created,
+        skipped=skipped,
+        failed=failed,
+        images_uploaded=images_uploaded,
+        folders_created=folders_created,
+        files=results,
+    )
 
 
 @router.get("/spaces/{space_id}/articles/{article_id}", response_model=KnowledgeArticleOut)

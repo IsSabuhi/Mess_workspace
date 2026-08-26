@@ -2,13 +2,14 @@ import uuid
 from datetime import date, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy import and_, case, delete, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.deps import get_current_user, require_permission
+from app.deps import get_current_user, require_any_permission, require_permission
 from app.http_errors import INVALID_POSITION, UNKNOWN_SYSTEM
 from app.models import EmployeeProfile, Position, System, User, UserSystem
 from app.models.employee_work_schedule import (
@@ -17,6 +18,7 @@ from app.models.employee_work_schedule import (
     normalize_profile_schedule,
 )
 from app.permissions import (
+    ADMIN_IMPORT_VACATIONS,
     EMPLOYEE_DIRECTORY_COMPLIANCE_MANAGE,
     EMPLOYEE_DIRECTORY_MANAGE,
     EMPLOYEE_DIRECTORY_PROFILE_MANAGE,
@@ -29,12 +31,25 @@ from app.schemas.employee_directory import (
     EmployeeDirectoryBulkProfileOut,
     EmployeeDirectoryPatch,
     EmployeeDirectoryRowOut,
+    VacationExcelImportOut,
+    VacationExcelRowResult,
     VacationPeriodOut,
+)
+from app.services.vacation_excel_import import (
+    fold_name,
+    fold_personnel,
+    parse_vacation_excel,
 )
 from app.schemas.position import PositionBrief
 from app.schemas.system import SystemBrief
 
 router = APIRouter(prefix="/employee-directory", tags=["employee-directory"])
+_VACATION_IMPORT = require_any_permission(
+    ADMIN_IMPORT_VACATIONS,
+    EMPLOYEE_DIRECTORY_MANAGE,
+    EMPLOYEE_DIRECTORY_PROFILE_MANAGE,
+)
+_MAX_VACATION_PERIODS = 24
 
 _COMPLIANCE_PATCH_FIELDS = frozenset({
     "exam_electrical_passed",
@@ -104,6 +119,30 @@ def _vacation_periods_out(raw) -> list[VacationPeriodOut]:
             kind = "vacation"
         out.append(VacationPeriodOut(start=s, end=e, kind=kind))
     return out
+
+
+def _periods_as_dicts(raw) -> list[dict[str, str]]:
+    return [
+        {"start": item.start.isoformat(), "end": item.end.isoformat(), "kind": item.kind}
+        for item in _vacation_periods_out(raw)
+    ]
+
+
+def _upsert_vacation_period(
+    periods: list[dict[str, str]], start: date, end: date, kind: str
+) -> str:
+    start_s = start.isoformat()
+    end_s = end.isoformat()
+    for i, row in enumerate(periods):
+        if row.get("kind") == kind and row.get("start") == start_s:
+            if row.get("end") == end_s:
+                return "skipped"
+            periods[i] = {"start": start_s, "end": end_s, "kind": kind}
+            return "updated"
+    if len(periods) >= _MAX_VACATION_PERIODS:
+        return "limit"
+    periods.append({"start": start_s, "end": end_s, "kind": kind})
+    return "created"
 
 
 def _row_to_out(user: User) -> EmployeeDirectoryRowOut:
@@ -376,6 +415,160 @@ async def get_employee_directory_row(
     if not u:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     return _row_to_out(u)
+
+
+@router.post("/import-vacations", response_model=VacationExcelImportOut)
+async def import_vacations_excel(
+    session: Annotated[AsyncSession, Depends(get_db)],
+    editor: Annotated[User, Depends(_VACATION_IMPORT)],
+    file: Annotated[UploadFile, File(..., description="Excel .xlsx или .xlsm графика отпусков")],
+) -> VacationExcelImportOut:
+    fname = (file.filename or "").lower()
+    if not (fname.endswith(".xlsx") or fname.endswith(".xlsm")):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ожидается файл .xlsx или .xlsm")
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Файл больше 10 МБ")
+    parsed, err = parse_vacation_excel(content)
+    if err:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=err)
+
+    users = (
+        await session.scalars(select(User).options(selectinload(User.employee_profile)))
+    ).all()
+    by_tab: dict[str, list[User]] = {}
+    by_name: dict[str, list[User]] = {}
+    for user in users:
+        tab = fold_personnel(user.employee_profile.personnel_number if user.employee_profile else "")
+        if tab:
+            by_tab.setdefault(tab, []).append(user)
+        nm = fold_name(user.full_name)
+        if nm:
+            by_name.setdefault(nm, []).append(user)
+
+    created = updated = skipped = unmatched = invalid = 0
+    results: list[VacationExcelRowResult] = []
+    dirty: dict[uuid.UUID, list[dict[str, str]]] = {}
+
+    def _match(item) -> tuple[User | None, str | None]:
+        tab_key = fold_personnel(item.personnel_number or "")
+        if tab_key:
+            found = by_tab.get(tab_key, [])
+            if len(found) == 1:
+                return found[0], None
+            if len(found) > 1:
+                return None, "Несколько сотрудников с таким табельным"
+        name_key = fold_name(item.full_name or "")
+        if name_key:
+            found = by_name.get(name_key, [])
+            if len(found) == 1:
+                return found[0], None
+            if len(found) > 1:
+                return None, "Несколько сотрудников с таким ФИО"
+        return None, "Сотрудник не найден"
+
+    for item in parsed:
+        if item.error or item.start is None or item.end is None:
+            invalid += 1
+            results.append(
+                VacationExcelRowResult(
+                    sheet_row=item.sheet_row,
+                    full_name=item.full_name,
+                    personnel_number=item.personnel_number,
+                    start=item.start,
+                    end=item.end,
+                    status="invalid",
+                    error=item.error or "Нет дат",
+                )
+            )
+            continue
+        user, match_err = _match(item)
+        if user is None:
+            unmatched += 1
+            results.append(
+                VacationExcelRowResult(
+                    sheet_row=item.sheet_row,
+                    full_name=item.full_name,
+                    personnel_number=item.personnel_number,
+                    start=item.start,
+                    end=item.end,
+                    status="unmatched",
+                    error=match_err,
+                )
+            )
+            continue
+        periods = dirty.get(user.id)
+        if periods is None:
+            profile = user.employee_profile
+            if not profile:
+                profile = EmployeeProfile(user_id=user.id)
+                session.add(profile)
+                user.employee_profile = profile
+                await session.flush()
+            periods = _periods_as_dicts(profile.vacation_periods)
+            dirty[user.id] = periods
+        action = _upsert_vacation_period(periods, item.start, item.end, item.kind)
+        if action == "limit":
+            invalid += 1
+            results.append(
+                VacationExcelRowResult(
+                    sheet_row=item.sheet_row,
+                    full_name=item.full_name,
+                    personnel_number=item.personnel_number,
+                    start=item.start,
+                    end=item.end,
+                    status="invalid",
+                    employee_name=user.full_name,
+                    error="У сотрудника уже 24 периода отпуска",
+                )
+            )
+            continue
+        if action == "created":
+            created += 1
+        elif action == "updated":
+            updated += 1
+        else:
+            skipped += 1
+        results.append(
+            VacationExcelRowResult(
+                sheet_row=item.sheet_row,
+                full_name=item.full_name,
+                personnel_number=item.personnel_number,
+                start=item.start,
+                end=item.end,
+                status=action,
+                employee_name=user.full_name,
+            )
+        )
+
+    touched = 0
+    for user in users:
+        if user.id not in dirty:
+            continue
+        profile = user.employee_profile
+        if not profile:
+            continue
+        profile.vacation_periods = dirty[user.id]
+        flag_modified(profile, "vacation_periods")
+        touched += 1
+
+    if created or updated:
+        await record_audit_event(
+            session,
+            entity_type="employee_directory",
+            entity_id=editor.id,
+            action="employee_directory.vacations.imported",
+            actor_user_id=editor.id,
+            details={"created": created, "updated": updated, "skipped": skipped, "unmatched": unmatched, "employees": touched},
+        )
+    return VacationExcelImportOut(
+        created=created,
+        updated=updated,
+        skipped=skipped,
+        unmatched=unmatched,
+        invalid=invalid,
+        rows=results,
+    )
 
 
 @router.post("/bulk-profile", response_model=EmployeeDirectoryBulkProfileOut)
