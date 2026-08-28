@@ -9,7 +9,7 @@ from app.database import get_db
 from app.http_errors import NOT_AUTHENTICATED, PERMISSION_DENIED, SUPERUSER_REQUIRED, USPD_ACCESS_DENIED
 from app.models import User
 from app.permissions import ADMIN_SECTION_CODES
-from app.security import decode_token
+from app.security import TOKEN_TYPE_ACCESS, decode_token_payload
 from app.services.authz import get_user_by_id, user_has_permission
 from app.services.uspd_access import user_can_access_uspd
 
@@ -25,14 +25,24 @@ async def get_current_user_optional(
     effective_token = token or cookie_token
     if not effective_token:
         return None
-    sub = decode_token(effective_token)
-    if not sub:
+    # Только access: refresh-токен здесь принимать нельзя, иначе он работает как доступ к API.
+    payload = decode_token_payload(effective_token, expected_type=TOKEN_TYPE_ACCESS)
+    if not payload:
+        return None
+    sub = payload.get("sub")
+    if not isinstance(sub, str):
         return None
     try:
         uid = uuid.UUID(sub)
     except ValueError:
         return None
-    return await get_user_by_id(session, uid)
+    user = await get_user_by_id(session, uid)
+    if user is None:
+        return None
+    # Поколение токенов: после смены пароля или отключения учётки старые access-токены мертвы.
+    if payload.get("tv") != user.token_version:
+        return None
+    return user
 
 
 async def get_current_user(

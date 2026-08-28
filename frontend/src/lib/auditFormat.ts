@@ -3,6 +3,8 @@
 export const AUDIT_ACTION_LABELS: Record<string, string> = {
   "auth.login": "Вход в систему",
   "auth.logout": "Выход из системы",
+  "auth.password.changed": "Смена пароля",
+  "auth.session.reuse_detected": "Повторное использование refresh-токена",
   "board.created": "Создана доска",
   "board.updated": "Изменена доска",
   "board.deleted": "Удалена доска",

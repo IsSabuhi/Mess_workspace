@@ -23,7 +23,8 @@ class Token(BaseModel):
 
 
 class LoginJson(BaseModel):
-    email: EmailStr
+    # Не EmailStr: иначе BabichDD@nornik.ru и учётная запись без домена не доходят до поиска.
+    email: str = Field(..., min_length=1, max_length=320)
     password: str = Field(..., min_length=1)
 
 

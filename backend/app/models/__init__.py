@@ -9,6 +9,7 @@ from app.models.personal_note import (
     PersonalNoteTag,
     PersonalNoteTagLink,
 )
+from app.models.refresh_session import RefreshSession
 from app.models.release_note import ReleaseNote
 from app.models.position import Position
 from app.models.knowledge import (
@@ -44,6 +45,7 @@ __all__ = [
     "PersonalNoteAttachment",
     "PersonalNoteTag",
     "PersonalNoteTagLink",
+    "RefreshSession",
     "ReleaseNote",
     "ArticleStatus",
     "EmployeeProfile",

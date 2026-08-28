@@ -51,12 +51,13 @@ export function LoginPage() {
             <label
               htmlFor='email'
               className='mb-1 block text-sm font-medium text-slate-700 dark:text-slate-200'>
-              Email
+              Email или учётная запись
             </label>
             <input
               id='email'
-              type='email'
-              autoComplete='email'
+              type='text'
+              inputMode='email'
+              autoComplete='username'
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}

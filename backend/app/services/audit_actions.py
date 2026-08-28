@@ -6,6 +6,8 @@ from __future__ import annotations
 AUDIT_ACTION_LABELS: dict[str, str] = {
     "auth.login": "Вход в систему",
     "auth.logout": "Выход из системы",
+    "auth.password.changed": "Смена пароля",
+    "auth.session.reuse_detected": "Повторное использование refresh-токена",
     "board.created": "Создана доска",
     "board.updated": "Изменена доска",
     "board.deleted": "Удалена доска",

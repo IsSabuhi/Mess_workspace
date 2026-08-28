@@ -101,13 +101,18 @@ export function canDeleteUsers(user: UserMe): boolean {
 
 export function actorPrivilegedCodes(user: UserMe): Set<string> {
   if (user.is_superuser) return new Set(ADMIN_SECTION_CODES);
+  const have = actorEffectiveCodes(user);
+  return new Set([...have].filter((code) => ADMIN_SECTION_SET.has(code)));
+}
+
+function actorEffectiveCodes(user: UserMe): Set<string> {
   const have = new Set(user.permissions);
   if (have.has(PERM.USERS_MANAGE)) {
     have.add(PERM.USERS_CREATE);
     have.add(PERM.USERS_PASSWORD_RESET);
     have.add(PERM.USERS_DELETE);
   }
-  return new Set([...have].filter((code) => ADMIN_SECTION_SET.has(code)));
+  return have;
 }
 
 export function canAssignRole(
@@ -120,10 +125,15 @@ export function canAssignRole(
   return !role.permissions.some((p) => ADMIN_SECTION_SET.has(p.code) && !actor.has(p.code));
 }
 
+/** Можно ли включить/выключить это право в роли. Нельзя выдавать себе права, которых нет. */
 export function canToggleAdminPermission(user: UserMe, code: string): boolean {
   if (user.is_superuser) return true;
-  if (!ADMIN_SECTION_SET.has(code)) return true;
-  return actorPrivilegedCodes(user).has(code);
+  return actorEffectiveCodes(user).has(code);
+}
+
+/** Правки/удаление/сброс пароля учётки суперпользователя — только суперпользователь. */
+export function canModifyUserAccount(actor: UserMe, target: { is_superuser: boolean }): boolean {
+  return actor.is_superuser || !target.is_superuser;
 }
 
 /** Сводки и аналитика по задачам всей команды (главная /team-dashboard). */
@@ -330,6 +340,7 @@ export function canMoveTask(user: UserMe, task: TaskOut, board?: BoardPermission
     return false;
   }
   if (hasPermission(user, PERM.TASKS_MOVE)) return true;
+  if (hasPermission(user, PERM.TASKS_UPDATE_ALL)) return true;
   if (hasPermission(user, PERM.TASKS_UPDATE_ASSIGNED)) {
     if (taskHasAssignee(task, user.id)) return true;
     if (taskInUserSystems(user, task)) return true;

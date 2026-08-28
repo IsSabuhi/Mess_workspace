@@ -9,7 +9,6 @@ from sqlalchemy.orm import selectinload
 from app.database import get_db
 from app.deps import get_current_user, require_admin_access, require_any_permission
 from app.http_errors import (
-    DELETE_LAST_SUPERUSER,
     DELETE_USER_SELF,
     EMAIL_ALREADY_REGISTERED,
     FORBIDDEN,
@@ -21,6 +20,7 @@ from app.http_errors import (
 )
 from app.models import Board, Position, Role, System, User, UserRole
 from app.models.board import BOARD_SCOPE_SYSTEM
+from app.models.refresh_session import REVOKE_ACCOUNT_DISABLED, REVOKE_PASSWORD_CHANGED
 from app.models.user_system import UserSystem
 from app.permissions import ADMIN_IMPORT_USERS, USERS_STAFF_CODES
 from app.services.employee_status import user_is_not_dismissed
@@ -29,13 +29,16 @@ from app.schemas.user import UserCreate, UserListOut, UserOut, UserUpdate
 from app.security import hash_password
 from app.services.admin_privileges import (
     assert_can_assign_roles,
+    assert_can_modify_user_account,
     assert_can_set_superuser,
+    assert_not_last_active_superuser,
     user_can_create_users,
     user_can_delete_users,
     user_can_reset_password,
     user_can_update_users,
     user_has_admin_access,
 )
+from app.services.auth_sessions import revoke_all_user_sessions
 from app.services.authz import (
     USER_LOAD_OPTIONS,
     get_user_by_id,
@@ -263,14 +266,9 @@ async def delete_user(
     if not u:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=USER_NOT_FOUND)
 
-    if u.is_superuser:
-        others = await session.scalar(
-            select(func.count())
-            .select_from(User)
-            .where(User.is_superuser.is_(True), User.id != user_id)
-        )
-        if not others:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=DELETE_LAST_SUPERUSER)
+    # Иначе сотрудник с users.delete мог удалить суперпользователя (если он не «последний»).
+    assert_can_modify_user_account(current, u)
+    await assert_not_last_active_superuser(session, u)
 
     await session.delete(u)
     await session.commit()
@@ -300,6 +298,7 @@ async def update_user(
     u = await get_user_by_id(session, user_id)
     if not u:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=USER_NOT_FOUND)
+    assert_can_modify_user_account(current, u)
 
     can_update = await user_can_update_users(session, current)
     can_password = await user_can_reset_password(session, current)
@@ -317,7 +316,14 @@ async def update_user(
             detail="Недостаточно прав для сброса пароля",
         )
 
-    if body.email is not None:
+    if body.email is not None and body.email != u.email:
+        taken = await session.scalar(
+            select(User.id).where(User.email == body.email, User.id != user_id)
+        )
+        if taken:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail=EMAIL_ALREADY_REGISTERED
+            )
         u.email = body.email
     if body.full_name is not None:
         u.full_name = body.full_name
@@ -327,11 +333,21 @@ async def update_user(
         u.must_change_password = (
             True if body.must_change_password is None else bool(body.must_change_password)
         )
-    if body.is_active is not None:
+        # Сброс пароля прекращает все живые сессии пользователя, включая украденные.
+        u.token_version += 1
+        await revoke_all_user_sessions(session, u.id, REVOKE_PASSWORD_CHANGED)
+    if body.is_active is not None and body.is_active != u.is_active:
+        if not body.is_active:
+            await assert_not_last_active_superuser(session, u)
         u.is_active = body.is_active
+        if not body.is_active:
+            u.token_version += 1
+            await revoke_all_user_sessions(session, u.id, REVOKE_ACCOUNT_DISABLED)
     if body.is_superuser is not None:
-        assert_can_set_superuser(current, body.is_superuser)
-        u.is_superuser = body.is_superuser if current.is_superuser else u.is_superuser
+        assert_can_set_superuser(current, body.is_superuser, u.is_superuser)
+        if not body.is_superuser and u.is_superuser:
+            await assert_not_last_active_superuser(session, u)
+        u.is_superuser = bool(body.is_superuser)
 
     if "birth_date" in patch:
         u.birth_date = patch["birth_date"]

@@ -5,6 +5,9 @@ from jose import JWTError, jwt
 
 from app.config import get_settings
 
+TOKEN_TYPE_ACCESS = "access"
+TOKEN_TYPE_REFRESH = "refresh"
+
 
 def verify_password(plain: str, hashed: str) -> bool:
     try:
@@ -17,37 +20,34 @@ def hash_password(plain: str) -> str:
     return bcrypt.hashpw(plain.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
 
 
-def create_access_token(subject: str, expires_delta: timedelta | None = None) -> str:
+def create_access_token(subject: str, token_version: int, expires_delta: timedelta | None = None) -> str:
+    """Access-токен. `tv` — поколение токенов пользователя (см. User.token_version)."""
     settings = get_settings()
     expire = datetime.now(timezone.utc) + (
         expires_delta if expires_delta else timedelta(minutes=settings.access_token_expire_minutes)
     )
-    to_encode = {"sub": subject, "exp": expire, "type": "access"}
+    to_encode = {"sub": subject, "exp": expire, "type": TOKEN_TYPE_ACCESS, "tv": token_version}
     return jwt.encode(to_encode, settings.secret_key, algorithm=settings.algorithm)
 
 
-def create_refresh_token(subject: str, expires_delta: timedelta | None = None) -> str:
+def create_refresh_token(subject: str, jti: str, expires_at: datetime) -> str:
+    """Refresh-токен. `jti` — id строки refresh_sessions, без неё токен нерабочий."""
     settings = get_settings()
-    expire = datetime.now(timezone.utc) + (
-        expires_delta if expires_delta else timedelta(days=settings.refresh_token_expire_days)
-    )
-    to_encode = {"sub": subject, "exp": expire, "type": "refresh"}
+    to_encode = {"sub": subject, "exp": expires_at, "type": TOKEN_TYPE_REFRESH, "jti": jti}
     return jwt.encode(to_encode, settings.secret_key, algorithm=settings.algorithm)
 
 
-def decode_token_payload(token: str) -> dict | None:
+def decode_token_payload(token: str, *, expected_type: str) -> dict | None:
+    """Проверяет подпись, срок и назначение токена.
+
+    `expected_type` обязателен: без него refresh-токен принимался бы вместо access
+    и жил бы как полноценный доступ к API все свои 14 дней.
+    """
     settings = get_settings()
     try:
-        return jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+        payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
     except JWTError:
         return None
-
-
-def decode_token(token: str) -> str | None:
-    payload = decode_token_payload(token)
-    if not payload:
+    if payload.get("type") != expected_type:
         return None
-    sub = payload.get("sub")
-    if isinstance(sub, str):
-        return sub
-    return None
+    return payload

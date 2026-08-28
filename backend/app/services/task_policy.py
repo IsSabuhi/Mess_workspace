@@ -169,6 +169,8 @@ async def can_move_task(session: AsyncSession, user: User, task: Task) -> bool:
         return True
     if await user_has_permission(session, user, TASKS_MOVE):
         return True
+    if await user_has_permission(session, user, TASKS_UPDATE_ALL):
+        return True
     if await user_has_permission(session, user, TASKS_UPDATE_ASSIGNED):
         if _user_in_task_assignees(task, user.id):
             return True

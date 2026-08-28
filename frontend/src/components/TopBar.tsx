@@ -61,7 +61,7 @@ export function TopBar({ title, subtitle }: Props) {
             </div>
             <button
               type="button"
-              onClick={signOut}
+              onClick={() => void signOut()}
               className="inline-flex h-10 items-center gap-2 rounded-xl bg-slate-900 px-3 text-sm font-medium text-white shadow-md shadow-slate-900/15 transition hover:bg-slate-800 dark:bg-sky-500 dark:text-slate-950 dark:hover:bg-sky-400"
             >
               <LogOut className="h-4 w-4" />

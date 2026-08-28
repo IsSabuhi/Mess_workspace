@@ -5,10 +5,11 @@ from __future__ import annotations
 import uuid
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.http_errors import LAST_SUPERUSER_REQUIRED, SUPERUSER_TARGET_FORBIDDEN
 from app.models import Role, User
 from app.models.role import RolePermission
 from app.permissions import (
@@ -59,13 +60,49 @@ async def user_can_update_users(session: AsyncSession, user: User) -> bool:
     return await user_has_permission(session, user, USERS_MANAGE)
 
 
-async def actor_privileged_codes(session: AsyncSession, user: User) -> set[str]:
-    if user.is_superuser:
-        return set(PRIVILEGED_ASSIGN_CODES)
+async def actor_effective_codes(session: AsyncSession, user: User) -> set[str]:
+    """Права актора с учётом того, что users.manage включает узкие права по пользователям."""
     have = await get_user_permission_codes(session, user)
     if USERS_MANAGE in have:
         have = have | {USERS_CREATE, USERS_PASSWORD_RESET, USERS_DELETE}
-    return have & set(PRIVILEGED_ASSIGN_CODES)
+    return have
+
+
+async def actor_privileged_codes(session: AsyncSession, user: User) -> set[str]:
+    if user.is_superuser:
+        return set(PRIVILEGED_ASSIGN_CODES)
+    return await actor_effective_codes(session, user) & set(PRIVILEGED_ASSIGN_CODES)
+
+
+def assert_can_modify_user_account(actor: User, target: User) -> None:
+    """Правки чужой учётки суперпользователя.
+
+    Без этой проверки сотрудник с users.password.reset мог сбросить пароль суперпользователю
+    и войти под ним, а с users.manage — сменить ему email или отключить учётку.
+    """
+    if target.is_superuser and not actor.is_superuser:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=SUPERUSER_TARGET_FORBIDDEN
+        )
+
+
+async def assert_not_last_active_superuser(session: AsyncSession, target: User) -> None:
+    """Нельзя оставить систему без активного суперпользователя (отключение или снятие флага)."""
+    if not target.is_superuser:
+        return
+    others = await session.scalar(
+        select(func.count())
+        .select_from(User)
+        .where(
+            User.is_superuser.is_(True),
+            User.is_active.is_(True),
+            User.id != target.id,
+        )
+    )
+    if not others:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=LAST_SUPERUSER_REQUIRED
+        )
 
 
 async def assert_can_assign_roles(
@@ -110,11 +147,18 @@ async def assert_can_assign_roles(
             )
 
 
-def assert_can_set_superuser(actor: User, want: bool | None) -> None:
-    if want is True and not actor.is_superuser:
+def assert_can_set_superuser(actor: User, want: bool | None, current_value: bool = False) -> None:
+    """Менять флаг суперпользователя может только суперпользователь.
+
+    Форма админки присылает поле всегда, поэтому неизменившееся значение пропускаем:
+    иначе обычный админ не смог бы сохранить карточку рядового сотрудника.
+    """
+    if want is None or bool(want) == bool(current_value):
+        return
+    if not actor.is_superuser:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Флаг суперпользователя может включать только суперпользователь",
+            detail="Флаг суперпользователя может менять только суперпользователь",
         )
 
 
@@ -124,19 +168,25 @@ async def assert_can_grant_permission_codes(
     new_codes: set[str],
     old_codes: set[str] | None = None,
 ) -> None:
-    """Нельзя включать/выключать админ-права, которых нет у текущего пользователя."""
+    """Нельзя включать/выключать в роли право, которого нет у самого актора.
+
+    Проверяются любые права, а не только админские: иначе обладатель roles.manage
+    правит роль, которую сам носит, и выдаёт себе tasks.delete, systems.manage и прочее.
+    Неизменившиеся права роли не трогаем — админ может переименовать роль, в которой
+    есть права шире его собственных.
+    """
     if actor.is_superuser:
         return
-    actor_priv = await actor_privileged_codes(session, actor)
+    actor_codes = await actor_effective_codes(session, actor)
     previous = old_codes or set()
-    added = (new_codes & set(PRIVILEGED_ASSIGN_CODES)) - previous
-    removed = (previous & set(PRIVILEGED_ASSIGN_CODES)) - new_codes
-    extra = (added | removed) - actor_priv
+    added = new_codes - previous
+    removed = previous - new_codes
+    extra = (added | removed) - actor_codes
     if extra:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=(
-                "Нельзя менять админ-права, которых нет у вас "
+                "Нельзя менять права, которых нет у вас "
                 f"({', '.join(sorted(extra)[:6])})"
             ),
         )

@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import async_session_maker
+from app.services.auth_sessions import purge_expired_sessions
 from app.services.db_backup import maybe_enqueue_scheduled_backup, run_backup
 from app.services.notifications import (
     cleanup_old_notifications,
@@ -56,6 +57,15 @@ async def sync_notifications_job(_: dict[str, Any]) -> dict[str, int]:
     return results
 
 
+async def purge_auth_sessions_job(_: dict[str, Any]) -> int:
+    """Удаляет давно истёкшие refresh-сессии, чтобы таблица не росла бесконечно."""
+    async with async_session_maker() as session:
+        removed = await purge_expired_sessions(session)
+        await session.commit()
+    logger.info("Purged expired refresh sessions: %s", removed)
+    return removed
+
+
 async def create_database_backup(ctx: dict[str, Any], backup_id: str) -> None:
     """Полный pg_dump в том /backups. Не ставить в HTTP-запрос: дамп может идти минуты."""
     del ctx
@@ -87,6 +97,7 @@ class WorkerSettings:
         sync_notifications_job,
         func(create_database_backup, name="create_database_backup", timeout=1800, max_tries=2),
         schedule_daily_backup,
+        purge_auth_sessions_job,
     ]
     cron_jobs = [
         cron(
@@ -102,6 +113,13 @@ class WorkerSettings:
             unique=True,
             job_id="daily-database-backup",
             run_at_startup=True,
+        ),
+        cron(
+            purge_auth_sessions_job,
+            hour={4},
+            minute={20},
+            unique=True,
+            job_id="purge-auth-sessions",
         ),
     ]
     redis_settings = RedisSettings.from_dsn(settings.redis_url)

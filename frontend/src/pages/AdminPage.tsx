@@ -43,7 +43,7 @@ import { useAuth } from "../context/AuthContext";
 import { AUDIT_ACTION_LABELS, auditActionLabel, formatAuditDetails } from "../lib/auditFormat";
 import { invalidateAndRefetch } from "../lib/queryClient";
 import { parsePermissionText } from "../lib/permissionText";
-import { PERM, canAdminAccess, canAssignRole, canCreateUsers, canDeleteUsers, canResetUserPassword, canStaffUsers, canToggleAdminPermission, canUpdateUsers, hasPermission } from "../lib/permissions";
+import { PERM, canAdminAccess, canAssignRole, canCreateUsers, canDeleteUsers, canModifyUserAccount, canResetUserPassword, canStaffUsers, canToggleAdminPermission, canUpdateUsers, hasPermission } from "../lib/permissions";
 import { toastApiError, toastError, toastSuccess } from "../lib/toast";
 import { useToastQueryError } from "../lib/useToastQueryError";
 import { useModalLayer } from "../lib/useModalLayer";
@@ -2621,9 +2621,10 @@ function UserFormModal({
   const [deleteBusy, setDeleteBusy] = useState(false);
   const { state: authState } = useAuth();
   const actor = authState.status === "authenticated" ? authState.user : null;
-  const allowUpdate = !!(actor && canUpdateUsers(actor));
-  const allowPassword = !!(actor && canResetUserPassword(actor));
-  const allowDelete = !!(actor && canDeleteUsers(actor));
+  const superuserLocked = !!(initial?.is_superuser && actor && !canModifyUserAccount(actor, initial));
+  const allowUpdate = !!(actor && canUpdateUsers(actor)) && !superuserLocked;
+  const allowPassword = !!(actor && canResetUserPassword(actor)) && !superuserLocked;
+  const allowDelete = !!(actor && canDeleteUsers(actor)) && !superuserLocked;
   const profileLocked = !!initial && !allowUpdate;
   const passwordLocked = initial ? !allowPassword : false;
   const canWrite = !initial || allowUpdate || allowPassword;
@@ -2769,7 +2770,12 @@ function UserFormModal({
           </button>
         </div>
         <form onSubmit={submit} className="space-y-4">
-          {profileLocked && (
+          {superuserLocked && (
+            <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-100">
+              Учётную запись суперпользователя может изменять только суперпользователь.
+            </p>
+          )}
+          {profileLocked && !superuserLocked && (
             <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-100">
               Карточка только для чтения. Можно сбросить пароль, если есть это право.
             </p>
@@ -2904,6 +2910,7 @@ function UserFormModal({
               <input
                 type="checkbox"
                 checked={mustChangePassword}
+                disabled={passwordLocked}
                 onChange={(e) => setMustChangePassword(e.target.checked)}
                 className="mt-0.5"
               />

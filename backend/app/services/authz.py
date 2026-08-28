@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -52,9 +52,24 @@ async def user_sees_all_tasks(session: AsyncSession, user: User) -> bool:
 
 
 async def get_user_by_email(session: AsyncSession, email: str) -> User | None:
-    stmt = select(User).where(User.email == email).options(*USER_LOAD_OPTIONS)
-    result = await session.execute(stmt)
-    return result.scalar_one_or_none()
+    """Ищем пользователя по email без учёта регистра.
+
+    Менеджеры паролей часто подставляют BabichDD@nornik.ru при том, что в БД
+    лежит babichdd@nornik.ru — точное сравнение тогда врёт «неверный пароль».
+    Если ввели учётную запись без домена, ищем по локальной части email.
+    """
+    raw = (email or "").strip()
+    if not raw:
+        return None
+    if "@" in raw:
+        stmt = select(User).where(func.lower(User.email) == raw.lower())
+    else:
+        stmt = select(User).where(func.lower(func.split_part(User.email, "@", 1)) == raw.lower())
+    stmt = stmt.options(*USER_LOAD_OPTIONS)
+    rows = (await session.execute(stmt)).scalars().unique().all()
+    if len(rows) == 1:
+        return rows[0]
+    return None
 
 
 async def get_user_by_id(session: AsyncSession, user_id: uuid.UUID) -> User | None:

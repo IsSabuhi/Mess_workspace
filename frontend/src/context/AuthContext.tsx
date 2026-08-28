@@ -4,13 +4,15 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
 
 import type { UserMe } from "../api/auth";
-import { ApiError } from "../api/client";
-import { fetchMe, loginJson, logout, logoutRequest } from "../api/auth";
+import { ApiError, setUnauthorizedHandler } from "../api/client";
+import { fetchMe, loginJson, logoutRequest } from "../api/auth";
+import { queryClient } from "../lib/queryClient";
 
 type AuthState =
   | { status: "loading" }
@@ -23,25 +25,27 @@ type AuthContextValue = {
   /** Подставить пользователя из ответа API (например PATCH /me) без повторного GET — актуальные данные сразу в UI */
   setAuthenticatedUser: (user: UserMe) => void;
   signIn: (email: string, password: string) => Promise<void>;
-  signOut: () => void;
+  signOut: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>({ status: "loading" });
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   const refresh = useCallback(async () => {
     try {
       const user = await fetchMe();
       setState({ status: "authenticated", user });
     } catch (e) {
-      if (e instanceof ApiError && e.status === 401) {
-        logout();
-        setState({ status: "anonymous" });
-        return;
-      }
-      logout();
+      const transient = e instanceof ApiError && (e.isNetworkError || e.status >= 500);
+      // Сервер прилёг или пропала сеть: не выкидываем из уже открытой сессии,
+      // иначе пользователь теряет несохранённую работу из-за секундного сбоя.
+      if (transient && stateRef.current.status === "authenticated") return;
       setState({ status: "anonymous" });
     }
   }, []);
@@ -50,16 +54,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void refresh();
   }, [refresh]);
 
+  // Сессия окончательно истекла на любом запросе — сразу показываем экран входа.
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      if (stateRef.current.status === "anonymous") return;
+      setState({ status: "anonymous" });
+      queryClient.clear();
+    });
+    return () => setUnauthorizedHandler(null);
+  }, []);
+
   const signIn = useCallback(async (email: string, password: string) => {
     await loginJson(email, password);
     const user = await fetchMe();
     setState({ status: "authenticated", user });
   }, []);
 
-  const signOut = useCallback(() => {
-    void logoutRequest();
-    logout();
+  const signOut = useCallback(async () => {
+    // Дожидаемся ответа: сервер отзывает refresh-сессию и чистит куки.
+    try {
+      await logoutRequest();
+    } catch {
+      /* даже при сбое переводим UI в анонимное состояние */
+    }
     setState({ status: "anonymous" });
+    // Иначе данные прошлого пользователя останутся в кэше до перезагрузки страницы.
+    queryClient.clear();
   }, []);
 
   const setAuthenticatedUser = useCallback((user: UserMe) => {

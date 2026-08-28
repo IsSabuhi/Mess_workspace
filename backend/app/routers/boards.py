@@ -8,6 +8,7 @@ from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.deps import get_current_user
+from app.http_errors import FORBIDDEN
 from app.models import Board, BoardMember, KanbanColumn, System, Task, User, UserSystem
 from app.models.board import (
     BOARD_MEMBER_ROLE_EDITOR,
@@ -145,16 +146,19 @@ async def list_boards(
 @router.get("/default", response_model=BoardOut)
 async def get_default_board(
     session: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> BoardOut:
     stmt = (
         select(Board)
         .where(Board.is_default.is_(True))
-        .options(selectinload(Board.columns))
+        .options(selectinload(Board.columns), selectinload(Board.members))
         .limit(1)
     )
     board = (await session.execute(stmt)).scalar_one_or_none()
     if not board:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Default board not configured")
+    if not await _board_visible_for_user(session, user, board):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
     system_name = None
     if board.system_id is not None:
         system_name = await session.scalar(select(System.name).where(System.id == board.system_id))

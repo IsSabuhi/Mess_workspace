@@ -702,7 +702,7 @@ async def update_task(
         old_column_name = old_col.name if old_col else None
     if body.title is not None:
         task.title = body.title
-    if body.description is not None:
+    if "description" in body.model_fields_set:
         task.description = body.description
     if body.column_id is not None:
         col = await session.get(KanbanColumn, body.column_id)
@@ -732,7 +732,7 @@ async def update_task(
             task.started_at = datetime.now(timezone.utc)
     if body.priority is not None:
         task.priority = body.priority
-    if body.due_at is not None:
+    if "due_at" in body.model_fields_set:
         task.due_at = body.due_at
     if "estimate_hours" in body.model_fields_set:
         task.estimate_hours = body.estimate_hours

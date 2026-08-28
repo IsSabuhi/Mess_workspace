@@ -14,6 +14,7 @@ USER_VIEW_FORBIDDEN = "Нет прав на просмотр этого поль
 # Авторизация
 INVALID_CREDENTIALS = "Неверный email или пароль"
 INVALID_PASSWORD = "Неверный пароль"
+SESSION_EXPIRED = "Сессия истекла — войдите заново"
 USER_INACTIVE = "Учётная запись отключена"
 BOOTSTRAP_DISABLED = "Регистрация через bootstrap отключена"
 USERS_ALREADY_EXIST = "Пользователи уже существуют — bootstrap недоступен"
@@ -28,6 +29,12 @@ UNKNOWN_SYSTEM = "Указана неизвестная система"
 USER_NOT_FOUND = "Пользователь не найден"
 DELETE_USER_SELF = "Нельзя удалить свою учётную запись"
 DELETE_LAST_SUPERUSER = "Нельзя удалить последнего суперпользователя в системе"
+SUPERUSER_TARGET_FORBIDDEN = (
+    "Учётную запись суперпользователя может изменять только суперпользователь"
+)
+LAST_SUPERUSER_REQUIRED = (
+    "В системе должен остаться хотя бы один активный суперпользователь"
+)
 
 # Задачи
 TASK_SYSTEM_REQUIRED = "Укажите производственную систему"

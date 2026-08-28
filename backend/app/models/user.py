@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime, timezone
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, JSON, String
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, JSON, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -26,6 +26,9 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_superuser: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Номер поколения токенов. Растёт при смене пароля и отключении учётной записи,
+    # мгновенно обесценивая все ранее выданные access-токены (они несут его в claim `tv`).
+    token_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -53,6 +56,11 @@ class User(Base):
     )
     login_audits: Mapped[list["LoginAudit"]] = relationship(
         "LoginAudit",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    refresh_sessions: Mapped[list["RefreshSession"]] = relationship(
+        "RefreshSession",
         back_populates="user",
         cascade="all, delete-orphan",
     )
