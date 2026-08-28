@@ -1,6 +1,7 @@
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
@@ -89,7 +90,30 @@ _ALLOWED_ATTACHMENT_CT = {
     "application/zip",
     "application/x-zip-compressed",
     "application/octet-stream",
+    "application/vnd.ms-outlook",
 }
+_ALLOWED_ATTACHMENT_SUFFIX = {
+    ".pdf",
+    ".txt",
+    ".doc",
+    ".docx",
+    ".xls",
+    ".xlsx",
+    ".zip",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".msg",
+}
+
+
+def _attachment_type_allowed(filename: str, content_type: str) -> bool:
+    if content_type in _ALLOWED_ATTACHMENT_CT:
+        return True
+    # Windows/Outlook часто шлют .msg с нестандартным MIME — смотрим расширение.
+    return Path(filename).suffix.lower() in _ALLOWED_ATTACHMENT_SUFFIX
 
 
 def _task_in_done_column(task: Task) -> bool:
@@ -956,7 +980,8 @@ async def upload_task_attachment(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
 
     ct = (file.content_type or "application/octet-stream").split(";")[0].strip().lower()
-    if ct not in _ALLOWED_ATTACHMENT_CT:
+    filename = (file.filename or "file").strip()[:512] or "file"
+    if not _attachment_type_allowed(filename, ct):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported file type")
     raw = await file.read()
     if not raw:
@@ -964,7 +989,6 @@ async def upload_task_attachment(
     if len(raw) > _MAX_ATTACHMENT_BYTES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File too large (max 20MB)")
 
-    filename = (file.filename or "file").strip()[:512] or "file"
     url = save_task_file(raw, ct, filename)
     att = TaskAttachment(
         task_id=task.id,

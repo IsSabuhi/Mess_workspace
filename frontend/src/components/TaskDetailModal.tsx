@@ -1,6 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
 import { Archive, ArchiveRestore, Clock, History, MessageSquare, Paperclip, Plus, Trash2, X } from "lucide-react";
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type DragEvent,
+  type FormEvent,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 
 import type { KanbanColumnOut } from "../api/boards";
 import type { ChecklistItem, TaskAttachmentOut, TaskCommentOut, TaskOut } from "../api/tasks";
@@ -36,6 +44,10 @@ function formatBytes(n: number): string {
   if (n < 1024) return `${n} Б`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} КБ`;
   return `${(n / (1024 * 1024)).toFixed(1)} МБ`;
+}
+
+function dataTransferHasFiles(dt: DataTransfer | null): boolean {
+  return Array.from(dt?.types ?? []).includes("Files");
 }
 
 /** Старые абсолютные URL MinIO (:9000) → публичный путь через nginx. */
@@ -204,6 +216,8 @@ export function TaskDetailModal({
   closeOnEscape = true,
 }: TaskDetailModalProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const fileDragDepth = useRef(0);
+  const [fileDragOver, setFileDragOver] = useState(false);
   const [checklistDraft, setChecklistDraft] = useState("");
   const [activityTab, setActivityTab] = useState<"comments" | "history">("comments");
   const { backdropProps, stopPanelPointer } = useModalLayer(open, onClose, {
@@ -213,7 +227,49 @@ export function TaskDetailModal({
 
   useEffect(() => {
     if (open) setActivityTab("comments");
+    fileDragDepth.current = 0;
+    setFileDragOver(false);
   }, [open, task.id]);
+
+  const onAttachFiles = (files: File[]) => {
+    for (const file of files) onUploadAttachment(file);
+  };
+
+  const onAttachDragEnter = (e: DragEvent<HTMLDivElement>) => {
+    if (!canUploadAttachment || !dataTransferHasFiles(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    fileDragDepth.current += 1;
+    setFileDragOver(true);
+  };
+
+  const onAttachDragOver = (e: DragEvent<HTMLDivElement>) => {
+    if (!canUploadAttachment || !dataTransferHasFiles(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = "copy";
+  };
+
+  const onAttachDragLeave = (e: DragEvent<HTMLDivElement>) => {
+    if (!canUploadAttachment) return;
+    e.preventDefault();
+    e.stopPropagation();
+    fileDragDepth.current -= 1;
+    if (fileDragDepth.current <= 0) {
+      fileDragDepth.current = 0;
+      setFileDragOver(false);
+    }
+  };
+
+  const onAttachDrop = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    fileDragDepth.current = 0;
+    setFileDragOver(false);
+    if (!canUploadAttachment) return;
+    const files = [...(e.dataTransfer.files ?? [])];
+    if (files.length) onAttachFiles(files);
+  };
 
   const historyQuery = useQuery({
     queryKey: ["task-history", task.id],
@@ -426,7 +482,17 @@ export function TaskDetailModal({
                 )}
               </div>
 
-              <div>
+              <div
+                onDragEnter={onAttachDragEnter}
+                onDragOver={onAttachDragOver}
+                onDragLeave={onAttachDragLeave}
+                onDrop={onAttachDrop}
+                className={`rounded-xl p-2 -mx-2 transition ${
+                  canUploadAttachment && fileDragOver
+                    ? "bg-sky-50 ring-2 ring-sky-400 dark:bg-sky-950/40 dark:ring-sky-500"
+                    : ""
+                }`}
+              >
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">Вложения</p>
                   {attachments.length > 0 && (
@@ -468,11 +534,12 @@ export function TaskDetailModal({
                     <input
                       ref={fileInputRef}
                       type="file"
+                      multiple
                       className="hidden"
                       onChange={(e) => {
-                        const f = e.target.files?.[0];
-                        if (f) onUploadAttachment(f);
+                        const files = [...(e.target.files ?? [])];
                         e.target.value = "";
+                        if (files.length) onAttachFiles(files);
                       }}
                     />
                     <button
@@ -484,7 +551,11 @@ export function TaskDetailModal({
                       <Paperclip className="h-3.5 w-3.5" />
                       {uploadPending ? "Загрузка…" : "Прикрепить файл"}
                     </button>
-                    <p className="mt-1 text-[11px] text-slate-400">До 20 МБ · изображения, PDF, Office, ZIP</p>
+                    <p className="mt-1 text-[11px] text-slate-400">
+                      {fileDragOver
+                        ? "Отпустите, чтобы прикрепить"
+                        : "Перетащите файл сюда · до 20 МБ · изображения, PDF, Office, ZIP, MSG"}
+                    </p>
                   </div>
                 )}
               </div>

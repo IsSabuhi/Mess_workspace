@@ -13,21 +13,30 @@ import {
   listUspdSites,
   updateUspdEntry,
   updateUspdSite,
+  uploadUspdImage,
   type UspdEntryOut,
   type UspdSiteOut,
 } from "../api/uspd";
 import { AppShell } from "../components/AppShell";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { CreatableSearchSelect } from "../components/CreatableSearchSelect";
-import { MarkdownNotesEditor } from "../components/MarkdownNotesEditor";
+import { KnowledgeRichEditor } from "../components/KnowledgeRichEditor";
 import { Modal } from "../components/Modal";
 import { SecretField } from "../components/SecretField";
+import { UspdSimReportPanel } from "../components/UspdSimReportPanel";
+import { htmlNotesEmpty, notesToEditorHtml } from "../lib/markdownPaste";
 import { invalidateAndRefetch } from "../lib/queryClient";
 import { toastApiError, toastSuccess } from "../lib/toast";
+import { isGsmRow, isPhoneLike, isSimRow } from "../lib/uspdSimReport";
 import { useToastQueryError } from "../lib/useToastQueryError";
 
 const inputClass =
   "w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm outline-none ring-sky-400/30 focus:border-sky-400 focus:ring-2 dark:border-slate-600 dark:bg-slate-800 dark:text-white";
+
+async function uploadUspdEditorImage(file: File): Promise<string> {
+  const { url } = await uploadUspdImage(file);
+  return url;
+}
 
 const th =
   "border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-left text-xs font-semibold text-slate-600 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300";
@@ -64,22 +73,8 @@ type Editor =
     }
   | null;
 
-function isGsmRow(object: string): boolean {
-  return /^gsm$/i.test(object.trim());
-}
-
 function isBsRow(object: string): boolean {
   return /^(бс|bs)\b/i.test(object.trim()) || /базов\w*\s*станц/i.test(object);
-}
-
-function isPhoneLike(object: string): boolean {
-  return /gsm|телефон|телеофис|телефонис/i.test(object);
-}
-
-function isSimRow(row: UspdEntryOut): boolean {
-  if (!row.parent_id) return false;
-  if (/^sim(\s+\d+)?$/i.test(row.object.trim())) return true;
-  return !!(row.sim_number || row.sim_ip || row.sim_iccid || row.sim_pin || row.sim_puk);
 }
 
 type SimDraft = {
@@ -176,7 +171,7 @@ function ordersAfterMove(
 export function UspdPage() {
   const qc = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
-  const pageTab = searchParams.get("tab") === "models" ? "models" : "sites";
+  const pageTab = searchParams.get("tab") === "models" ? "models" : searchParams.get("tab") === "sims" ? "sims" : "sites";
   const activeId = searchParams.get("site");
   const [search, setSearch] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
@@ -186,11 +181,12 @@ export function UspdPage() {
   const [editor, setEditor] = useState<Editor>(null);
   const [movingEntryId, setMovingEntryId] = useState<string | null>(null);
 
-  const setPageTab = (tab: "sites" | "models") => {
+  const setPageTab = (tab: "sites" | "models" | "sims") => {
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
         if (tab === "models") next.set("tab", "models");
+        else if (tab === "sims") next.set("tab", "sims");
         else next.delete("tab");
         return next;
       },
@@ -216,8 +212,8 @@ export function UspdPage() {
   }, [search]);
 
   const listQuery = useQuery({
-    queryKey: ["uspd", "list", debouncedQ],
-    queryFn: () => listUspdSites(debouncedQ),
+    queryKey: ["uspd", "list", pageTab === "sims" ? "" : debouncedQ],
+    queryFn: () => listUspdSites(pageTab === "sims" ? "" : debouncedQ),
   });
   const modelsQuery = useQuery({
     queryKey: ["uspd", "models"],
@@ -343,6 +339,7 @@ export function UspdPage() {
           {(
             [
               ["sites", "Объекты"],
+              ["sims", "SIM"],
               ["models", "Модели"],
             ] as const
           ).map(([id, label]) => (
@@ -360,6 +357,7 @@ export function UspdPage() {
             </button>
           ))}
         </div>
+        {pageTab !== "sims" && (
         <div className="relative min-w-[16rem] flex-1">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
           <input
@@ -373,6 +371,7 @@ export function UspdPage() {
             className={`${inputClass} pl-9 py-2`}
           />
         </div>
+        )}
         {pageTab === "sites" && (
           <div className="flex flex-wrap gap-1">
             {[
@@ -415,6 +414,22 @@ export function UspdPage() {
           search={debouncedQ}
           selectedModel={selectedModel}
           onSelectModel={setSelectedModel}
+          onOpenSite={(siteId) => {
+            setSearchParams(
+              (prev) => {
+                const next = new URLSearchParams(prev);
+                next.delete("tab");
+                next.set("site", siteId);
+                return next;
+              },
+              { replace: true },
+            );
+          }}
+        />
+      ) : pageTab === "sims" ? (
+        <UspdSimReportPanel
+          sites={sites}
+          pending={listQuery.isPending}
           onOpenSite={(siteId) => {
             setSearchParams(
               (prev) => {
@@ -513,7 +528,7 @@ export function UspdPage() {
           knownModels={knownModels}
           onCreateSite={async (name, notes) => {
             const row = await createMut.mutateAsync(name);
-            if (notes.trim()) await updateUspdSite(row.id, { notes });
+            if (!htmlNotesEmpty(notes)) await updateUspdSite(row.id, { notes });
             await invalidateAndRefetch(qc, ["uspd"]);
             setEditor(null);
           }}
@@ -565,14 +580,14 @@ function groupEntries(entries: UspdEntryOut[]): { section: string | null; rows: 
 function UspdSiteNotes({ site }: { site: UspdSiteOut }) {
   const qc = useQueryClient();
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(site.notes ?? "");
+  const [draft, setDraft] = useState(() => notesToEditorHtml(site.notes));
 
   useEffect(() => {
-    if (!editing) setDraft(site.notes ?? "");
+    if (!editing) setDraft(notesToEditorHtml(site.notes));
   }, [site.id, site.notes, editing]);
 
   const saveMut = useMutation({
-    mutationFn: () => updateUspdSite(site.id, { notes: draft.trim() || null }),
+    mutationFn: () => updateUspdSite(site.id, { notes: htmlNotesEmpty(draft) ? null : draft }),
     onSuccess: async () => {
       await invalidateAndRefetch(qc, ["uspd"]);
       setEditing(false);
@@ -581,7 +596,7 @@ function UspdSiteNotes({ site }: { site: UspdSiteOut }) {
     onError: (e: unknown) => toastApiError(e, "Не удалось сохранить заметки"),
   });
 
-  const hasNotes = Boolean(site.notes?.trim());
+  const hasNotes = !htmlNotesEmpty(site.notes);
 
   return (
     <section className="mt-6 rounded-xl border border-slate-200/90 bg-slate-50/80 p-3 dark:border-slate-700 dark:bg-slate-800/40">
@@ -593,7 +608,7 @@ function UspdSiteNotes({ site }: { site: UspdSiteOut }) {
               type="button"
               disabled={saveMut.isPending}
               onClick={() => {
-                setDraft(site.notes ?? "");
+                setDraft(notesToEditorHtml(site.notes));
                 setEditing(false);
               }}
               className="rounded-lg px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-200 dark:text-slate-300 dark:hover:bg-slate-700"
@@ -613,7 +628,7 @@ function UspdSiteNotes({ site }: { site: UspdSiteOut }) {
           <button
             type="button"
             onClick={() => {
-              setDraft(site.notes ?? "");
+              setDraft(notesToEditorHtml(site.notes));
               setEditing(true);
             }}
             className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-sky-700 hover:bg-sky-50 dark:text-sky-300 dark:hover:bg-sky-950/40"
@@ -624,14 +639,23 @@ function UspdSiteNotes({ site }: { site: UspdSiteOut }) {
         )}
       </div>
       {editing ? (
-        <MarkdownNotesEditor
-          key={`${site.id}-edit`}
-          value={draft}
-          onChange={setDraft}
-          placeholder="Доп. информация по объекту. Скриншот — Ctrl+V, картинка — кнопка на панели"
+        <KnowledgeRichEditor
+          compact
+          articleKey={`${site.id}-edit`}
+          initialHtml={draft}
+          editable
+          onHtmlChange={setDraft}
+          onUploadImage={uploadUspdEditorImage}
         />
       ) : hasNotes ? (
-        <MarkdownNotesEditor key={`${site.id}-view`} value={site.notes ?? ""} editable={false} />
+        <KnowledgeRichEditor
+          compact
+          articleKey={`${site.id}-view`}
+          initialHtml={notesToEditorHtml(site.notes)}
+          editable={false}
+          onHtmlChange={() => undefined}
+          onUploadImage={uploadUspdEditorImage}
+        />
       ) : (
         <p className="text-sm text-slate-500 dark:text-slate-400">
           Пока пусто.
@@ -1307,7 +1331,9 @@ function NoteEditor({
 }) {
   const qc = useQueryClient();
   const [name, setName] = useState(editor.kind === "site" ? editor.site?.name ?? "" : "");
-  const [notes, setNotes] = useState(editor.kind === "site" ? editor.site?.notes ?? "" : "");
+  const [notes, setNotes] = useState(() =>
+    editor.kind === "site" ? notesToEditorHtml(editor.site?.notes) : "<p></p>",
+  );
   const entry = editor.kind === "entry" ? editor.entry : undefined;
   const asSim = editor.kind === "entry" && (editor.asSim || (entry ? isSimRow(entry) : false));
   const existingSims =
@@ -1351,7 +1377,10 @@ function NoteEditor({
     mutationFn: async () => {
       if (editor.kind === "site") {
         if (editor.site) {
-          await updateUspdSite(editor.site.id, { name: name.trim(), notes: notes.trim() || null });
+          await updateUspdSite(editor.site.id, {
+            name: name.trim(),
+            notes: htmlNotesEmpty(notes) ? null : notes,
+          });
           return;
         }
         await onCreateSite(name.trim(), notes);
@@ -1461,12 +1490,14 @@ function NoteEditor({
           </label>
           {!editor.site && (
             <label className="block text-sm">
-              <span className="mb-1 block text-slate-500">Заметки (Markdown), необязательно</span>
-              <MarkdownNotesEditor
+              <span className="mb-1 block text-slate-500">Заметки, необязательно</span>
+              <KnowledgeRichEditor
                 compact
-                value={notes}
-                onChange={setNotes}
-                placeholder="Доп. информация. Скриншот — Ctrl+V"
+                articleKey="uspd-new-site-notes"
+                initialHtml={notes}
+                editable
+                onHtmlChange={setNotes}
+                onUploadImage={uploadUspdEditorImage}
               />
             </label>
           )}

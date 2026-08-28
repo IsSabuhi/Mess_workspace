@@ -128,7 +128,7 @@ alembic history
 - `STORAGE_BACKEND=local` — `backend/uploads/` (`kb/`, `tasks/`, `notes/`, `uspd/`);
 - `STORAGE_BACKEND=minio` — объекты в bucket, публичный URL через `MINIO_PUBLIC_BASE_URL`.
 
-Картинки БЗ, УСПД, вложения задач и личных заметок в `pg_dump` не входят.
+Картинки БЗ, УСПД, вложения задач и личных заметок в `pg_dump` не входят. Физически MinIO — том `minio_data` (`/var/lib/docker/volumes/<проект>_minio_data/_data`); как снять tar-снимок — в [корневом README](../README.md).
 
 ## Права (permissions)
 

@@ -47,6 +47,7 @@ import {
 import type { ChecklistItem, TaskCommentOut, TaskCreate, TaskOut, TaskUpdate } from "../api/tasks";
 import { listAssigneeCandidates } from "../api/users";
 import { MultiAssigneePicker } from "../components/MultiAssigneePicker";
+import { SearchableSelect } from "../components/SearchableSelect";
 import { TaskDetailModal } from "../components/TaskDetailModal";
 import { AppShell } from "../components/AppShell";
 import { useAuth } from "../context/AuthContext";
@@ -75,15 +76,33 @@ import { toastApiError, toastError, toastSuccess } from "../lib/toast";
 import { useToastQueryError } from "../lib/useToastQueryError";
 import { useModalLayer } from "../lib/useModalLayer";
 
-/** Ближайший срок сверху; без срока — внизу. */
-function compareTasksByDueAsc(a: TaskOut, b: TaskOut): number {
+const PRIORITY_SORT_RANK: Record<string, number> = {
+  urgent: 0,
+  high: 1,
+  normal: 2,
+  low: 3,
+};
+
+function dueDayKey(iso: string | null): number {
+  if (!iso) return Number.POSITIVE_INFINITY;
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return Number.POSITIVE_INFINITY;
+  return d.getFullYear() * 10_000 + (d.getMonth() + 1) * 100 + d.getDate();
+}
+
+/** Ближайший срок сверху; в один день — выше приоритет; без срока — внизу, тоже по приоритету. */
+function compareTasksOnBoard(a: TaskOut, b: TaskOut): number {
+  const da = dueDayKey(a.due_at);
+  const db = dueDayKey(b.due_at);
+  if (da !== db) return da - db;
+  const pa = PRIORITY_SORT_RANK[a.priority] ?? PRIORITY_SORT_RANK.normal;
+  const pb = PRIORITY_SORT_RANK[b.priority] ?? PRIORITY_SORT_RANK.normal;
+  if (pa !== pb) return pa - pb;
   const ta = a.due_at ? new Date(a.due_at).getTime() : NaN;
   const tb = b.due_at ? new Date(b.due_at).getTime() : NaN;
   const aHas = Number.isFinite(ta);
   const bHas = Number.isFinite(tb);
   if (aHas && bHas && ta !== tb) return ta - tb;
-  if (aHas && !bHas) return -1;
-  if (!aHas && bHas) return 1;
   return a.title.localeCompare(b.title, "ru");
 }
 
@@ -1143,7 +1162,7 @@ export function TasksPage() {
       if (arr) arr.push(t);
     }
     for (const [, arr] of m) {
-      arr.sort(compareTasksByDueAsc);
+      arr.sort(compareTasksOnBoard);
     }
     return m;
   }, [visibleTasks, sortedCols]);
@@ -1616,18 +1635,13 @@ export function TasksPage() {
         {showSystemFilter && (
           <label className="flex items-center gap-2 text-sm">
             <span className="text-slate-600 dark:text-slate-400">Система</span>
-            <select
+            <SearchableSelect
               value={filterSystem}
-              onChange={(e) => setFilterSystem(e.target.value)}
-              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
-            >
-              <option value="">Все</option>
-              {boardSystems.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
+              onChange={setFilterSystem}
+              emptyLabel="Все"
+              searchPlaceholder="Поиск системы…"
+              items={boardSystems.map((s) => ({ id: s.id, label: s.name }))}
+            />
           </label>
         )}
         {isSystemLinkedBoard && linkedBoardSystemLabel && (
@@ -1642,18 +1656,16 @@ export function TasksPage() {
         )}
         <label className="flex items-center gap-2 text-sm">
           <span className="text-slate-600 dark:text-slate-400">Исполнитель</span>
-          <select
+          <SearchableSelect
             value={filterAssigneeId}
-            onChange={(e) => setFilterAssigneeId(e.target.value)}
-            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
-          >
-            <option value="">Все</option>
-            {assigneeChoices.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.full_name}
-              </option>
-            ))}
-          </select>
+            onChange={(id) => {
+              setFilterAssigneeId(id);
+              if (id) setShowUnassignedOnly(false);
+            }}
+            emptyLabel="Все"
+            searchPlaceholder="Поиск по ФИО…"
+            items={assigneeChoices.map((a) => ({ id: a.id, label: a.full_name }))}
+          />
         </label>
         <label className="flex items-center gap-2 text-sm">
           <span className="text-slate-600 dark:text-slate-400">Показ</span>

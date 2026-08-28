@@ -96,13 +96,44 @@ function dayDiff(from: Date, to: Date): number {
   return Math.round((to.getTime() - from.getTime()) / 86_400_000);
 }
 
+function uniqueEmployees(rows: EmployeeDirectoryRowOut[]): EmployeeDirectoryRowOut[] {
+  const byId = new Map<string, EmployeeDirectoryRowOut>();
+  for (const row of rows) {
+    const prev = byId.get(row.id);
+    if (!prev) {
+      byId.set(row.id, row);
+      continue;
+    }
+    const systems = new Map(prev.systems.map((s) => [s.id, s]));
+    for (const s of row.systems) systems.set(s.id, s);
+    const periods = (prev.vacation_periods?.length ? prev.vacation_periods : row.vacation_periods) ?? [];
+    byId.set(row.id, { ...prev, systems: [...systems.values()], vacation_periods: periods });
+  }
+  return [...byId.values()];
+}
+
+function uniquePeriods(periods: VacationPeriod[] | null | undefined): VacationPeriod[] {
+  const seen = new Set<string>();
+  const out: VacationPeriod[] = [];
+  for (const period of periods ?? []) {
+    const start = (period.start ?? "").slice(0, 10);
+    const end = (period.end ?? "").slice(0, 10);
+    const kind = period.kind ?? "vacation";
+    const key = `${start}|${end}|${kind}`;
+    if (!start || !end || seen.has(key)) continue;
+    seen.add(key);
+    out.push(period);
+  }
+  return out;
+}
+
 export function flattenVacationItems(
   rows: EmployeeDirectoryRowOut[],
   today = todayLocal(),
 ): VacationListItem[] {
   const items: VacationListItem[] = [];
-  for (const row of rows) {
-    (row.vacation_periods ?? []).forEach((period, idx) => {
+  for (const row of uniqueEmployees(rows)) {
+    uniquePeriods(row.vacation_periods).forEach((period, idx) => {
       const start = (period.start ?? "").slice(0, 10);
       const end = (period.end ?? "").slice(0, 10);
       const a = parseIsoDate(start);
@@ -128,6 +159,37 @@ export function flattenVacationItems(
   }
   items.sort((x, y) => x.start.localeCompare(y.start) || x.fullName.localeCompare(y.fullName, "ru"));
   return items;
+}
+
+/** В сводных блоках — один сотрудник, ближайший по смыслу период. */
+export function oneVacationPerPerson(
+  items: VacationListItem[],
+  compare: (a: VacationListItem, b: VacationListItem) => number,
+): VacationListItem[] {
+  const best = new Map<string, VacationListItem>();
+  for (const item of items) {
+    const prev = best.get(item.userId);
+    if (!prev || compare(item, prev) < 0) best.set(item.userId, item);
+  }
+  return [...best.values()].sort(compare);
+}
+
+/** Кто раньше выходит на работу — выше. */
+export function compareCurrentVacationFirst(a: VacationListItem, b: VacationListItem): number {
+  return (
+    a.remainingDays - b.remainingDays ||
+    a.end.localeCompare(b.end) ||
+    a.fullName.localeCompare(b.fullName, "ru")
+  );
+}
+
+/** Кто раньше уходит в отпуск — выше. */
+export function compareUpcomingVacationFirst(a: VacationListItem, b: VacationListItem): number {
+  return (
+    a.daysUntilStart - b.daysUntilStart ||
+    a.start.localeCompare(b.start) ||
+    a.fullName.localeCompare(b.fullName, "ru")
+  );
 }
 
 export function periodOverlapsYear(item: VacationListItem, year: number): boolean {

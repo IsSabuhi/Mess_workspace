@@ -8,6 +8,7 @@ import xml from "highlight.js/lib/languages/xml";
 import css from "highlight.js/lib/languages/css";
 import sql from "highlight.js/lib/languages/sql";
 
+import { obsidianTextToTipTapContent, sanitizeObsidianPaste } from "../lib/markdownPaste";
 import { useModalLayer } from "../lib/useModalLayer";
 import { toast } from "sonner";
 import type { Editor } from "@tiptap/core";
@@ -45,6 +46,8 @@ type Props = {
   onHtmlChange: (html: string) => void;
   onUploadImage: (file: File) => Promise<string>;
   onHeadingsChange?: (rows: { id: string; text: string; level: number }[]) => void;
+  /** Компактная высота — заметки УСПД; вставка и панель те же, что в БЗ. */
+  compact?: boolean;
 };
 
 const FONTS = [
@@ -115,22 +118,6 @@ function isSafeImageSrc(src: string): boolean {
   );
 }
 
-/** `![](Pasted image …)` / file:// — не URL нашего хранилища; TipTap+браузер на них зависают. */
-function sanitizeMarkdownImages(text: string): string {
-  return text.replace(/!\[([^\]]*)\]\(([^)\n]+)\)/g, (full, alt: string, rawSrc: string) => {
-    const src = rawSrc.trim().replace(/^<|>$/g, "").replace(/^"|"$/g, "").replace(/^'|'$/g, "");
-    if (isSafeImageSrc(src)) return full;
-    let name = src;
-    try {
-      name = decodeURIComponent(src.split(/[/\\]/).pop() || src);
-    } catch {
-      /* keep */
-    }
-    const label = alt?.trim() ? `${alt.trim()} (${name})` : name;
-    return `\n\n> 📎 Изображение: «${label}» — вставьте скрин кнопкой «Изображение» (из файла в буфере не подхватывается как URL).\n\n`;
-  });
-}
-
 function stripUnsafeImagesFromHtml(html: string): string {
   return html.replace(/<img\b[^>]*>/gi, (tag) => {
     const srcMatch = tag.match(/\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
@@ -185,6 +172,7 @@ export function KnowledgeRichEditor({
   onHtmlChange,
   onUploadImage,
   onHeadingsChange,
+  compact = false,
 }: Props) {
   const editorRef = useRef<Editor | null>(null);
   const linkInputRef = useRef<HTMLInputElement>(null);
@@ -194,6 +182,7 @@ export function KnowledgeRichEditor({
   const onHeadingsChangeRef = useRef(onHeadingsChange);
   const headingsTimerRef = useRef<number | null>(null);
   const htmlTimerRef = useRef<number | null>(null);
+  const highlightColorRef = useRef("#fef08a");
   uploadRef.current = onUploadImage;
   editableRef.current = editable;
   onHtmlChangeRef.current = onHtmlChange;
@@ -317,7 +306,12 @@ export function KnowledgeRichEditor({
           // Раньше при files.length>0 текст отбрасывался, а local ![](...)/img вешали TipTap.
           if (substantialText) {
             event.preventDefault();
-            const md = sanitizeMarkdownImages(text);
+            if (/!\[\[/.test(text) || /!\[(?![^\]]*\]\()/.test(text)) {
+              ed.chain().focus().insertContent(obsidianTextToTipTapContent(text)).run();
+              if (files.length) void insertImagesFromFiles(files);
+              return true;
+            }
+            const md = sanitizeObsidianPaste(text);
             try {
               if (looksLikeMarkdown(md) || /```/.test(md)) {
                 ed.chain().focus().insertContent(md, { contentType: "markdown" }).run();
@@ -352,7 +346,7 @@ export function KnowledgeRichEditor({
           // Word/Docs иногда кладут огромный HTML со стилями — парсинг вешает вкладку.
           if (html.length >= HUGE_HTML_PASTE_CHARS && text) {
             event.preventDefault();
-            ed.chain().focus().insertContent(sanitizeMarkdownImages(text)).run();
+            ed.chain().focus().insertContent(sanitizeObsidianPaste(text)).run();
             return true;
           }
 
@@ -360,7 +354,7 @@ export function KnowledgeRichEditor({
           if (html && htmlHasUnsafeImages(html)) {
             event.preventDefault();
             if (trimmed && looksLikeMarkdown(trimmed)) {
-              ed.chain().focus().insertContent(sanitizeMarkdownImages(text), { contentType: "markdown" }).run();
+              ed.chain().focus().insertContent(sanitizeObsidianPaste(text), { contentType: "markdown" }).run();
             } else {
               ed.chain().focus().insertContent(stripUnsafeImagesFromHtml(html)).run();
             }
@@ -374,7 +368,7 @@ export function KnowledgeRichEditor({
           // Вставка Markdown из .md / чата / GitHub — только если нет rich HTML и текст умеренный
           if (text && looksLikeMarkdown(text) && !clipboardHasRichHtml(html)) {
             event.preventDefault();
-            ed.chain().focus().insertContent(sanitizeMarkdownImages(text), { contentType: "markdown" }).run();
+            ed.chain().focus().insertContent(sanitizeObsidianPaste(text), { contentType: "markdown" }).run();
             return true;
           }
           return false;
@@ -473,7 +467,9 @@ export function KnowledgeRichEditor({
   }
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900/40">
+    <div className={`overflow-hidden border border-slate-200/90 bg-white dark:border-slate-700 dark:bg-slate-900/40 ${
+      compact ? "rounded-xl" : "rounded-2xl shadow-sm"
+    }`}>
       {editable && (
         <div className="sticky top-0 z-20 flex flex-wrap items-center gap-1 border-b border-slate-100 bg-slate-50/95 px-2 py-2 backdrop-blur dark:border-slate-700 dark:bg-slate-800/90">
           <select
@@ -536,16 +532,34 @@ export function KnowledgeRichEditor({
           >
             S
           </button>
-          <button
-            type="button"
-            title="Цветной фон под текстом: выделите фрагмент и нажмите (повторно — снять выделение)"
-            className="rounded-lg px-2 py-1 text-xs hover:bg-slate-200 dark:hover:bg-slate-700"
-            onClick={() =>
-              editor.chain().focus().toggleHighlight({ color: "rgb(254 240 138)" }).run()
-            }
-          >
-            Фон
-          </button>
+          <span className="inline-flex items-center overflow-hidden rounded-lg border border-slate-200 dark:border-slate-600">
+            <input
+              type="color"
+              title="Цвет фона: выделите текст и выберите цвет"
+              aria-label="Цвет фона текста"
+              defaultValue="#fef08a"
+              className="h-8 w-7 cursor-pointer border-0 bg-white p-0 dark:bg-slate-800"
+              onInput={(e) => {
+                const c = (e.target as HTMLInputElement).value;
+                highlightColorRef.current = c;
+                editor.chain().focus().setHighlight({ color: c }).run();
+              }}
+            />
+            <button
+              type="button"
+              title="Фон выбранным цветом. Повторно — снять фон"
+              className="rounded-none px-2 py-1 text-xs hover:bg-slate-200 dark:hover:bg-slate-700"
+              onClick={() => {
+                if (editor.isActive("highlight")) {
+                  editor.chain().focus().unsetHighlight().run();
+                  return;
+                }
+                editor.chain().focus().setHighlight({ color: highlightColorRef.current }).run();
+              }}
+            >
+              Фон
+            </button>
+          </span>
           <span className="mx-0.5 select-none text-slate-300 dark:text-slate-600">|</span>
           <button
             type="button"
@@ -679,7 +693,7 @@ export function KnowledgeRichEditor({
           </button>
         </div>
       )}
-      {editable && (
+      {editable && !compact && (
         <p className="border-b border-slate-100 px-3 py-1.5 text-[11px] leading-relaxed text-slate-500 dark:border-slate-700 dark:text-slate-400">
           Markdown:{" "}
           <kbd className="rounded bg-slate-100 px-1 dark:bg-slate-800">#</kbd> заголовок,{" "}
@@ -689,14 +703,16 @@ export function KnowledgeRichEditor({
           <kbd className="rounded bg-slate-100 px-1 dark:bg-slate-800">Ctrl+V</kbd>
         </p>
       )}
-      {!editable && (
+      {!editable && !compact && (
         <p className="border-b border-slate-100 bg-slate-50/80 px-3 py-1.5 text-[11px] text-slate-600 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-400">
           Просмотр: редактирование в этом пространстве для вас недоступно.
         </p>
       )}
       <EditorContent
         editor={editor}
-        className="min-h-[min(72vh,640px)] cursor-text bg-white px-4 py-4 sm:px-5 sm:py-5 dark:bg-slate-900/50"
+        className={`cursor-text bg-white dark:bg-slate-900/50 ${
+          compact ? "min-h-[220px] px-3 py-2" : "min-h-[min(72vh,640px)] px-4 py-4 sm:px-5 sm:py-5"
+        }`}
         onClick={() => {
           if (!editor.isDestroyed) editor.chain().focus().run();
         }}

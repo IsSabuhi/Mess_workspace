@@ -40,7 +40,7 @@ import { AppShell } from "../components/AppShell";
 import { NeedPermission, toastInsufficientRights } from "../components/NeedPermission";
 import { PermissionNoteIcon } from "../components/PermissionNoteIcon";
 import { useAuth } from "../context/AuthContext";
-import { auditActionLabel, formatAuditDetails } from "../lib/auditFormat";
+import { AUDIT_ACTION_LABELS, auditActionLabel, formatAuditDetails } from "../lib/auditFormat";
 import { invalidateAndRefetch } from "../lib/queryClient";
 import { parsePermissionText } from "../lib/permissionText";
 import { PERM, canAdminAccess, canAssignRole, canCreateUsers, canDeleteUsers, canResetUserPassword, canStaffUsers, canToggleAdminPermission, canUpdateUsers, hasPermission } from "../lib/permissions";
@@ -1867,8 +1867,7 @@ function DatabaseBackupSection({ allowed }: { allowed: boolean }) {
       </h3>
       <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
         Полный дамп PostgreSQL (формат pg_dump custom). Картинки базы знаний
-        и вложения в дамп не входят. В списке ниже — и ручные, и автоматические копии; готовую любого типа
-        можно скачать.
+        и вложения в дамп не входят.
       </p>
       <div className="mt-4 space-y-3 rounded-xl border border-slate-200 bg-slate-50/80 p-4 dark:border-slate-700 dark:bg-slate-800/40">
         <NeedPermission allowed={allowed} className="flex">
@@ -1883,9 +1882,8 @@ function DatabaseBackupSection({ allowed }: { allowed: boolean }) {
           </label>
         </NeedPermission>
         <p className="text-xs text-slate-500 dark:text-slate-400">
-          Один успешный автоматический дамп в сутки. Ручная копия за сегодня его не заменяет — ночной тоже
-          появится в списке. Если воркер пропустил время — догонит позже в тот же день. 24-часовой формат по
-          UTC+7: 07:00 — утро, 19:00 — вечер.
+          Один успешный автоматический дамп в сутки. Если воркер пропустил время — догонит позже в тот же день. 24-часовой формат по
+          UTC+7.
         </p>
         {lastScheduled && (
           <p className="text-xs text-slate-600 dark:text-slate-300">
@@ -2208,9 +2206,17 @@ function AuditLogSection() {
         <input
           value={auditFilterAction}
           onChange={(e) => setAuditFilterAction(e.target.value)}
-          placeholder="Действие (например board.updated)"
-          className="w-64 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
+          placeholder="Действие: Вход в систему или auth.login"
+          list="audit-action-labels"
+          className="w-72 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800"
         />
+        <datalist id="audit-action-labels">
+          {Object.entries(AUDIT_ACTION_LABELS).map(([code, label]) => (
+            <option key={code} value={label}>
+              {code}
+            </option>
+          ))}
+        </datalist>
         <select
           value={auditFilterActor}
           onChange={(e) => setAuditFilterActor(e.target.value)}

@@ -1,6 +1,6 @@
 /** Человекочитаемые подписи и детали для журнала аудита. */
 
-const ACTION_LABELS: Record<string, string> = {
+export const AUDIT_ACTION_LABELS: Record<string, string> = {
   "auth.login": "Вход в систему",
   "auth.logout": "Выход из системы",
   "board.created": "Создана доска",
@@ -90,7 +90,7 @@ function renameLine(oldName: unknown, newName: unknown, noun = "Название
 }
 
 export function auditActionLabel(action: string): string {
-  return ACTION_LABELS[action] ?? action;
+  return AUDIT_ACTION_LABELS[action] ?? action;
 }
 
 /** Сводка для вкладки «История» в карточке задачи — акцент на смене колонки/статуса. */

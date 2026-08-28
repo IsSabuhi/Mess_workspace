@@ -2,9 +2,12 @@ import { useMemo, useState } from "react";
 
 import type { EmployeeDirectoryRowOut } from "../api/employeeDirectory";
 import {
+  compareCurrentVacationFirst,
+  compareUpcomingVacationFirst,
   flattenVacationItems,
   formatVacationRange,
   groupVacationsByStartMonth,
+  oneVacationPerPerson,
   periodOverlapsYear,
   pluralDays,
   todayLocal,
@@ -75,31 +78,34 @@ export function EmployeeVacationsPanel({ rows }: { rows: EmployeeDirectoryRowOut
   const groups = useMemo(() => groupVacationsByStartMonth(filtered), [filtered]);
   const currentVacation = useMemo(
     () =>
-      allItems
-        .filter((i) => i.status === "current" && i.kind !== "sick")
-        .sort((a, b) => a.end.localeCompare(b.end) || a.fullName.localeCompare(b.fullName, "ru")),
+      oneVacationPerPerson(
+        allItems.filter((i) => i.status === "current" && i.kind !== "sick"),
+        compareCurrentVacationFirst,
+      ),
     [allItems],
   );
   const currentSick = useMemo(
     () =>
-      allItems
-        .filter((i) => i.status === "current" && i.kind === "sick")
-        .sort((a, b) => a.end.localeCompare(b.end) || a.fullName.localeCompare(b.fullName, "ru")),
+      oneVacationPerPerson(
+        allItems.filter((i) => i.status === "current" && i.kind === "sick"),
+        compareCurrentVacationFirst,
+      ),
     [allItems],
   );
   const upcomingSoon = useMemo(
     () =>
-      allItems
-        .filter((i) => i.status === "upcoming" && i.kind !== "sick" && i.daysUntilStart <= 30)
-        .sort((a, b) => a.start.localeCompare(b.start) || a.daysUntilStart - b.daysUntilStart),
+      oneVacationPerPerson(
+        allItems.filter((i) => i.status === "upcoming" && i.kind !== "sick" && i.daysUntilStart <= 30),
+        compareUpcomingVacationFirst,
+      ),
     [allItems],
   );
   const upcomingLater = useMemo(
     () =>
-      allItems
-        .filter((i) => i.status === "upcoming" && i.kind !== "sick" && i.daysUntilStart > 30)
-        .sort((a, b) => a.start.localeCompare(b.start) || a.daysUntilStart - b.daysUntilStart)
-        .slice(0, 8),
+      oneVacationPerPerson(
+        allItems.filter((i) => i.status === "upcoming" && i.kind !== "sick" && i.daysUntilStart > 30),
+        compareUpcomingVacationFirst,
+      ).slice(0, 8),
     [allItems],
   );
   const sickEmployeesThisYear = useMemo(() => {
@@ -144,7 +150,10 @@ export function EmployeeVacationsPanel({ rows }: { rows: EmployeeDirectoryRowOut
       {currentVacation.length > 0 && (
         <section className="rounded-2xl border border-emerald-200/80 bg-emerald-50/50 p-4 dark:border-emerald-900/40 dark:bg-emerald-950/20">
           <h3 className="text-sm font-semibold text-emerald-950 dark:text-emerald-100">Сейчас в отпуске</h3>
-          <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          <p className="mt-0.5 text-xs text-emerald-800/80 dark:text-emerald-200/80">
+            Сначала те, кто раньше выходит на работу
+          </p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
             {currentVacation.map((item) => (
               <VacationCard key={item.key} item={item} />
             ))}
@@ -155,8 +164,10 @@ export function EmployeeVacationsPanel({ rows }: { rows: EmployeeDirectoryRowOut
       {upcomingSoon.length > 0 && (
         <section className="rounded-2xl border border-sky-200/80 bg-sky-50/50 p-4 dark:border-sky-900/40 dark:bg-sky-950/20">
           <h3 className="text-sm font-semibold text-sky-950 dark:text-sky-100">Скоро в отпуске</h3>
-          <p className="mt-0.5 text-xs text-sky-800/80 dark:text-sky-200/80">Начало в ближайшие 30 дней</p>
-          <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          <p className="mt-0.5 text-xs text-sky-800/80 dark:text-sky-200/80">
+            Сначала те, кто раньше уходит · начало в ближайшие 30 дней
+          </p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
             {upcomingSoon.map((item) => (
               <VacationCard key={item.key} item={item} />
             ))}

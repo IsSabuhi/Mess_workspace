@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import AuditEvent, User
 from app.models.system_setting import SystemSetting
+from app.services.audit_actions import matching_audit_action_codes
 
 AUDIT_ENABLED_KEY = "audit_enabled"
 AUDIT_RETENTION_DAYS_KEY = "audit_retention_days"
@@ -135,7 +136,13 @@ async def list_audit_events(
     if entity_type:
         stmt = stmt.where(AuditEvent.entity_type == entity_type[:64])
     if action:
-        stmt = stmt.where(AuditEvent.action.ilike(f"%{action[:128]}%"))
+        raw = action.strip()[:128]
+        codes = matching_audit_action_codes(raw)
+        action_match = AuditEvent.action.ilike(f"%{raw}%")
+        if codes:
+            stmt = stmt.where(or_(action_match, AuditEvent.action.in_(codes)))
+        else:
+            stmt = stmt.where(action_match)
     if system_only:
         stmt = stmt.where(AuditEvent.actor_user_id.is_(None))
     elif actor_user_id is not None:
@@ -154,7 +161,12 @@ async def list_audit_events(
         stmt = stmt.where(AuditEvent.actor_user_id.in_(actor_ids))
     if q:
         needle = f"%{q[:128]}%"
-        stmt = stmt.where(AuditEvent.action.ilike(needle) | AuditEvent.details_json.ilike(needle))
+        text_match = AuditEvent.action.ilike(needle) | AuditEvent.details_json.ilike(needle)
+        codes = matching_audit_action_codes(q)
+        if codes:
+            stmt = stmt.where(text_match | AuditEvent.action.in_(codes))
+        else:
+            stmt = stmt.where(text_match)
     rows = await session.execute(
         stmt.order_by(AuditEvent.created_at.desc()).offset(off).limit(lim)
     )

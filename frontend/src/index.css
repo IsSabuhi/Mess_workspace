@@ -188,6 +188,21 @@ body {
   text-decoration: underline;
 }
 
+.kb-editor-content.ProseMirror :not(pre) > code,
+.kb-editor-content.ProseMirror p > code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.88em;
+  padding: 0.1em 0.35em;
+  border-radius: 0.3rem;
+  background: rgb(241 245 249);
+  color: rgb(15 23 42);
+}
+.dark .kb-editor-content.ProseMirror :not(pre) > code,
+.dark .kb-editor-content.ProseMirror p > code {
+  background: rgb(30 41 59);
+  color: rgb(226 232 240);
+}
+
 .kb-editor-content.ProseMirror pre {
   position: relative;
   background: rgb(15 23 42);

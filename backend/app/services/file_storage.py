@@ -25,6 +25,22 @@ _TASK_EXT = {
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
     "application/zip": ".zip",
     "application/x-zip-compressed": ".zip",
+    "application/vnd.ms-outlook": ".msg",
+}
+_TASK_SUFFIXES = {
+    ".pdf",
+    ".txt",
+    ".doc",
+    ".docx",
+    ".xls",
+    ".xlsx",
+    ".zip",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".msg",
 }
 
 # Старые абсолютные базы MinIO → тот же объект через HTTPS-прокси /mes/files
@@ -136,31 +152,17 @@ def save_note_file(raw: bytes, content_type: str, original_filename: str | None 
 
 def save_task_file(raw: bytes, content_type: str, original_filename: str | None = None) -> str:
     ct = (content_type or "application/octet-stream").split(";")[0].strip().lower()
-    if ct == "application/octet-stream" and original_filename:
-        suffix = Path(original_filename).suffix.lower()
-        if suffix in {
-            ".pdf",
-            ".txt",
-            ".doc",
-            ".docx",
-            ".xls",
-            ".xlsx",
-            ".zip",
-            ".png",
-            ".jpg",
-            ".jpeg",
-            ".gif",
-            ".webp",
-        }:
-            name = f"{uuid.uuid4().hex}{suffix}"
-            key = f"tasks/{name}"
-            if _is_minio():
-                s = get_settings()
-                client = _minio_client()
-                client.put_object(Bucket=s.minio_bucket, Key=key, Body=raw, ContentType=ct)
-                base = public_files_base()
-                return f"{base}/{s.minio_bucket}/{key}"
-            UPLOAD_TASKS_DIR.mkdir(parents=True, exist_ok=True)
-            (UPLOAD_TASKS_DIR / name).write_bytes(raw)
-            return f"/uploads/tasks/{name}"
+    suffix = Path(original_filename or "").suffix.lower()
+    if suffix in _TASK_SUFFIXES:
+        name = f"{uuid.uuid4().hex}{suffix}"
+        key = f"tasks/{name}"
+        if _is_minio():
+            s = get_settings()
+            client = _minio_client()
+            client.put_object(Bucket=s.minio_bucket, Key=key, Body=raw, ContentType=ct)
+            base = public_files_base()
+            return f"{base}/{s.minio_bucket}/{key}"
+        UPLOAD_TASKS_DIR.mkdir(parents=True, exist_ok=True)
+        (UPLOAD_TASKS_DIR / name).write_bytes(raw)
+        return f"/uploads/tasks/{name}"
     return _store(raw, ct, "tasks", UPLOAD_TASKS_DIR, "/uploads/tasks")
