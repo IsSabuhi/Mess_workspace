@@ -78,6 +78,64 @@ def _is_vacation(code: str | None) -> bool:
     return c.lower() in VACATION_CODES
 
 
+async def _persist_generated_cell(
+    session: AsyncSession,
+    *,
+    year: int,
+    month: int,
+    user_id: uuid.UUID,
+    day: int,
+    code: str | None,
+    editor_id: uuid.UUID,
+    rows: dict[int, ScheduleEntry] | None = None,
+) -> bool:
+    """Пишет ячейку после автозаполнения или пересборки.
+
+    Строка с code=NULL — маркер «очищено вручную»: цикл её не затирает и не удаляет.
+    Отпуск из кадрового справочника может перекрыть маркер.
+    `rows` — уже загруженные записи месяца по дню; без него был бы SELECT на каждую ячейку.
+    """
+    if rows is not None:
+        row = rows.get(day)
+    else:
+        stmt = select(ScheduleEntry).where(
+            ScheduleEntry.year == year,
+            ScheduleEntry.month == month,
+            ScheduleEntry.user_id == user_id,
+            ScheduleEntry.day == day,
+        )
+        row = (await session.execute(stmt)).scalar_one_or_none()
+    new_code = _norm_code(code)
+
+    if row is not None and row.code is None:
+        if not (new_code and _is_vacation(new_code)):
+            return False
+
+    if new_code is None:
+        if row:
+            await session.delete(row)
+            if rows is not None:
+                rows.pop(day, None)
+            return True
+        return False
+    if row:
+        row.code = new_code
+        row.updated_by_id = editor_id
+        return True
+    created = ScheduleEntry(
+        year=year,
+        month=month,
+        day=day,
+        user_id=user_id,
+        code=new_code,
+        updated_by_id=editor_id,
+    )
+    session.add(created)
+    if rows is not None:
+        rows[day] = created
+    return True
+
+
 def _schedule_cell_equal(a: str | None, b: str | None) -> bool:
     """Сравнение кода ячейки с шаблоном при пересборке графика."""
     na = _norm_code(a)
@@ -626,10 +684,12 @@ async def run_schedule_autofill(
         )
     ).scalars().all()
 
+    rows_by_user: dict[uuid.UUID, dict[int, ScheduleEntry]] = {}
     by_user: dict[uuid.UUID, dict[int, str | None]] = {}
     for e in entries:
         if e.day < 1 or e.day > dim:
             continue
+        rows_by_user.setdefault(e.user_id, {})[e.day] = e
         by_user.setdefault(e.user_id, {})[e.day] = e.code
     prev_dim = calendar.monthrange(prev_year, prev_month)[1]
     prev_by_user: dict[uuid.UUID, dict[int, str | None]] = {}
@@ -695,33 +755,17 @@ async def run_schedule_autofill(
             new_cells[d] = vac_codes.get(d, "о")
 
         for day, code in new_cells.items():
-            stmt = select(ScheduleEntry).where(
-                ScheduleEntry.year == year,
-                ScheduleEntry.month == month,
-                ScheduleEntry.user_id == u.id,
-                ScheduleEntry.day == day,
-            )
-            row = (await session.execute(stmt)).scalar_one_or_none()
-            if code is None:
-                if row:
-                    await session.delete(row)
-                    written += 1
-                continue
-            if row:
-                row.code = code
-                row.updated_by_id = editor_id
-            else:
-                session.add(
-                    ScheduleEntry(
-                        year=year,
-                        month=month,
-                        day=day,
-                        user_id=u.id,
-                        code=code,
-                        updated_by_id=editor_id,
-                    )
-                )
-            written += 1
+            if await _persist_generated_cell(
+                session,
+                year=year,
+                month=month,
+                user_id=u.id,
+                day=day,
+                code=code,
+                editor_id=editor_id,
+                rows=rows_by_user.setdefault(u.id, {}),
+            ):
+                written += 1
 
     await session.commit()
     return written
@@ -764,9 +808,11 @@ async def run_schedule_regenerate_from_manual(
             select(ScheduleEntry).where(ScheduleEntry.year == year, ScheduleEntry.month == month)
         )
     ).scalars().all()
+    rows_by_user: dict[uuid.UUID, dict[int, ScheduleEntry]] = {}
     by_user: dict[uuid.UUID, dict[int, str | None]] = {}
     for e in entries:
         if 1 <= e.day <= dim:
+            rows_by_user.setdefault(e.user_id, {})[e.day] = e
             by_user.setdefault(e.user_id, {})[e.day] = e.code
 
     now = datetime.now(timezone.utc)
@@ -898,34 +944,17 @@ async def run_schedule_regenerate_from_manual(
 
     written = 0
     for day in range(1, dim + 1):
-        code = _norm_code(new_cells.get(day))
-        stmt = select(ScheduleEntry).where(
-            ScheduleEntry.year == year,
-            ScheduleEntry.month == month,
-            ScheduleEntry.user_id == u.id,
-            ScheduleEntry.day == day,
-        )
-        row = (await session.execute(stmt)).scalar_one_or_none()
-        if code is None:
-            if row:
-                await session.delete(row)
-                written += 1
-            continue
-        if row:
-            row.code = code
-            row.updated_by_id = editor_id
-        else:
-            session.add(
-                ScheduleEntry(
-                    year=year,
-                    month=month,
-                    day=day,
-                    user_id=u.id,
-                    code=code,
-                    updated_by_id=editor_id,
-                )
-            )
-        written += 1
+        if await _persist_generated_cell(
+            session,
+            year=year,
+            month=month,
+            user_id=u.id,
+            day=day,
+            code=new_cells.get(day),
+            editor_id=editor_id,
+            rows=rows_by_user.setdefault(u.id, {}),
+        ):
+            written += 1
 
     await session.commit()
     return written

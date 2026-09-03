@@ -3,13 +3,12 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime, timezone
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, JSON, String, Text
-
-from app.models.employee_work_schedule import EMPLOYEE_GENDER_UNSPECIFIED, WORK_SCHEDULE_FIVE_TWO
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, String, Text
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+from app.models.employee_work_schedule import EMPLOYEE_GENDER_UNSPECIFIED, WORK_SCHEDULE_FIVE_TWO
 
 
 class EmployeeProfile(Base):
@@ -35,7 +34,7 @@ class EmployeeProfile(Base):
 
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Периоды отпуска для графика: [{"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}, ...]
-    vacation_periods: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    vacation_periods: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     # five_two — пятидневка (автозаполнение 8 / 7.2); shift — сменщик (автозаполнение смен позже)
     work_schedule_kind: Mapped[str] = mapped_column(String(32), default=WORK_SCHEDULE_FIVE_TWO, nullable=False)
     # male / female / unspecified — при 5/2 из пола считаются 8 ч или 7.2 ч

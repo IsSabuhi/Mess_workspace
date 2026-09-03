@@ -43,18 +43,15 @@ from app.services.authz import (
     USER_LOAD_OPTIONS,
     get_user_by_id,
     user_sees_all_tasks,
+    user_system_id_set,
 )
 from app.services.board_members import allowed_assignee_ids_for_board, effective_board_member_role
 from app.services.employee_excel_import import parse_employee_excel_xlsx
 from app.services.employee_import_service import run_employee_import
+from app.services.sql_like import ilike_contains, ilike_escape_char
 from app.services.users_display import user_to_out
 
 router = APIRouter(prefix="/users", tags=["users"])
-
-
-async def _system_ids_for_user(session: AsyncSession, user_id: uuid.UUID) -> list[uuid.UUID]:
-    r = await session.execute(select(UserSystem.system_id).where(UserSystem.user_id == user_id))
-    return list(r.scalars().all())
 
 
 async def _can_see_board_for_assignees(session: AsyncSession, user: User, board: Board) -> bool:
@@ -109,7 +106,7 @@ async def list_assignee_candidates(
         result = await session.execute(stmt)
         return [user_to_out(u) for u in result.scalars().unique().all()]
 
-    system_ids = await _system_ids_for_user(session, current.id)
+    system_ids = list(await user_system_id_set(session, current.id))
     if not system_ids:
         return []
 
@@ -134,9 +131,15 @@ async def list_users(
 ) -> UserListOut:
     filters = []
     needle = (q or "").strip()
-    if needle:
-        pattern = f"%{needle}%"
-        filters.append(or_(User.email.ilike(pattern), User.full_name.ilike(pattern)))
+    pattern = ilike_contains(needle)
+    if pattern:
+        esc = ilike_escape_char()
+        filters.append(
+            or_(
+                User.email.ilike(pattern, escape=esc),
+                User.full_name.ilike(pattern, escape=esc),
+            )
+        )
 
     count_stmt = select(func.count()).select_from(User)
     if filters:

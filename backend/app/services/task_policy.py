@@ -1,7 +1,12 @@
+from __future__ import annotations
+
+from collections.abc import Sequence
+
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Board, Task, User, UserSystem
+from app.models import Board, Task, User
 from app.models.board import (
     BOARD_MEMBER_ROLE_EDITOR,
     BOARD_MEMBER_ROLE_MANAGER,
@@ -15,24 +20,38 @@ from app.permissions import (
     TASKS_UPDATE_ALL,
     TASKS_UPDATE_ASSIGNED,
 )
-from app.services.authz import user_has_permission, user_sees_all_tasks
+from app.services.authz import (
+    get_user_permission_codes,
+    user_has_permission,
+    user_sees_all_tasks,
+    user_system_id_set,
+)
 from app.services.board_lock import can_bypass_board_editing_lock, is_global_board_locked
-from app.services.board_members import effective_board_member_role
+from app.services.board_members import effective_board_member_role, prefetch_board_member_roles
 
 
-async def _user_system_id_set(session: AsyncSession, user_id) -> set:
-    r = await session.execute(select(UserSystem.system_id).where(UserSystem.user_id == user_id))
-    return set(r.scalars().all())
-
-
-def _user_in_task_assignees(task: Task, user_id) -> bool:
+async def _user_in_task_assignees(task: Task, user_id) -> bool:
     return any(a.id == user_id for a in (task.assignees or []))
 
 
+def _attached_board(task: Task) -> Board | None:
+    """Уже загруженная доска без lazy-load в async."""
+    state = sa_inspect(task)
+    if "board" in state.unloaded:
+        return None
+    return task.board
+
+
 async def _board_for_task(session: AsyncSession, task: Task) -> Board | None:
-    # Avoid touching task.board relationship directly here:
-    # in async mode it can trigger lazy-load outside greenlet context.
-    return await session.get(Board, task.board_id)
+    loaded = _attached_board(task)
+    if loaded is not None:
+        return loaded
+    cache: dict = session.info.setdefault("_board_by_id", {})
+    if task.board_id in cache:
+        return cache[task.board_id]
+    board = await session.get(Board, task.board_id)
+    cache[task.board_id] = board
+    return board
 
 
 async def _board_member_role(session: AsyncSession, board: Board, user_id) -> str | None:
@@ -53,12 +72,40 @@ async def can_read_task(session: AsyncSession, user: User, task: Task) -> bool:
 
     if await user_sees_all_tasks(session, user):
         return True
-    if task.system_id in await _user_system_id_set(session, user.id):
+    if task.system_id in await user_system_id_set(session, user.id):
         return True
     if await user_has_permission(session, user, TASKS_READ_ASSIGNED):
         if _user_in_task_assignees(task, user.id):
             return True
     return False
+
+
+async def filter_readable_tasks(session: AsyncSession, user: User, tasks: Sequence[Task]) -> list[Task]:
+    """Список задач с проверкой can_read_task без N+1: права, системы и роли досок — один раз."""
+    if not tasks:
+        return []
+    if await user_sees_all_tasks(session, user):
+        return list(tasks)
+
+    await get_user_permission_codes(session, user)
+    await user_system_id_set(session, user.id)
+
+    boards: dict = {}
+    missing_ids: set = set()
+    for task in tasks:
+        loaded = _attached_board(task)
+        if loaded is not None:
+            boards[loaded.id] = loaded
+        elif task.board_id not in boards:
+            missing_ids.add(task.board_id)
+    if missing_ids:
+        found = (await session.execute(select(Board).where(Board.id.in_(missing_ids)))).scalars().all()
+        for board in found:
+            boards[board.id] = board
+    session.info.setdefault("_board_by_id", {}).update(boards)
+
+    await prefetch_board_member_roles(session, user.id, list(boards.values()))
+    return [task for task in tasks if await can_read_task(session, user, task)]
 
 
 async def _has_task_edit_permission(session: AsyncSession, user: User, task: Task) -> bool:
@@ -74,7 +121,7 @@ async def _has_task_edit_permission(session: AsyncSession, user: User, task: Tas
         if await user_has_permission(session, user, TASKS_UPDATE_ASSIGNED):
             if _user_in_task_assignees(task, user.id):
                 return True
-            if task.system_id in await _user_system_id_set(session, user.id):
+            if task.system_id in await user_system_id_set(session, user.id):
                 return True
         return False
 
@@ -85,7 +132,7 @@ async def _has_task_edit_permission(session: AsyncSession, user: User, task: Tas
     if await user_has_permission(session, user, TASKS_UPDATE_ASSIGNED):
         if _user_in_task_assignees(task, user.id):
             return True
-        if task.system_id in await _user_system_id_set(session, user.id):
+        if task.system_id in await user_system_id_set(session, user.id):
             return True
     return False
 
@@ -161,7 +208,7 @@ async def can_move_task(session: AsyncSession, user: User, task: Task) -> bool:
         if await user_has_permission(session, user, TASKS_UPDATE_ASSIGNED):
             if _user_in_task_assignees(task, user.id):
                 return True
-            if task.system_id in await _user_system_id_set(session, user.id):
+            if task.system_id in await user_system_id_set(session, user.id):
                 return True
         return False
 
@@ -174,6 +221,6 @@ async def can_move_task(session: AsyncSession, user: User, task: Task) -> bool:
     if await user_has_permission(session, user, TASKS_UPDATE_ASSIGNED):
         if _user_in_task_assignees(task, user.id):
             return True
-        if task.system_id in await _user_system_id_set(session, user.id):
+        if task.system_id in await user_system_id_set(session, user.id):
             return True
     return False

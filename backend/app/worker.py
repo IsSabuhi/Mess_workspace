@@ -20,6 +20,8 @@ from app.services.notifications import (
     sync_note_reminder_notifications,
     sync_task_deadline_notifications_all,
 )
+from app.services.storage_gc import gc_orphan_stored_files
+from app.services.task_archive import auto_archive_done_tasks
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -51,10 +53,27 @@ async def sync_notifications_job(_: dict[str, Any]) -> dict[str, int]:
     results: dict[str, int] = {}
     async with async_session_maker() as session:
         for name, check in NOTIFICATION_CHECKS.items():
-            results[name] = await check(session)
-        results["cleanup"] = await cleanup_old_notifications(session)
+            try:
+                results[name] = await check(session)
+            except Exception:
+                logger.exception("Notification check %s failed", name)
+                results[name] = -1
+        try:
+            results["cleanup"] = await cleanup_old_notifications(session)
+        except Exception:
+            logger.exception("Notification cleanup failed")
+            results["cleanup"] = -1
     logger.info("Notification checks completed: %s", results)
     return results
+
+
+async def auto_archive_done_tasks_job(_: dict[str, Any]) -> int:
+    """Снимает с доски выполненные задачи старше порога из настроек. Не вызывать из GET."""
+    async with async_session_maker() as session:
+        archived = await auto_archive_done_tasks(session)
+        await session.commit()
+    logger.info("Auto-archived done tasks: %s", archived)
+    return archived
 
 
 async def purge_auth_sessions_job(_: dict[str, Any]) -> int:
@@ -64,6 +83,14 @@ async def purge_auth_sessions_job(_: dict[str, Any]) -> int:
         await session.commit()
     logger.info("Purged expired refresh sessions: %s", removed)
     return removed
+
+
+async def gc_orphan_stored_files_job(_: dict[str, Any]) -> dict[str, int]:
+    """Сироты MinIO/uploads. По умолчанию только считает; удаляет при STORAGE_GC_ENABLED=true."""
+    async with async_session_maker() as session:
+        result = await gc_orphan_stored_files(session)
+    logger.info("Storage GC job: %s", result)
+    return result
 
 
 async def create_database_backup(ctx: dict[str, Any], backup_id: str) -> None:
@@ -76,7 +103,7 @@ async def create_database_backup(ctx: dict[str, Any], backup_id: str) -> None:
 
 
 async def schedule_daily_backup(ctx: dict[str, Any]) -> str:
-    """Раз в час: если уже наступило окно и сегодня дампа ещё нет — ставим в очередь."""
+    """Каждые 5 минут: если наступило окно и сегодня дампа ещё нет — ставим в очередь."""
     async with async_session_maker() as session:
         result = await maybe_enqueue_scheduled_backup(session, redis=ctx.get("redis"))
     logger.info("Scheduled backup check: %s", result)
@@ -98,6 +125,8 @@ class WorkerSettings:
         func(create_database_backup, name="create_database_backup", timeout=1800, max_tries=2),
         schedule_daily_backup,
         purge_auth_sessions_job,
+        auto_archive_done_tasks_job,
+        func(gc_orphan_stored_files_job, name="gc_orphan_stored_files_job", timeout=600),
     ]
     cron_jobs = [
         cron(
@@ -120,6 +149,21 @@ class WorkerSettings:
             minute={20},
             unique=True,
             job_id="purge-auth-sessions",
+        ),
+        cron(
+            auto_archive_done_tasks_job,
+            hour={3},
+            minute={40},
+            unique=True,
+            job_id="auto-archive-done-tasks",
+            run_at_startup=True,
+        ),
+        cron(
+            gc_orphan_stored_files_job,
+            hour={4},
+            minute={50},
+            unique=True,
+            job_id="gc-orphan-stored-files",
         ),
     ]
     redis_settings = RedisSettings.from_dsn(settings.redis_url)

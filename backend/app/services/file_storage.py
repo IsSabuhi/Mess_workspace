@@ -1,9 +1,14 @@
+import logging
 import re
 import uuid
+from collections.abc import Iterable
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
 import boto3
+
+logger = logging.getLogger(__name__)
 
 from app.config import get_settings
 from app.paths import UPLOAD_KB_DIR, UPLOAD_NOTES_DIR, UPLOAD_TASKS_DIR, UPLOAD_USPD_DIR
@@ -97,6 +102,120 @@ def rewrite_stored_media_urls(html: str | None) -> str | None:
         rf"{target}/\1",
         out,
     )
+    return out
+
+
+# kb/notes/tasks/uspd + uuid.hex + расширение — так _store и save_*_file кладут объекты.
+_STORED_KEY_RE = re.compile(
+    r"(?:^|/)(?P<key>(?:kb|notes|tasks|uspd)/[0-9a-f]{32}\.[A-Za-z0-9]{1,8})",
+    re.IGNORECASE,
+)
+
+_PREFIX_DIRS = {
+    "kb": UPLOAD_KB_DIR,
+    "notes": UPLOAD_NOTES_DIR,
+    "tasks": UPLOAD_TASKS_DIR,
+    "uspd": UPLOAD_USPD_DIR,
+}
+
+
+def stored_key_from_url(url: str | None) -> str | None:
+    """Достаёт ключ объекта из публичного URL (MinIO или /uploads/...)."""
+    if not url:
+        return None
+    m = _STORED_KEY_RE.search(str(url).replace("\\", "/"))
+    if not m:
+        return None
+    prefix, name = m.group("key").split("/", 1)
+    return f"{prefix.lower()}/{name.lower()}"
+
+
+def stored_keys_from_text(text: str | None) -> set[str]:
+    """Все ключи хранилища, упомянутые в HTML/markdown."""
+    if not text:
+        return set()
+    out: set[str] = set()
+    for m in _STORED_KEY_RE.finditer(str(text).replace("\\", "/")):
+        prefix, name = m.group("key").split("/", 1)
+        out.add(f"{prefix.lower()}/{name.lower()}")
+    return out
+
+
+def delete_stored_files(urls: Iterable[str | None]) -> int:
+    keys = {stored_key_from_url(u) for u in urls}
+    return delete_stored_keys(k for k in keys if k)
+
+
+def delete_stored_keys(keys: Iterable[str]) -> int:
+    """Удаляет объекты. Ошибки глотаем: лучше сирота, чем 500 после успешного commit в БД."""
+    deleted = 0
+    uniq = [k for k in dict.fromkeys(keys) if k]
+    if not uniq:
+        return 0
+    if _is_minio():
+        s = get_settings()
+        client = _minio_client()
+        for key in uniq:
+            try:
+                client.delete_object(Bucket=s.minio_bucket, Key=key)
+                deleted += 1
+            except Exception:
+                logger.warning("Не удалось удалить объект MinIO %s", key, exc_info=True)
+        return deleted
+    for key in uniq:
+        prefix, _, name = key.partition("/")
+        folder = _PREFIX_DIRS.get(prefix)
+        if not folder or not name or "/" in name or name in {".", ".."}:
+            continue
+        try:
+            (folder / name).unlink(missing_ok=True)
+            deleted += 1
+        except OSError:
+            logger.warning("Не удалось удалить файл %s", key, exc_info=True)
+    return deleted
+
+
+def list_stored_objects() -> list[tuple[str, datetime]]:
+    """Объекты наших префиксов: (key, last_modified UTC)."""
+    if _is_minio():
+        return _list_minio_objects()
+    out: list[tuple[str, datetime]] = []
+    for prefix, folder in _PREFIX_DIRS.items():
+        if not folder.is_dir():
+            continue
+        for path in folder.iterdir():
+            if not path.is_file():
+                continue
+            key = stored_key_from_url(f"{prefix}/{path.name}")
+            if not key:
+                continue
+            mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+            out.append((key, mtime))
+    return out
+
+
+def _list_minio_objects() -> list[tuple[str, datetime]]:
+    s = get_settings()
+    client = _minio_client()
+    out: list[tuple[str, datetime]] = []
+    for prefix in _PREFIX_DIRS:
+        token: str | None = ""
+        while token is not None:
+            kwargs: dict = {"Bucket": s.minio_bucket, "Prefix": f"{prefix}/"}
+            if token:
+                kwargs["ContinuationToken"] = token
+            resp = client.list_objects_v2(**kwargs)
+            for obj in resp.get("Contents") or []:
+                key = stored_key_from_url(obj.get("Key") or "")
+                if not key:
+                    continue
+                lm = obj.get("LastModified")
+                if lm is None:
+                    continue
+                if lm.tzinfo is None:
+                    lm = lm.replace(tzinfo=timezone.utc)
+                out.append((key, lm.astimezone(timezone.utc)))
+            token = resp.get("NextContinuationToken") if resp.get("IsTruncated") else None
     return out
 
 

@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     backup_retention_days: int = Field(default=10, ge=1, le=365)
     backup_hour: int = Field(default=3, ge=0, le=23)
     backup_minute: int = Field(default=0, ge=0, le=59)
-    backup_tz: str = "Asia/Bangkok"
+    backup_tz: str = "Asia/Krasnoyarsk"
     # При старте API выполняется alembic upgrade head (удобно для новой пустой БД). В проде при желании отключите.
     auto_migrate_on_startup: bool = True
     secret_key: str = "change-me"
@@ -52,8 +52,14 @@ class Settings(BaseSettings):
     minio_public_base_url: str = "/mes/files"
     # Публичный base path фронта (BrowserRouter basename) для ссылок в HTML статей
     public_app_base: str = "/mes"
+    # Сбор сирот MinIO/uploads. false = только посчитать в лог воркера, ничего не удалять.
+    storage_gc_enabled: bool = False
+    storage_gc_min_age_days: int = Field(default=14, ge=1, le=365)
     # Ключ Fernet для паролей УСПД. Если пусто — берётся SHA-256 от SECRET_KEY.
     uspd_secrets_key: str = ""
+    # Кому верить X-Real-IP (nginx). Локальный uvicorn: loopback.
+    # Docker: сеть compose (см. TRUSTED_PROXY_IPS в .env.template), иначе в аудите IP контейнера web.
+    trusted_proxy_ips: str = "127.0.0.1,::1"
 
 
 @lru_cache

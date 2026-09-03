@@ -1,3 +1,5 @@
+import os
+import tempfile
 import uuid
 from typing import Annotated
 from uuid import UUID
@@ -49,13 +51,14 @@ from app.services.authz import user_has_permission
 from app.schemas.upload import UploadOut
 from app.security import verify_password
 from app.services.knowledge_access import can_edit_article, can_manage_space_acl, can_read_space, can_view_article
-from app.services.knowledge_children_toc import sync_parent_children_toc
+from app.services.knowledge_children_toc import sync_parent_children_toc, sync_parents_children_toc
 from app.services.knowledge_space_members import (
     build_space_member_list,
     sync_system_members_on_space_create,
     user_in_space_system,
 )
 from app.services.file_storage import rewrite_stored_media_urls, save_kb_image
+from app.services.sql_like import ilike_contains, ilike_escape_char
 from app.services.knowledge_obsidian import (
     ImportItems,
     add_import_bytes,
@@ -351,9 +354,10 @@ async def space_user_directory(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN)
 
     stmt = select(User.id, User.email, User.full_name).where(User.is_active.is_(True), user_is_not_dismissed())
-    if q.strip():
-        pat = f"%{q.strip()}%"
-        stmt = stmt.where(or_(User.email.ilike(pat), User.full_name.ilike(pat)))
+    pat = ilike_contains(q)
+    if pat:
+        esc = ilike_escape_char()
+        stmt = stmt.where(or_(User.email.ilike(pat, escape=esc), User.full_name.ilike(pat, escape=esc)))
     stmt = stmt.order_by(User.email).limit(50)
     result = await session.execute(stmt)
     return [KnowledgeDirectoryUser(id=row.id, email=row.email, full_name=row.full_name) for row in result.all()]
@@ -466,6 +470,36 @@ _MAX_IMPORT_FILES = 8000
 _MAX_ZIP_BYTES = 400 * 1024 * 1024
 _MAX_ZIP_UNCOMPRESSED = 1_200 * 1024 * 1024
 _KB_IMPORT_ADMIN = require_any_permission(ADMIN_IMPORT_KNOWLEDGE, KNOWLEDGE_MANAGE_ALL)
+_ZIP_SPOOL_CHUNK = 1024 * 1024
+
+
+async def _spool_upload_to_temp(upload: StarletteUploadFile, max_bytes: int) -> tuple[str, int]:
+    """Пишет upload на диск чанками: zip не держим целиком в RAM."""
+    fd, path = tempfile.mkstemp(suffix=".zip")
+    total = 0
+    try:
+        with os.fdopen(fd, "wb") as out:
+            fd = -1
+            while True:
+                chunk = await upload.read(_ZIP_SPOOL_CHUNK)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_bytes:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Zip больше 400 МБ",
+                    )
+                out.write(chunk)
+        return path, total
+    except Exception:
+        if fd >= 0:
+            os.close(fd)
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        raise
 
 
 def _as_uploads(value: object) -> list[StarletteUploadFile]:
@@ -523,32 +557,36 @@ async def import_obsidian_knowledge(
         items = ImportItems()
         for archive in archives:
             name = (archive.filename or "").lower()
-            raw = await archive.read()
-            if not raw:
-                continue
-            if len(raw) > _MAX_ZIP_BYTES:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Zip больше 400 МБ",
-                )
-            if not (name.endswith(".zip") or (archive.content_type or "").endswith("zip")):
-                if raw[:4] != b"PK\x03\x04" and raw[:4] != b"PK\x05\x06":
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Архив должен быть в формате zip",
-                    )
+            tmp_path: str | None = None
             try:
+                tmp_path, total = await _spool_upload_to_temp(archive, _MAX_ZIP_BYTES)
+                if total == 0:
+                    continue
+                if not (name.endswith(".zip") or (archive.content_type or "").endswith("zip")):
+                    with open(tmp_path, "rb") as probe:
+                        magic = probe.read(4)
+                    if magic not in (b"PK\x03\x04", b"PK\x05\x06"):
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Архив должен быть в формате zip",
+                        )
                 unpacked = unpack_obsidian_zip(
-                    raw,
+                    tmp_path,
                     max_md_bytes=_MAX_MD_BYTES,
                     max_image_bytes=_MAX_UPLOAD_BYTES,
                     max_files=_MAX_IMPORT_FILES,
                     max_uncompressed=_MAX_ZIP_UNCOMPRESSED,
                 )
+                items.notes.extend(unpacked.notes)
+                items.images.extend(unpacked.images)
             except ValueError as exc:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-            items.notes.extend(unpacked.notes)
-            items.images.extend(unpacked.images)
+            finally:
+                if tmp_path:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
 
         for upload in uploads:
             filename = normalize_relpath(upload.filename or "") or (upload.filename or "без имени")
@@ -736,8 +774,7 @@ async def import_obsidian_knowledge(
                 )
             )
 
-    for pid in parents_to_sync:
-        await sync_parent_children_toc(session, space_id, pid, sync_ancestors=True)
+    await sync_parents_children_toc(session, space_id, parents_to_sync, sync_ancestors=True)
 
     return KnowledgeObsidianImportOut(
         created=created,
@@ -830,8 +867,16 @@ async def search_articles(
                 KnowledgeArticle.created_by_id == user.id,
             )
         )
-    like = f"%{query}%"
-    stmt = stmt.where(or_(KnowledgeArticle.title.ilike(like), KnowledgeArticle.content.ilike(like))).order_by(
+    like = ilike_contains(query)
+    if not like:
+        return []
+    esc = ilike_escape_char()
+    stmt = stmt.where(
+        or_(
+            KnowledgeArticle.title.ilike(like, escape=esc),
+            KnowledgeArticle.content.ilike(like, escape=esc),
+        )
+    ).order_by(
         KnowledgeArticle.updated_at.desc()
     ).limit(50)
     rows = (await session.execute(stmt)).scalars().all()

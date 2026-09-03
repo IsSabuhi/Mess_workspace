@@ -29,7 +29,7 @@ BACKUP_MINUTE_KEY = "backup_minute"
 
 
 def backup_tzinfo():
-    name = (get_settings().backup_tz or "Asia/Bangkok").strip() or "Asia/Bangkok"
+    name = (get_settings().backup_tz or "Asia/Krasnoyarsk").strip() or "Asia/Krasnoyarsk"
     try:
         return ZoneInfo(name)
     except Exception:  # noqa: BLE001
@@ -126,7 +126,7 @@ async def get_backup_schedule_settings(session: AsyncSession) -> BackupScheduleS
         retention_days=retention_days,
         hour=hour,
         minute=minute,
-        timezone=defaults.backup_tz or "Asia/Bangkok",
+        timezone=defaults.backup_tz or "Asia/",
         keep_max=max(1, defaults.backup_keep),
         latest_size_bytes=int(latest) if latest is not None else None,
         estimated_bytes=estimated,

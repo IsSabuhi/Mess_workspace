@@ -15,10 +15,30 @@ USER_LOAD_OPTIONS = (
     selectinload(User.system_memberships).selectinload(UserSystem.system),
 )
 
+_PERM_CODES_CACHE = "_perm_codes_by_user"
+_SYSTEM_IDS_CACHE = "_user_system_ids"
+
+
+async def user_system_id_set(session: AsyncSession, user_id: uuid.UUID) -> set[uuid.UUID]:
+    """Производственные системы пользователя (кэш на сессию запроса)."""
+    cache: dict = session.info.setdefault(_SYSTEM_IDS_CACHE, {})
+    cached = cache.get(user_id)
+    if cached is not None:
+        return cached
+    r = await session.execute(select(UserSystem.system_id).where(UserSystem.user_id == user_id))
+    ids = set(r.scalars().all())
+    cache[user_id] = ids
+    return ids
+
 
 async def get_user_permission_codes(session: AsyncSession, user: User) -> set[str]:
     if user.is_superuser:
         return set()
+
+    cache: dict = session.info.setdefault(_PERM_CODES_CACHE, {})
+    cached = cache.get(user.id)
+    if cached is not None:
+        return cached
 
     stmt = (
         select(Permission.code)
@@ -28,7 +48,9 @@ async def get_user_permission_codes(session: AsyncSession, user: User) -> set[st
         .where(UserRole.user_id == user.id)
     )
     result = await session.execute(stmt)
-    return {row[0] for row in result.all()}
+    codes = {row[0] for row in result.all()}
+    cache[user.id] = codes
+    return codes
 
 
 async def user_has_permission(session: AsyncSession, user: User, code: str) -> bool:
@@ -44,11 +66,8 @@ async def user_sees_all_tasks(session: AsyncSession, user: User) -> bool:
     """Задачи по всем производственным системам (руководитель / полный доступ к задачам)."""
     if user.is_superuser:
         return True
-    if await user_has_permission(session, user, TASKS_READ_ALL):
-        return True
-    if await user_has_permission(session, user, TASKS_UPDATE_ALL):
-        return True
-    return False
+    codes = await get_user_permission_codes(session, user)
+    return TASKS_READ_ALL in codes or TASKS_UPDATE_ALL in codes
 
 
 async def get_user_by_email(session: AsyncSession, email: str) -> User | None:

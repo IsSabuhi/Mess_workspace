@@ -37,7 +37,9 @@ class Task(Base):
     column_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("kanban_columns.id", ondelete="RESTRICT"), nullable=False)
     system_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("systems.id", ondelete="RESTRICT"), nullable=False)
 
-    creator_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    creator_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
 
     priority: Mapped[TaskPriority] = mapped_column(
         Enum(TaskPriority, name="task_priority", values_callable=lambda x: [e.value for e in x]),
@@ -46,6 +48,7 @@ class Task(Base):
     )
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     estimate_hours: Mapped[float | None] = mapped_column(Numeric(8, 2), nullable=True)
     checklist: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

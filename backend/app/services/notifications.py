@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import and_, delete, or_, select
+from sqlalchemy import and_, delete, or_, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,6 +35,10 @@ _RETENTION_DAYS_MIN = 7
 _RETENTION_DAYS_MAX = 3650
 
 _DUE_SOON_WINDOW = timedelta(days=3)
+# Совпадает с частичным unique-индексом uq_notifications_user_type_task (только дедлайны).
+_DEADLINE_TASK_UNIQUE_WHERE = text(
+    "type IN ('task_due_3_days'::notification_type, 'task_overdue'::notification_type)"
+)
 
 
 def _clamp_retention_days(value: int) -> int:
@@ -191,7 +195,10 @@ async def sync_task_deadline_notifications_for_user(session: AsyncSession, user_
     result = await session.execute(
         insert(Notification)
         .values(payloads)
-        .on_conflict_do_nothing(index_elements=["user_id", "type", "task_id"])
+        .on_conflict_do_nothing(
+            index_elements=["user_id", "type", "task_id"],
+            index_where=_DEADLINE_TASK_UNIQUE_WHERE,
+        )
         .returning(Notification.id)
     )
     return len(result.scalars().all())
@@ -230,7 +237,10 @@ async def sync_task_deadline_notifications_all(session: AsyncSession) -> int:
     result = await session.execute(
         insert(Notification)
         .values(payloads)
-        .on_conflict_do_nothing(index_elements=["user_id", "type", "task_id"])
+        .on_conflict_do_nothing(
+            index_elements=["user_id", "type", "task_id"],
+            index_where=_DEADLINE_TASK_UNIQUE_WHERE,
+        )
         .returning(Notification.id)
     )
     created = len(result.scalars().all())

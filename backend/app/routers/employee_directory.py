@@ -582,7 +582,7 @@ async def import_vacations_excel(
         await record_audit_event(
             session,
             entity_type="employee_directory",
-            entity_id=editor.id,
+            entity_id=None,
             action="employee_directory.vacations.imported",
             actor_user_id=editor.id,
             details={"created": created, "updated": updated, "skipped": skipped, "unmatched": unmatched, "employees": touched},

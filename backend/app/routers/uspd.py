@@ -30,6 +30,7 @@ from app.schemas.uspd import (
 from app.services.audit import record_audit_event
 from app.services.file_storage import save_uspd_image
 from app.services.secret_crypto import decrypt_secret, encrypt_secret
+from app.services.sql_like import ilike_contains, ilike_escape_char
 from app.services.uspd_obsidian import parse_obsidian_note
 from app.services.uspd_sim_excel import extract_ipv4, is_gsm_object, parse_uspd_sim_excel
 
@@ -136,27 +137,27 @@ async def list_sites(
     q: str = Query("", max_length=200),
 ) -> list[UspdSiteOut]:
     stmt = select(UspdSite).options(selectinload(UspdSite.entries))
-    needle = q.strip()
-    if needle:
-        like = f"%{needle}%"
+    like = ilike_contains(q)
+    if like:
+        esc = ilike_escape_char()
         stmt = stmt.where(
             or_(
-                UspdSite.name.ilike(like),
-                UspdSite.notes.ilike(like),
+                UspdSite.name.ilike(like, escape=esc),
+                UspdSite.notes.ilike(like, escape=esc),
                 exists()
                 .where(UspdEntry.site_id == UspdSite.id)
                 .where(
                     or_(
-                        UspdEntry.object_name.ilike(like),
-                        UspdEntry.hw_model.ilike(like),
-                        UspdEntry.device_eui.ilike(like),
-                        UspdEntry.ip.ilike(like),
-                        UspdEntry.username.ilike(like),
-                        UspdEntry.comment.ilike(like),
-                        UspdEntry.section.ilike(like),
-                        UspdEntry.sim_number.ilike(like),
-                        UspdEntry.sim_ip.ilike(like),
-                        UspdEntry.sim_iccid.ilike(like),
+                        UspdEntry.object_name.ilike(like, escape=esc),
+                        UspdEntry.hw_model.ilike(like, escape=esc),
+                        UspdEntry.device_eui.ilike(like, escape=esc),
+                        UspdEntry.ip.ilike(like, escape=esc),
+                        UspdEntry.username.ilike(like, escape=esc),
+                        UspdEntry.comment.ilike(like, escape=esc),
+                        UspdEntry.section.ilike(like, escape=esc),
+                        UspdEntry.sim_number.ilike(like, escape=esc),
+                        UspdEntry.sim_ip.ilike(like, escape=esc),
+                        UspdEntry.sim_iccid.ilike(like, escape=esc),
                     )
                 ),
             )
@@ -440,7 +441,7 @@ async def import_sim_excel(
         await record_audit_event(
             session,
             entity_type="uspd",
-            entity_id=user.id,
+            entity_id=None,
             action="uspd.sim.imported",
             actor_user_id=user.id,
             details={"created": created, "skipped": skipped, "unmatched": unmatched},

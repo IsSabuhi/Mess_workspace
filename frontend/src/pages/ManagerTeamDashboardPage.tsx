@@ -19,6 +19,7 @@ import {
   groupTasksByAssignee,
   groupTasksBySystem,
   overdueTaskRows,
+  taskClosedAtIso,
   tasksDueSoonRows,
   type BoardAnalyticsScope,
   type ClosedPeriod,
@@ -27,7 +28,7 @@ import {
 } from "../lib/taskAnalyticsFilters";
 import { canViewManagerTeamDashboard } from "../lib/permissions";
 import { taskHasAssignee } from "../lib/taskAssignees";
-import { taskInDoneColumn, taskIsActiveForDashboard } from "../lib/taskStatus";
+import { taskIsActiveForDashboard } from "../lib/taskStatus";
 import { toastApiError, toastSuccess } from "../lib/toast";
 
 const ManagerSystemsChart = lazy(() => import("../components/charts/ManagerSystemsChart"));
@@ -87,7 +88,7 @@ function createdVsClosedWeekly(tasks: TaskOut[], weeks = 8): WeeklyFlowRow[] {
     const createdIdx = bucketIndex(t.created_at);
     if (createdIdx >= 0) buckets[createdIdx]!.created += 1;
 
-    const closedAt = t.archived_at ?? (taskInDoneColumn(t) ? t.updated_at : null);
+    const closedAt = taskClosedAtIso(t);
     const closedIdx = bucketIndex(closedAt);
     if (closedIdx >= 0) buckets[closedIdx]!.closed += 1;
   }

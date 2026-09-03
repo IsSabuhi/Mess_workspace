@@ -3,17 +3,14 @@ import {
   DndContext,
   DragOverlay,
   PointerSensor,
-  useDraggable,
-  useDroppable,
   useSensor,
   useSensors,
   type DragEndEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
-import { arrayMove, SortableContext, horizontalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
+import { arrayMove, SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, CheckSquare, GripVertical, Lock, LockOpen, MessageSquare, Paperclip, Pencil, Plus, Tags, Trash2 } from "lucide-react";
+import { Lock, LockOpen, Pencil, Plus, Tags, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
@@ -50,6 +47,8 @@ import { MultiAssigneePicker } from "../components/MultiAssigneePicker";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { TaskDetailModal } from "../components/TaskDetailModal";
 import { AppShell } from "../components/AppShell";
+import { ColumnDropArea, SortableColumnShell } from "../components/kanban/KanbanColumn";
+import { DraggableTaskCard } from "../components/kanban/DraggableTaskCard";
 import { useAuth } from "../context/AuthContext";
 import {
   PERM,
@@ -69,394 +68,26 @@ import {
   canMoveTask,
   hasPermission,
 } from "../lib/permissions";
-import { computeTaskKpis, taskDueStatus } from "../lib/taskAnalyticsFilters";
-import { formatAssigneesLabel } from "../lib/taskAssignees";
+import { computeTaskKpis } from "../lib/taskAnalyticsFilters";
+import { fromLocalInput, toLocalInput } from "../lib/datetimeLocal";
+import {
+  applyColumnCreated,
+  applyColumnUpdated,
+  compareTasksOnBoard,
+  DROP_COL_PREFIX,
+  makeBoardSlug,
+  makeColumnSlug,
+  patchDefaultBoardCache,
+  SORT_COL_PREFIX,
+  sortIdForColumn,
+} from "../lib/taskBoard";
+import { activeMentionToken, applyMention } from "../lib/taskMentions";
 import { taskIsOverdueForDashboard } from "../lib/taskStatus";
 import { toastApiError, toastError, toastSuccess } from "../lib/toast";
 import { useToastQueryError } from "../lib/useToastQueryError";
 import { useModalLayer } from "../lib/useModalLayer";
 
-const PRIORITY_SORT_RANK: Record<string, number> = {
-  urgent: 0,
-  high: 1,
-  normal: 2,
-  low: 3,
-};
-
-function dueDayKey(iso: string | null): number {
-  if (!iso) return Number.POSITIVE_INFINITY;
-  const d = new Date(iso);
-  if (!Number.isFinite(d.getTime())) return Number.POSITIVE_INFINITY;
-  return d.getFullYear() * 10_000 + (d.getMonth() + 1) * 100 + d.getDate();
-}
-
-/** Ближайший срок сверху; в один день — выше приоритет; без срока — внизу, тоже по приоритету. */
-function compareTasksOnBoard(a: TaskOut, b: TaskOut): number {
-  const da = dueDayKey(a.due_at);
-  const db = dueDayKey(b.due_at);
-  if (da !== db) return da - db;
-  const pa = PRIORITY_SORT_RANK[a.priority] ?? PRIORITY_SORT_RANK.normal;
-  const pb = PRIORITY_SORT_RANK[b.priority] ?? PRIORITY_SORT_RANK.normal;
-  if (pa !== pb) return pa - pb;
-  const ta = a.due_at ? new Date(a.due_at).getTime() : NaN;
-  const tb = b.due_at ? new Date(b.due_at).getTime() : NaN;
-  const aHas = Number.isFinite(ta);
-  const bHas = Number.isFinite(tb);
-  if (aHas && bHas && ta !== tb) return ta - tb;
-  return a.title.localeCompare(b.title, "ru");
-}
-
-function formatTaskDueShort(iso: string | null): string | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (!Number.isFinite(d.getTime())) return null;
-  return d.toLocaleString("ru-RU", {
-    day: "2-digit",
-    month: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-const PRIORITY_LABEL: Record<string, string> = {
-  low: "Низкий",
-  normal: "Обычный",
-  high: "Высокий",
-  urgent: "Срочный",
-};
-
-const PRIORITY_BADGE_CLASS: Record<TaskOut["priority"], string> = {
-  low: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300",
-  normal: "bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-200",
-  high: "bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300",
-  urgent: "bg-rose-100 text-rose-800 dark:bg-rose-950/50 dark:text-rose-300",
-};
-
-function makeBoardSlug(name: string): string {
-  const raw = name
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, "_")
-    .replace(/[^a-z0-9_]/g, "")
-    .replace(/_+/g, "_")
-    .replace(/^_|_$/g, "");
-  if (raw.length >= 1) return raw.slice(0, 128);
-  return `board_${Date.now().toString(36)}`;
-}
-
 type TaskTagView = { id: string; name: string; color: string };
-
-const SORT_COL_PREFIX = "sort-col:";
-const DROP_COL_PREFIX = "drop-col:";
-function sortIdForColumn(columnId: string) {
-  return `${SORT_COL_PREFIX}${columnId}`;
-}
-function dropIdForColumn(columnId: string) {
-  return `${DROP_COL_PREFIX}${columnId}`;
-}
-
-function toLocalInput(iso: string | null): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-function fromLocalInput(s: string): string | null {
-  if (!s.trim()) return null;
-  const d = new Date(s);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toISOString();
-}
-
-function activeMentionToken(text: string): { query: string; start: number; end: number } | null {
-  const m = text.match(/(^|\s)@([^\s@]*)$/u);
-  if (!m) return null;
-  const query = m[2] ?? "";
-  const start = text.length - query.length - 1;
-  return { query, start, end: text.length };
-}
-
-function applyMention(text: string, token: { start: number; end: number }, mentionValue: string): string {
-  return `${text.slice(0, token.start)}${mentionValue} ${text.slice(token.end)}`;
-}
-
-function makeColumnSlug(name: string): string {
-  const raw = name
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, "_")
-    .replace(/[^a-z0-9_]/g, "")
-    .replace(/_+/g, "_")
-    .replace(/^_|_$/g, "");
-  if (raw.length >= 1) return raw.slice(0, 64);
-  return `col_${Date.now().toString(36)}`;
-}
-
-function ColumnDropArea({ columnId, children }: { columnId: string; children: React.ReactNode }) {
-  const { setNodeRef, isOver } = useDroppable({ id: dropIdForColumn(columnId) });
-  return (
-    <div
-      ref={setNodeRef}
-      className={`flex min-h-0 flex-1 flex-col gap-2 rounded-xl p-1 pb-2 transition-colors ${
-        isOver ? "bg-sky-50/90 ring-2 ring-sky-400/70 dark:bg-sky-950/30 dark:ring-sky-600" : ""
-      }`}
-    >
-      {children}
-    </div>
-  );
-}
-
-function DraggableTaskCard({
-  task,
-  canDrag,
-  onOpen,
-  moveButtons,
-  canDelete,
-  onDelete,
-  isOverdue,
-  isDone,
-}: {
-  task: TaskOut;
-  canDrag: boolean;
-  onOpen: () => void;
-  moveButtons?: React.ReactNode;
-  canDelete?: boolean;
-  onDelete?: () => void;
-  isOverdue?: boolean;
-  isDone?: boolean;
-}) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
-    id: task.id,
-    disabled: !canDrag,
-  });
-  const style: React.CSSProperties = {
-    transform: transform ? `translate3d(${transform.x}px,${transform.y}px,0)` : undefined,
-  };
-  const assigneesLine = formatAssigneesLabel(task);
-  const dueLabel = formatTaskDueShort(task.due_at);
-  const startedLabel = formatTaskDueShort(task.started_at ?? null);
-  const checklistItems = task.checklist ?? [];
-  const checklistTotal = checklistItems.length;
-  const checklistDone = checklistItems.filter((item) => item.done).length;
-  const commentsCount = task.comments_count ?? 0;
-  const attachmentsCount = (task.attachments ?? []).length;
-  const isDueSoon = !isDone && !isOverdue && taskDueStatus(task) === "due_soon";
-  const cardTone = isDone
-    ? "border-emerald-200/90 bg-emerald-50/80 hover:border-emerald-300 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:hover:border-emerald-700"
-    : isOverdue
-      ? "border-red-200 bg-red-50/70 hover:border-red-300 dark:border-red-900/50 dark:bg-red-950/30 dark:hover:border-red-700"
-      : isDueSoon
-        ? "border-amber-300 bg-amber-50/80 hover:border-amber-400 dark:border-amber-800/60 dark:bg-amber-950/35 dark:hover:border-amber-600"
-        : "border-slate-100 bg-white hover:border-sky-200 hover:shadow-md dark:border-slate-600 dark:bg-slate-800/80 dark:hover:border-sky-700";
-  return (
-    <div ref={setNodeRef} style={style} className={isDragging ? "z-10 opacity-90" : ""}>
-      <div className={`relative flex gap-1 rounded-xl border p-2 text-sm shadow-sm transition ${cardTone}`}>
-        {isDone && (
-          <span
-            className="absolute -right-1 -top-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500 text-white shadow-sm ring-2 ring-white dark:ring-slate-900"
-            title="Выполнено"
-            aria-label="Выполнено"
-          >
-            <Check className="h-3 w-3" strokeWidth={3} />
-          </span>
-        )}
-        {canDrag ? (
-          <button
-            type="button"
-            className="touch-none shrink-0 cursor-grab rounded-lg px-1.5 py-2 text-slate-400 hover:bg-slate-100 active:cursor-grabbing dark:hover:bg-slate-700"
-            aria-label="Перетащить"
-            {...listeners}
-            {...attributes}
-          >
-            ⋮⋮
-          </button>
-        ) : null}
-        <div className="flex min-w-0 flex-1 gap-1">
-          <button
-            type="button"
-            onClick={() => onOpen()}
-            className="min-w-0 flex-1 rounded-lg p-1 text-left"
-          >
-            <p
-              className={`font-medium ${
-                isDone
-                  ? "text-slate-600 line-through decoration-emerald-400/80 dark:text-slate-300 dark:decoration-emerald-600/80"
-                  : "text-slate-900 dark:text-white"
-              }`}
-            >
-              {task.title}
-            </p>
-            {task.system && (
-              <p className="mt-1 text-xs text-sky-700 dark:text-sky-300">{task.system.name}</p>
-            )}
-            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-              {isDone && (
-                <span className="inline-flex items-center gap-0.5 rounded-full bg-emerald-100 px-1.5 py-0.5 font-medium text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300">
-                  <Check className="h-3 w-3" strokeWidth={2.5} />
-                  Выполнено
-                </span>
-              )}
-              {isOverdue && !isDone && (
-                <span className="rounded-full bg-red-100 px-1.5 py-0.5 font-medium text-red-700 dark:bg-red-950/50 dark:text-red-300">
-                  Просрочено
-                </span>
-              )}
-              {isDueSoon && (
-                <span className="rounded-full bg-amber-100 px-1.5 py-0.5 font-medium text-amber-800 dark:bg-amber-950/50 dark:text-amber-300">
-                  Скоро срок
-                </span>
-              )}
-              {startedLabel && (
-                <span className="text-slate-500 dark:text-slate-400" title="Дата старта">
-                  с {startedLabel}
-                </span>
-              )}
-              {dueLabel && (
-                <span
-                  className={
-                    isOverdue && !isDone
-                      ? "font-medium text-red-600 dark:text-red-300"
-                      : isDueSoon
-                        ? "font-medium text-amber-700 dark:text-amber-300"
-                        : "text-slate-500 dark:text-slate-400"
-                  }
-                >
-                  до {dueLabel}
-                </span>
-              )}
-              {task.archived_at && (
-                <span className="rounded-full bg-slate-200 px-1.5 py-0.5 font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-200">
-                  Архив
-                </span>
-              )}
-              {assigneesLine && (
-                <span className="truncate" title={(task.assignees ?? []).map((a) => a.full_name).join(", ")}>
-                  {assigneesLine}
-                </span>
-              )}
-              <span
-                className={`rounded px-1.5 py-0.5 ${PRIORITY_BADGE_CLASS[task.priority] ?? PRIORITY_BADGE_CLASS.normal}`}
-              >
-                {PRIORITY_LABEL[task.priority] ?? task.priority}
-              </span>
-            </div>
-            {task.tags.length > 0 && (
-              <div className="mt-2 flex flex-wrap items-center gap-1 text-xs">
-                {task.tags.slice(0, 4).map((tag) => (
-                  <span
-                    key={tag.id}
-                    className="rounded-full px-1.5 py-0.5"
-                    style={{ backgroundColor: `${tag.color}22`, color: tag.color }}
-                  >
-                    #{tag.name}
-                  </span>
-                ))}
-                {task.tags.length > 4 && (
-                  <span className="text-slate-500 dark:text-slate-400">+{task.tags.length - 4}</span>
-                )}
-              </div>
-            )}
-            {(checklistTotal > 0 || commentsCount > 0 || attachmentsCount > 0) && (
-              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-                {checklistTotal > 0 && (
-                  <span
-                    className={`inline-flex items-center gap-1 ${
-                      checklistDone === checklistTotal
-                        ? "font-medium text-emerald-700 dark:text-emerald-300"
-                        : ""
-                    }`}
-                    title={`Чеклист: ${checklistDone} из ${checklistTotal}`}
-                  >
-                    <CheckSquare className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />
-                    <span className="tabular-nums">
-                      {checklistDone}/{checklistTotal}
-                    </span>
-                  </span>
-                )}
-                {commentsCount > 0 && (
-                  <span
-                    className="inline-flex items-center gap-1"
-                    title={`Комментарии: ${commentsCount}`}
-                  >
-                    <MessageSquare className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />
-                    <span className="tabular-nums">{commentsCount}</span>
-                  </span>
-                )}
-                {attachmentsCount > 0 && (
-                  <span
-                    className="inline-flex items-center gap-1"
-                    title={`Вложения: ${attachmentsCount}`}
-                  >
-                    <Paperclip className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />
-                    <span className="tabular-nums">{attachmentsCount}</span>
-                  </span>
-                )}
-              </div>
-            )}
-          </button>
-          {canDelete && onDelete ? (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onDelete();
-              }}
-              className="shrink-0 self-start rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/40 dark:hover:text-red-400"
-              aria-label="Удалить задачу"
-            >
-              <Trash2 className="h-4 w-4" strokeWidth={2} />
-            </button>
-          ) : null}
-        </div>
-      </div>
-      {moveButtons}
-    </div>
-  );
-}
-
-function SortableColumnShell({
-  column,
-  canReorder,
-  children,
-}: {
-  column: KanbanColumnOut;
-  canReorder: boolean;
-  children: (dragHandle: React.ReactNode) => React.ReactNode;
-}) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: sortIdForColumn(column.id),
-    disabled: !canReorder,
-  });
-  const style: React.CSSProperties = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    zIndex: isDragging ? 25 : undefined,
-  };
-  const dragHandle = canReorder ? (
-    <button
-      type="button"
-      className="touch-none shrink-0 cursor-grab rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 active:cursor-grabbing dark:hover:bg-slate-700"
-      aria-label="Переместить колонку"
-      {...listeners}
-      {...attributes}
-    >
-      <GripVertical className="h-4 w-4" strokeWidth={2} />
-    </button>
-  ) : null;
-  return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      className={`flex min-h-[calc(100vh-11rem)] min-w-[17rem] flex-1 basis-0 flex-col rounded-2xl border border-slate-200/80 bg-white/70 p-3 dark:border-slate-700 dark:bg-slate-900/50 ${
-        isDragging ? "shadow-lg ring-2 ring-sky-400/40 dark:ring-sky-600/40" : ""
-      }`}
-    >
-      {children(dragHandle)}
-    </div>
-  );
-}
 
 export function TasksPage() {
   const { state } = useAuth();
@@ -724,21 +355,12 @@ export function TasksPage() {
       return createBoardColumn(board.id, body);
     },
     onSuccess: (created) => {
-      qc.setQueryData<BoardOut>(["board", "default"], (old) => {
-        return old;
-      });
-      qc.setQueryData<BoardOut[]>(["boards"], (old) => {
-        if (!old) return old;
-        return old.map((b) => {
-          if (b.id !== board?.id) return b;
-          let cols = [...b.columns, created];
-          if (created.is_done_column) {
-            cols = cols.map((c) => (c.id === created.id ? c : { ...c, is_done_column: false }));
-          }
-          cols.sort((a, b2) => a.sort_order - b2.sort_order || a.name.localeCompare(b2.name));
-          return { ...b, columns: cols };
-        });
-      });
+      qc.setQueryData<BoardOut>(["board", "default"], (old) =>
+        patchDefaultBoardCache(old, board?.id, (b) => applyColumnCreated(b, created)),
+      );
+      qc.setQueryData<BoardOut[]>(["boards"], (old) =>
+        old?.map((b) => (b.id === board?.id ? applyColumnCreated(b, created) : b)) ?? old,
+      );
       void qc.invalidateQueries({ queryKey: ["boards"], refetchType: "none" });
       setColumnModalOpen(false);
       setNewColumnName("");
@@ -759,7 +381,10 @@ export function TasksPage() {
     },
     onSuccess: (_, columnId) => {
       qc.setQueryData<BoardOut>(["board", "default"], (old) =>
-        old,
+        patchDefaultBoardCache(old, board?.id, (b) => ({
+          ...b,
+          columns: b.columns.filter((c) => c.id !== columnId),
+        })),
       );
       qc.setQueryData<BoardOut[]>(["boards"], (old) =>
         old?.map((b) => (b.id === board?.id ? { ...b, columns: b.columns.filter((c) => c.id !== columnId) } : b)) ?? old,
@@ -783,21 +408,12 @@ export function TasksPage() {
       return updateBoardColumn(board.id, columnId, body);
     },
     onSuccess: (updated) => {
-      qc.setQueryData<BoardOut>(["board", "default"], (old) => {
-        return old;
-      });
-      qc.setQueryData<BoardOut[]>(["boards"], (old) => {
-        if (!old) return old;
-        return old.map((b) => {
-          if (b.id !== board?.id) return b;
-          let cols = b.columns.map((c) => (c.id === updated.id ? updated : c));
-          if (updated.is_done_column) {
-            cols = cols.map((c) => (c.id === updated.id ? c : { ...c, is_done_column: false }));
-          }
-          cols = [...cols].sort((a, b2) => a.sort_order - b2.sort_order || a.name.localeCompare(b2.name));
-          return { ...b, columns: cols };
-        });
-      });
+      qc.setQueryData<BoardOut>(["board", "default"], (old) =>
+        patchDefaultBoardCache(old, board?.id, (b) => applyColumnUpdated(b, updated)),
+      );
+      qc.setQueryData<BoardOut[]>(["boards"], (old) =>
+        old?.map((b) => (b.id === board?.id ? applyColumnUpdated(b, updated) : b)) ?? old,
+      );
       qc.setQueriesData<TaskOut[]>({ queryKey: tasksQueryKey }, (old) =>
         old?.map((t) => {
           if (t.column_id !== updated.id) return t;
@@ -829,7 +445,9 @@ export function TasksPage() {
       return ordered.map((c, i) => ({ ...c, sort_order: i }));
     },
     onSuccess: (withOrder) => {
-      qc.setQueryData<BoardOut>(["board", "default"], (old) => (old ? { ...old, columns: withOrder } : old));
+      qc.setQueryData<BoardOut>(["board", "default"], (old) =>
+        patchDefaultBoardCache(old, board?.id, (b) => ({ ...b, columns: withOrder })),
+      );
       qc.setQueryData<BoardOut[]>(["boards"], (old) =>
         old?.map((b) => (b.id === board?.id ? { ...b, columns: withOrder } : b)) ?? old,
       );

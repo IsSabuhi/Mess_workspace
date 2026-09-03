@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime, timezone
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, JSON, String
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -21,7 +21,7 @@ class User(Base):
         UUID(as_uuid=True), ForeignKey("positions.id", ondelete="SET NULL"), nullable=True
     )
     birth_date: Mapped[date | None] = mapped_column(Date, nullable=True)
-    dashboard_preferences: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    dashboard_preferences: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     schedule_mode: Mapped[str] = mapped_column(String(32), default="manual", nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_superuser: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

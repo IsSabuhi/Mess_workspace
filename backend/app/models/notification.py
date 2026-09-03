@@ -4,7 +4,7 @@ import enum
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, Enum, ForeignKey, Index, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -26,8 +26,18 @@ class NotificationType(str, enum.Enum):
 class Notification(Base):
     __tablename__ = "notifications"
     __table_args__ = (
-        # Для дедлайнов по задаче хотим только одну запись на тип/задачу/пользователя.
-        UniqueConstraint("user_id", "type", "task_id", name="uq_notifications_user_type_task"),
+        # Дедлайны: одна запись на тип/задачу/пользователя. Упоминания (@) — нет:
+        # каждый новый комментарий должен дать новое уведомление.
+        Index(
+            "uq_notifications_user_type_task",
+            "user_id",
+            "type",
+            "task_id",
+            unique=True,
+            postgresql_where=text(
+                "type IN ('task_due_3_days'::notification_type, 'task_overdue'::notification_type)"
+            ),
+        ),
         # Для релиз-нотов — тоже одна запись на пользователя.
         UniqueConstraint("user_id", "type", "release_note_id", name="uq_notifications_user_type_release_note"),
         # Срок пропуска/экзамена — одна запись на получателя, тип и сотрудника.

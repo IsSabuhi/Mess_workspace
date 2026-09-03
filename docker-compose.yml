@@ -49,6 +49,8 @@ services:
       STORAGE_BACKEND: ${STORAGE_BACKEND:-minio}
       MINIO_PUBLIC_BASE_URL: ${MINIO_PUBLIC_BASE_URL:-/mes/files}
       BACKUP_DIR: /backups
+      # nginx (web) ходит на api с адреса docker-сети — без этого в аудите IP контейнера, не клиента.
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
     volumes:
       - backup_data:/backups
     # Postgres на хосте / в LAN: в DATABASE_URL укажите IP сервера БД или host.docker.internal

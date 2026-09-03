@@ -31,7 +31,6 @@ from app.models import (
     TaskComment,
     TaskTag,
     User,
-    UserSystem,
 )
 from app.models.board import BOARD_SCOPE_SYSTEM
 from app.models.task import task_assignees_table
@@ -60,8 +59,7 @@ from app.services.authz import user_has_permission, user_sees_all_tasks
 from app.services.audit import list_audit_events_for_entity, record_audit_event
 from app.services.board_lock import can_bypass_board_editing_lock, is_global_board_locked
 from app.services.board_members import allowed_assignee_ids_for_board
-from app.services.file_storage import rewrite_stored_media_urls, save_task_file
-from app.services.task_archive import auto_archive_done_tasks
+from app.services.file_storage import delete_stored_files, rewrite_stored_media_urls, save_task_file
 from app.services.task_excel_import import import_tasks_from_excel_batch
 from app.services.task_policy import (
     can_comment_on_task,
@@ -71,6 +69,8 @@ from app.services.task_policy import (
     can_read_task,
     can_update_task,
     can_update_task_description_when_locked,
+    filter_readable_tasks,
+    user_system_id_set,
 )
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -137,11 +137,6 @@ def _task_is_overdue(task: Task, now: datetime) -> bool:
     if task.due_at is None:
         return False
     return task.due_at < now
-
-
-async def _user_system_ids(session: AsyncSession, user_id: uuid.UUID) -> list[uuid.UUID]:
-    r = await session.execute(select(UserSystem.system_id).where(UserSystem.user_id == user_id))
-    return list(r.scalars().all())
 
 
 _TASK_LOAD = (
@@ -212,6 +207,7 @@ def _task_to_out(task: Task, *, comments_count: int = 0) -> TaskOut:
         priority=task.priority,
         due_at=task.due_at,
         started_at=task.started_at,
+        completed_at=task.completed_at,
         estimate_hours=task.estimate_hours,
         checklist=[ChecklistItem.model_validate(x) for x in checklist],
         position=task.position,
@@ -272,7 +268,7 @@ async def _resolve_assignee_users(
 async def _apply_task_list_scope(session: AsyncSession, user: User, stmt):
     if await user_sees_all_tasks(session, user):
         return stmt
-    system_ids = await _user_system_ids(session, user.id)
+    system_ids = list(await user_system_id_set(session, user.id))
     if system_ids:
         return stmt.where(Task.system_id.in_(system_ids))
     if await user_has_permission(session, user, TASKS_READ_ASSIGNED):
@@ -325,14 +321,6 @@ async def _notify_mentions(session: AsyncSession, task: Task, actor: User, text:
             continue
         if not await can_read_task(session, mentioned, task):
             continue
-        already = await session.scalar(
-            select(Notification.id)
-            .where(Notification.user_id == mentioned.id)
-            .where(Notification.type == NotificationType.task_mention)
-            .where(Notification.task_id == task.id)
-        )
-        if already:
-            continue
         session.add(
             Notification(
                 user_id=mentioned.id,
@@ -354,7 +342,6 @@ async def list_tasks(
     board_id: uuid.UUID | None = None,
     include_archived: bool = False,
 ) -> list[TaskOut]:
-    await auto_archive_done_tasks(session)
     stmt = select(Task).options(*_TASK_LOAD).order_by(Task.position, Task.created_at)
     stmt = await _apply_task_list_scope(session, user, stmt)
     if not include_archived:
@@ -374,10 +361,7 @@ async def list_tasks(
 
     result = await session.execute(stmt)
     tasks = result.scalars().unique().all()
-    allowed: list[Task] = []
-    for t in tasks:
-        if await can_read_task(session, user, t):
-            allowed.append(t)
+    allowed = await filter_readable_tasks(session, user, tasks)
     counts = await _comments_counts(session, [t.id for t in allowed])
     return [_task_to_out(t, comments_count=counts.get(t.id, 0)) for t in allowed]
 
@@ -392,7 +376,6 @@ async def tasks_analytics(
     include_archived: bool = False,
     trend_days: int = 14,
 ) -> TaskAnalyticsOut:
-    await auto_archive_done_tasks(session)
     stmt = select(Task).options(*_TASK_LOAD).order_by(Task.position, Task.created_at)
     stmt = await _apply_task_list_scope(session, user, stmt)
     if not include_archived:
@@ -409,7 +392,7 @@ async def tasks_analytics(
         stmt = stmt.where(Task.column_id == column_id)
 
     result = await session.execute(stmt)
-    rows = [t for t in result.scalars().unique().all() if await can_read_task(session, user, t)]
+    rows = await filter_readable_tasks(session, user, result.scalars().unique().all())
     now = datetime.now(timezone.utc)
     due_soon_limit = now + timedelta(days=3)
     trend_days = max(1, min(90, trend_days))
@@ -534,7 +517,7 @@ async def create_task(
         if resolved_system_id is None:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=TASK_SYSTEM_REQUIRED)
     else:
-        memberships = await _user_system_ids(session, user.id)
+        memberships = list(await user_system_id_set(session, user.id))
         if not memberships:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=TASK_NO_SYSTEM_MEMBERSHIP)
         if resolved_system_id is None:
@@ -561,6 +544,7 @@ async def create_task(
         priority=body.priority,
         due_at=body.due_at,
         started_at=datetime.now(timezone.utc) if assignees else None,
+        completed_at=datetime.now(timezone.utc) if col.is_done_column else None,
         estimate_hours=body.estimate_hours,
         checklist=_normalize_checklist(body.checklist),
         position=body.position,
@@ -708,10 +692,17 @@ async def update_task(
         col = await session.get(KanbanColumn, body.column_id)
         if not col or col.board_id != task.board_id:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid column")
+        column_changed = task.column_id != body.column_id
         task.column_id = body.column_id
+        if column_changed:
+            if col.is_done_column:
+                if task.completed_at is None:
+                    task.completed_at = datetime.now(timezone.utc)
+            else:
+                task.completed_at = None
     if body.system_id is not None:
         if not await user_sees_all_tasks(session, user):
-            memberships = await _user_system_ids(session, user.id)
+            memberships = list(await user_system_id_set(session, user.id))
             if body.system_id not in memberships:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=TASK_SYSTEM_NOT_ALLOWED)
         sys = await session.get(System, body.system_id)
@@ -792,7 +783,10 @@ async def delete_task(
         actor_user_id=user.id,
         details={"title": task.title},
     )
+    file_urls = [a.url for a in task.attachments]
     await session.delete(task)
+    await session.commit()
+    delete_stored_files(file_urls)
 
 
 @router.get("/{task_id}/history", response_model=list[AuditEventOut])
@@ -1051,3 +1045,4 @@ async def delete_task_attachment(
     )
     await session.delete(att)
     await session.commit()
+    delete_stored_files([att.url])

@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import re
 import uuid
+from collections.abc import Iterable, Sequence
 from collections import defaultdict
 
 from sqlalchemy import select
@@ -94,23 +95,41 @@ def upsert_children_toc(content: str | None, toc_html: str) -> str | None:
     return f"{stripped}\n{toc_html}"
 
 
-async def _ancestor_ids(
-    session: AsyncSession,
+def _ancestor_ids_from_articles(
+    articles: Sequence[KnowledgeArticle],
     space_id: uuid.UUID,
     start_id: uuid.UUID | None,
+    *,
+    sync_ancestors: bool,
 ) -> list[uuid.UUID]:
-    """Цепочка предков от ближайшего родителя к корню (включая start_id)."""
+    if start_id is None:
+        return []
+    if not sync_ancestors:
+        return [start_id]
+    by_id = {a.id: a for a in articles if a.space_id == space_id}
     out: list[uuid.UUID] = []
-    cur = start_id
+    cur: uuid.UUID | None = start_id
     guard: set[uuid.UUID] = set()
     while cur is not None and cur not in guard:
         guard.add(cur)
         out.append(cur)
-        row = await session.get(KnowledgeArticle, cur)
-        if not row or row.space_id != space_id:
+        row = by_id.get(cur)
+        if row is None:
             break
         cur = row.parent_id
     return out
+
+
+async def _load_space_articles(session: AsyncSession, space_id: uuid.UUID) -> list[KnowledgeArticle]:
+    return list(
+        (
+            await session.execute(
+                select(KnowledgeArticle)
+                .where(KnowledgeArticle.space_id == space_id)
+                .order_by(KnowledgeArticle.position.asc(), KnowledgeArticle.title.asc())
+            )
+        ).scalars().all()
+    )
 
 
 async def sync_parent_children_toc(
@@ -119,29 +138,60 @@ async def sync_parent_children_toc(
     parent_id: uuid.UUID | None,
     *,
     sync_ancestors: bool = True,
+    articles: Sequence[KnowledgeArticle] | None = None,
 ) -> None:
     """Обновляет TOC у parent_id; при sync_ancestors — также у всех предков выше."""
     if parent_id is None:
         return
+    await sync_parents_children_toc(
+        session,
+        space_id,
+        [parent_id],
+        sync_ancestors=sync_ancestors,
+        articles=articles,
+    )
 
-    targets = await _ancestor_ids(session, space_id, parent_id) if sync_ancestors else [parent_id]
+
+async def sync_parents_children_toc(
+    session: AsyncSession,
+    space_id: uuid.UUID,
+    parent_ids: Iterable[uuid.UUID | None],
+    *,
+    sync_ancestors: bool = True,
+    articles: Sequence[KnowledgeArticle] | None = None,
+) -> None:
+    """Один SELECT статей пространства на пачку родителей (импорт Obsidian)."""
+    ids = [pid for pid in parent_ids if pid is not None]
+    if not ids:
+        return
+
+    rows = list(articles) if articles is not None else await _load_space_articles(session, space_id)
+    targets: list[uuid.UUID] = []
+    seen: set[uuid.UUID] = set()
+    for pid in ids:
+        for aid in _ancestor_ids_from_articles(rows, space_id, pid, sync_ancestors=sync_ancestors):
+            if aid not in seen:
+                seen.add(aid)
+                targets.append(aid)
     if not targets:
         return
 
-    all_articles = (
-        await session.execute(
-            select(KnowledgeArticle)
-            .where(KnowledgeArticle.space_id == space_id)
-            .order_by(KnowledgeArticle.position.asc(), KnowledgeArticle.title.asc())
-        )
-    ).scalars().all()
-    articles = list(all_articles)
+    by_id = {a.id: a for a in rows}
+    missing = [tid for tid in targets if tid not in by_id]
+    if missing:
+        extra = (
+            await session.execute(select(KnowledgeArticle).where(KnowledgeArticle.id.in_(missing)))
+        ).scalars().all()
+        for row in extra:
+            if row.space_id == space_id:
+                rows.append(row)
+                by_id[row.id] = row
 
     for pid in targets:
-        parent = await session.get(KnowledgeArticle, pid)
+        parent = by_id.get(pid)
         if not parent or parent.space_id != space_id:
             continue
-        toc_html = build_children_toc_html(space_id, articles, pid)
+        toc_html = build_children_toc_html(space_id, rows, pid)
         parent.content = upsert_children_toc(parent.content, toc_html)
 
     await session.flush()

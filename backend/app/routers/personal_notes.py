@@ -26,7 +26,7 @@ from app.schemas.personal_note import (
     PersonalNoteTagUpdate,
     PersonalNoteUpdate,
 )
-from app.services.file_storage import save_note_file
+from app.services.file_storage import delete_stored_files, delete_stored_keys, save_note_file, stored_keys_from_text
 from app.services.notifications import next_daily_reminder_at
 
 router = APIRouter(prefix="/notes", tags=["notes"])
@@ -342,8 +342,12 @@ async def delete_note(
 ) -> None:
     note = await _get_owned_note(session, note_id, user.id)
     if permanent or note.deleted_at is not None:
+        file_urls = [a.url for a in note.attachments]
+        content_keys = stored_keys_from_text(note.content)
         await session.delete(note)
         await session.commit()
+        delete_stored_files(file_urls)
+        delete_stored_keys(content_keys)
         return
     note.deleted_at = datetime.now(timezone.utc)
     note.updated_at = datetime.now(timezone.utc)
@@ -398,3 +402,4 @@ async def delete_attachment(
     await session.delete(att)
     note.updated_at = datetime.now(timezone.utc)
     await session.commit()
+    delete_stored_files([att.url])

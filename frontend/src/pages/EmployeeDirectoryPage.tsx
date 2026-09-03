@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, Download, Filter, SlidersHorizontal } from "lucide-react";
+import { Download, Filter, SlidersHorizontal } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
@@ -16,6 +16,8 @@ import {
 import { listPositions } from "../api/positions";
 import { listSystems } from "../api/systems";
 import { AppShell } from "../components/AppShell";
+import { DirectoryNameCell } from "../components/DirectoryNameCell";
+import { DirectorySortHeader } from "../components/DirectorySortHeader";
 import { EmployeeVacationsPanel } from "../components/EmployeeVacationsPanel";
 import { MultiSelectDropdown } from "../components/MultiSelectDropdown";
 import {
@@ -24,8 +26,16 @@ import {
   EXAM_NOT_REQUIRED_LABEL,
   summarizeComplianceRows,
   validityInfo,
-  type ValidityStatus,
 } from "../lib/employeeComplianceStatus";
+import {
+  addOneYearDateInput,
+  asInputDate,
+  formatGenderCell,
+  formatScheduleSummary,
+  statusBadgeClass,
+  todayLocalDate,
+} from "../lib/employeeDirectoryFormat";
+import { TAB_SORT_KEYS, compareDirectoryRows, type SortDir, type SortKey, type TabId } from "../lib/employeeDirectorySort";
 import {
   canEmployeeDirectoryComplianceEdit,
   canEmployeeDirectoryProfileEdit,
@@ -33,256 +43,10 @@ import {
   hasPermission,
 } from "../lib/permissions";
 import { toastApiError, toastError, toastSuccess } from "../lib/toast";
+import { useDebouncedValue } from "../lib/useDebouncedValue";
 import { useModalLayer } from "../lib/useModalLayer";
 import { useToastQueryError } from "../lib/useToastQueryError";
 import { useAuth } from "../context/AuthContext";
-
-function asInputDate(v: string | null | undefined): string {
-  return v ? v.slice(0, 10) : "";
-}
-
-function todayLocalDate(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-function DirectoryNameCell({ row }: { row: EmployeeDirectoryRowOut }) {
-  return (
-    <>
-      <p className="font-medium text-slate-900 dark:text-white">{row.full_name}</p>
-      <p className="text-xs text-slate-500">{row.email}</p>
-      {row.is_dismissed ? (
-        <p className="mt-0.5 text-xs font-medium text-slate-600 dark:text-slate-300">
-          Уволен{row.dismissed_at ? ` ${asInputDate(row.dismissed_at)}` : ""}
-        </p>
-      ) : null}
-    </>
-  );
-}
-
-/** YYYY-MM-DD → та же дата + 1 год (для 29.02 — 28.02 следующего года). */
-function addOneYearDateInput(isoDate: string): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate);
-  if (!m) return "";
-  const y = Number(m[1]);
-  const mo = Number(m[2]);
-  const d = Number(m[3]);
-  const dt = new Date(y, mo - 1, d);
-  if (Number.isNaN(dt.getTime()) || dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) {
-    return "";
-  }
-  dt.setFullYear(y + 1);
-  const yy = dt.getFullYear();
-  const mm = String(dt.getMonth() + 1).padStart(2, "0");
-  const dd = String(dt.getDate()).padStart(2, "0");
-  return `${yy}-${mm}-${dd}`;
-}
-
-function formatGenderCell(g: string | undefined): string {
-  if (g === "female") return "Женский";
-  if (g === "male") return "Мужской";
-  return "Не указан";
-}
-
-function formatScheduleSummary(row: EmployeeDirectoryRowOut): string {
-  if (row.work_schedule_kind === "shift") return "Сменный";
-  if (row.work_schedule_kind === "two_two") return "2/2";
-  const norm = row.gender === "female" ? "7.2 ч" : "8 ч";
-  return `5/2 · ${norm}`;
-}
-
-type TabId = "compliance" | "profile" | "vacations" | "report";
-type SortDir = "asc" | "desc";
-type SortKey =
-  | "name"
-  | "position"
-  | "systems"
-  | "exam"
-  | "examStatus"
-  | "pass"
-  | "passStatus"
-  | "notes"
-  | "personnelNumber"
-  | "birthDate"
-  | "positionAssignedAt"
-  | "gender"
-  | "schedule"
-  | "remote"
-  | "workAddress"
-  | "fieldWorker"
-  | "vacation";
-
-const TAB_SORT_KEYS: Record<TabId, readonly SortKey[]> = {
-  compliance: ["name", "position", "systems", "exam", "pass", "notes"],
-  report: ["name", "position", "systems", "exam", "examStatus", "pass", "passStatus"],
-  profile: [
-    "name",
-    "personnelNumber",
-    "birthDate",
-    "position",
-    "positionAssignedAt",
-    "systems",
-    "gender",
-    "schedule",
-    "remote",
-    "workAddress",
-    "fieldWorker",
-    "vacation",
-  ],
-  vacations: ["name"],
-};
-
-const STATUS_SORT_RANK: Record<ValidityStatus, number> = {
-  expired: 0,
-  expiring: 1,
-  missing: 2,
-  none: 3,
-  not_required: 4,
-  ok: 5,
-};
-
-function cmpStr(a: string, b: string): number {
-  return a.localeCompare(b, "ru", { numeric: true, sensitivity: "base" });
-}
-
-function cmpEmptyLast(a: string, b: string): number {
-  const ae = !a.trim();
-  const be = !b.trim();
-  if (ae && be) return 0;
-  if (ae) return 1;
-  if (be) return -1;
-  return cmpStr(a, b);
-}
-
-function nameTie(a: EmployeeDirectoryRowOut, b: EmployeeDirectoryRowOut): number {
-  return cmpStr(a.full_name, b.full_name) || cmpStr(a.email, b.email);
-}
-
-function compareDirectoryRows(
-  a: EmployeeDirectoryRowOut,
-  b: EmployeeDirectoryRowOut,
-  key: SortKey,
-  dir: SortDir,
-): number {
-  let c = 0;
-  switch (key) {
-    case "name":
-      c = nameTie(a, b);
-      break;
-    case "position":
-      c = cmpEmptyLast(a.position?.name ?? "", b.position?.name ?? "");
-      break;
-    case "systems":
-      c = cmpEmptyLast(
-        a.systems.map((s) => s.name).join(", "),
-        b.systems.map((s) => s.name).join(", "),
-      );
-      break;
-    case "exam":
-      c = Number(Boolean(a.is_remote)) - Number(Boolean(b.is_remote));
-      if (!c) c = Number(a.exam_electrical_passed) - Number(b.exam_electrical_passed);
-      if (!c) c = cmpEmptyLast(asInputDate(a.exam_electrical_valid_to), asInputDate(b.exam_electrical_valid_to));
-      if (!c) c = cmpEmptyLast(a.exam_electrical_group ?? "", b.exam_electrical_group ?? "");
-      break;
-    case "examStatus": {
-      const ea = examElectricalValidityInfo(a);
-      const eb = examElectricalValidityInfo(b);
-      c = STATUS_SORT_RANK[ea.status] - STATUS_SORT_RANK[eb.status];
-      if (!c) c = (ea.daysLeft ?? 99_999) - (eb.daysLeft ?? 99_999);
-      break;
-    }
-    case "pass":
-      c = Number(a.pass_has) - Number(b.pass_has);
-      if (!c) c = cmpEmptyLast(asInputDate(a.pass_valid_to), asInputDate(b.pass_valid_to));
-      if (!c) c = cmpEmptyLast(a.pass_number ?? "", b.pass_number ?? "");
-      break;
-    case "passStatus": {
-      const pa = validityInfo(a.pass_valid_to, a.pass_has);
-      const pb = validityInfo(b.pass_valid_to, b.pass_has);
-      c = STATUS_SORT_RANK[pa.status] - STATUS_SORT_RANK[pb.status];
-      if (!c) c = (pa.daysLeft ?? 99_999) - (pb.daysLeft ?? 99_999);
-      break;
-    }
-    case "notes":
-      c = cmpEmptyLast(a.notes ?? "", b.notes ?? "");
-      break;
-    case "personnelNumber":
-      c = cmpEmptyLast(a.personnel_number ?? "", b.personnel_number ?? "");
-      break;
-    case "birthDate":
-      c = cmpEmptyLast(asInputDate(a.birth_date), asInputDate(b.birth_date));
-      break;
-    case "positionAssignedAt":
-      c = cmpEmptyLast(asInputDate(a.position_assigned_at), asInputDate(b.position_assigned_at));
-      break;
-    case "gender":
-      c = cmpStr(formatGenderCell(a.gender), formatGenderCell(b.gender));
-      break;
-    case "schedule":
-      c = cmpStr(formatScheduleSummary(a), formatScheduleSummary(b));
-      break;
-    case "remote":
-      c = Number(Boolean(a.is_remote)) - Number(Boolean(b.is_remote));
-      break;
-    case "workAddress":
-      c = cmpEmptyLast(a.work_address ?? "", b.work_address ?? "");
-      break;
-    case "fieldWorker":
-      c = Number(Boolean(a.is_field_worker)) - Number(Boolean(b.is_field_worker));
-      break;
-    case "vacation":
-      c = (a.vacation_periods?.length ?? 0) - (b.vacation_periods?.length ?? 0);
-      break;
-  }
-  if (!c && key !== "name") c = nameTie(a, b);
-  return dir === "asc" ? c : -c;
-}
-
-function DirectorySortHeader({
-  column,
-  label,
-  sortKey,
-  sortDir,
-  onSort,
-}: {
-  column: SortKey;
-  label: string;
-  sortKey: SortKey;
-  sortDir: SortDir;
-  onSort: (column: SortKey) => void;
-}) {
-  const active = sortKey === column;
-  return (
-    <th
-      className="px-3 py-2"
-      aria-sort={active ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
-    >
-      <button
-        type="button"
-        onClick={() => onSort(column)}
-        className="group inline-flex items-center gap-1 rounded-md px-0.5 py-0.5 font-medium text-slate-700 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-200 dark:hover:bg-slate-700/80 dark:hover:text-white"
-        title={
-          active
-            ? sortDir === "asc"
-              ? "Сортировка: по возрастанию (нажмите для убывания)"
-              : "Сортировка: по убыванию (нажмите для возрастания)"
-            : `Сортировать по: ${label}`
-        }
-      >
-        {label}
-        {active ? (
-          sortDir === "asc" ? (
-            <ArrowUp className="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden />
-          ) : (
-            <ArrowDown className="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden />
-          )
-        ) : (
-          <ArrowUp className="h-3.5 w-3.5 shrink-0 opacity-0 group-hover:opacity-40" aria-hidden />
-        )}
-      </button>
-    </th>
-  );
-}
 
 /** Трёхпозиционный фильтр да/нет для API (все = параметр не передаётся). */
 type YesNoFilter = "all" | "yes" | "no";
@@ -293,22 +57,6 @@ const filterBarSelect =
 
 const dateFilterInput =
   "h-9 w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-800 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100";
-
-function statusBadgeClass(status: ValidityStatus): string {
-  if (status === "expired") {
-    return "bg-rose-100 text-rose-800 dark:bg-rose-950/50 dark:text-rose-200";
-  }
-  if (status === "expiring") {
-    return "bg-amber-100 text-amber-900 dark:bg-amber-950/40 dark:text-amber-200";
-  }
-  if (status === "ok") {
-    return "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200";
-  }
-  if (status === "not_required") {
-    return "bg-sky-100 text-sky-800 dark:bg-sky-950/40 dark:text-sky-200";
-  }
-  return "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300";
-}
 
 export function EmployeeDirectoryPage() {
   const { state } = useAuth();
@@ -338,6 +86,7 @@ export function EmployeeDirectoryPage() {
   const qc = useQueryClient();
 
   const [search, setSearch] = useState("");
+  const debouncedSearch = useDebouncedValue(search, 300);
   const [filterSystemIds, setFilterSystemIds] = useState<string[]>([]);
   const [filterPositionIds, setFilterPositionIds] = useState<string[]>([]);
   const [expiredOnly, setExpiredOnly] = useState(false);
@@ -409,7 +158,7 @@ export function EmployeeDirectoryPage() {
 
   const filters = useMemo(
     () => ({
-      search: search.trim() || undefined,
+      search: debouncedSearch.trim() || undefined,
       system_ids: filterSystemIds.length ? filterSystemIds : undefined,
       position_ids: filterPositionIds.length ? filterPositionIds : undefined,
       expired_only: expiredOnly || undefined,
@@ -436,7 +185,7 @@ export function EmployeeDirectoryPage() {
     }),
     [
       activeTab,
-      search,
+      debouncedSearch,
       filterSystemIds,
       filterPositionIds,
       expiredOnly,

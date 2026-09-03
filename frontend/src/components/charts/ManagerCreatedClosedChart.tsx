@@ -1,7 +1,7 @@
 import type { EChartsOption } from "echarts";
-import { useEffect, useMemo, useRef } from "react";
+import { useMemo, useRef } from "react";
 
-import { echarts } from "../../lib/echartsCore";
+import { useEchartsChart } from "../../lib/useEchartsChart";
 
 type Props = {
   rows: Array<{ label: string; created: number; closed: number }>;
@@ -58,18 +58,7 @@ export default function ManagerCreatedClosedChart({ rows, dark }: Props) {
     };
   }, [rows, dark]);
 
-  useEffect(() => {
-    const el = ref.current;
-    if (!el || rows.length === 0) return;
-    const chart = echarts.init(el, undefined, { renderer: "canvas" });
-    chart.setOption(option, true);
-    const ro = new ResizeObserver(() => chart.resize());
-    ro.observe(el);
-    return () => {
-      ro.disconnect();
-      chart.dispose();
-    };
-  }, [option, rows.length]);
+  useEchartsChart(ref, option, rows.length > 0);
 
   if (rows.length === 0) return null;
   return <div ref={ref} className="h-56 w-full min-h-[220px]" />;

@@ -143,13 +143,21 @@ export function KnowledgePage() {
     htmlRef.current = next;
     setHtmlState(next);
   }, []);
+  /** Несохранённые правки: рефетч статьи не должен затирать форму и htmlRef. */
+  const articleFormDirtyRef = useRef(false);
+  const hydratedArticleIdRef = useRef<string | null>(null);
   const onEditorHtmlChange = useCallback((next: string) => {
+    articleFormDirtyRef.current = true;
     htmlRef.current = next;
     startTransition(() => setHtmlState(next));
   }, []);
   const [memberSearchQ, setMemberSearchQ] = useState("");
   const [newMemberRole, setNewMemberRole] = useState<SpaceMemberRole>("viewer");
   const [parentId, setParentId] = useState<string>("");
+  const onArticleParentChange = useCallback((next: string) => {
+    articleFormDirtyRef.current = true;
+    setParentId(next);
+  }, []);
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; title: string } | null>(null);
   const [searchQ, setSearchQ] = useState("");
   const [templateId, setTemplateId] = useState("");
@@ -243,6 +251,8 @@ export function KnowledgePage() {
     queryFn: () => getArticle(spaceId!, articleId!),
     enabled: !!spaceId && !!articleId && articleId !== "new",
     staleTime: 60_000,
+    // В режиме правки фокус вкладки не должен подтягивать сервер поверх черновика.
+    refetchOnWindowFocus: readingMode,
   });
   const templatesQuery = useQuery({
     queryKey: ["knowledge", "templates", spaceId ?? ""],
@@ -258,7 +268,7 @@ export function KnowledgePage() {
   const revisionsQuery = useQuery({
     queryKey: ["knowledge", "space", spaceId ?? "", "article", articleId ?? "", "revisions"],
     queryFn: () => listArticleRevisions(spaceId!, articleId!),
-    enabled: !!spaceId && !!articleId && articleId !== "new",
+    enabled: !!spaceId && !!articleId && articleId !== "new" && revisionsModalOpen,
   });
 
   /** Стабильный ключ монтирования редактора: без смены при каждом символе, с remount после загрузки статьи с API */
@@ -307,36 +317,43 @@ export function KnowledgePage() {
 
   useEffect(() => {
     if (articleId !== "new" && articleId) return;
+    articleFormDirtyRef.current = false;
+    hydratedArticleIdRef.current = null;
     setTitle("");
     setSlug("");
     setSlugManual(false);
     setStatus("published");
     setHtml("<p></p>");
     setParentId(searchParams.get("parent") ?? "");
-  }, [articleId, spaceId, searchParams]);
+  }, [articleId, spaceId, searchParams, setHtml]);
 
   useEffect(() => {
     if (!articleId || articleId === "new") return;
     const art = articleQuery.data;
     if (art && art.id === articleId) return;
+    articleFormDirtyRef.current = false;
+    hydratedArticleIdRef.current = null;
     setTitle("");
     setSlug("");
     setSlugManual(false);
     setStatus("draft");
     setHtml("<p></p>");
-  }, [articleId, articleQuery.data]);
+  }, [articleId, articleQuery.data, setHtml]);
 
   useEffect(() => {
     if (!articleId || articleId === "new") return;
     const art = articleQuery.data;
     if (!art || art.id !== articleId) return;
+    if (hydratedArticleIdRef.current === articleId && articleFormDirtyRef.current) return;
     setTitle(art.title);
     setSlug(art.slug);
     setSlugManual(true);
     setStatus(art.status);
     setHtml(art.content || "<p></p>");
     setParentId(art.parent_id ?? "");
-  }, [articleId, articleQuery.data]);
+    articleFormDirtyRef.current = false;
+    hydratedArticleIdRef.current = art.id;
+  }, [articleId, articleQuery.data, setHtml]);
 
   useEffect(() => {
     if (!articleId || articleId === "new") {
@@ -412,6 +429,8 @@ export function KnowledgePage() {
       setHtml(restored.content ?? "<p></p>");
       setStatus(restored.status);
       setParentId(restored.parent_id ?? "");
+      articleFormDirtyRef.current = false;
+      hydratedArticleIdRef.current = vars.aid;
       await invalidateAndRefetch(qc, ["knowledge", "space", vars.sid, "article", vars.aid]);
       await invalidateAndRefetch(qc, ["knowledge", "space", vars.sid, "article", vars.aid, "revisions"]);
       await invalidateAndRefetch(qc, ["knowledge", "space", vars.sid, "articles"]);
@@ -583,6 +602,7 @@ export function KnowledgePage() {
             parent_id: parentId || null,
           },
         });
+        articleFormDirtyRef.current = false;
         toastSuccess("Статья сохранена");
       }
     } catch (e) {
@@ -1028,6 +1048,7 @@ export function KnowledgePage() {
     if (!title.trim()) setTitle(tpl.name);
     if (!slug.trim()) { setSlug(slugifyTitle(tpl.name, "article")); setSlugManual(false); }
     if (!html || html === "<p></p>") setHtml(tpl.content || "<p></p>");
+    articleFormDirtyRef.current = true;
   }
 
   function toggleArticleCollapsed(id: string) {
@@ -1629,6 +1650,7 @@ export function KnowledgePage() {
                     value={title}
                     onChange={(e) => {
                       const next = e.target.value;
+                      articleFormDirtyRef.current = true;
                       setTitle(next);
                       if (!slugManual) setSlug(slugifyTitle(next, "article"));
                     }}
@@ -1646,6 +1668,7 @@ export function KnowledgePage() {
                       <button
                         type="button"
                         onClick={() => {
+                          articleFormDirtyRef.current = true;
                           setSlugManual(false);
                           setSlug(slugifyTitle(title, "article"));
                         }}
@@ -1658,6 +1681,7 @@ export function KnowledgePage() {
                   <input
                     value={slug}
                     onChange={(e) => {
+                      articleFormDirtyRef.current = true;
                       setSlugManual(true);
                       setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""));
                     }}
@@ -1706,7 +1730,10 @@ export function KnowledgePage() {
                 <p className="mb-2 text-xs font-medium text-slate-500">Статус</p>
                 <select
                   value={status}
-                  onChange={(e) => setStatus(e.target.value as "draft" | "published")}
+                  onChange={(e) => {
+                    articleFormDirtyRef.current = true;
+                    setStatus(e.target.value as "draft" | "published");
+                  }}
                   disabled={!canEdit}
                   className={`w-full rounded-lg border px-2 py-2 text-sm font-medium ${
                     status === "published"
@@ -1721,7 +1748,7 @@ export function KnowledgePage() {
             </div>
             <ParentPageSelect
               value={parentId}
-              onChange={setParentId}
+              onChange={onArticleParentChange}
               disabled={!canEdit}
               options={parentSelectOptions}
               pending={articlesQuery.isPending}
@@ -2063,6 +2090,7 @@ export function KnowledgePage() {
                       <input
                         value={title}
                         onChange={(e) => {
+                          articleFormDirtyRef.current = true;
                           setTitle(e.target.value);
                         }}
                         disabled={!canEdit}
@@ -2080,7 +2108,10 @@ export function KnowledgePage() {
                     <p className="mb-2 text-xs font-medium text-slate-500">Статус</p>
                     <select
                       value={status}
-                      onChange={(e) => setStatus(e.target.value as "draft" | "published")}
+                      onChange={(e) => {
+                    articleFormDirtyRef.current = true;
+                    setStatus(e.target.value as "draft" | "published");
+                  }}
                       disabled={!canEdit}
                       className={`w-full rounded-lg border px-2 py-2 text-sm font-medium ${
                         status === "published"
@@ -2105,7 +2136,7 @@ export function KnowledgePage() {
                 </div>
                 <ParentPageSelect
                   value={parentId}
-                  onChange={setParentId}
+                  onChange={onArticleParentChange}
                   disabled={!canEdit}
                   options={parentSelectOptions}
                   pending={articlesQuery.isPending}

@@ -1,7 +1,7 @@
 import type { EChartsOption } from "echarts";
-import { useEffect, useMemo, useRef } from "react";
+import { useMemo, useRef } from "react";
 
-import { echarts } from "../../lib/echartsCore";
+import { useEchartsChart } from "../../lib/useEchartsChart";
 
 const ORDER = ["urgent", "high", "normal", "low"] as const;
 const LABELS: Record<(typeof ORDER)[number], string> = {
@@ -79,21 +79,7 @@ export default function EmployeePriorityChart({ counts, dark }: Props) {
     };
   }, [pieData, dark]);
 
-  useEffect(() => {
-    const el = ref.current;
-    if (!el || total === 0) return;
-
-    const chart = echarts.init(el, undefined, { renderer: "canvas" });
-    chart.setOption(option, true);
-
-    const ro = new ResizeObserver(() => chart.resize());
-    ro.observe(el);
-
-    return () => {
-      ro.disconnect();
-      chart.dispose();
-    };
-  }, [option, total]);
+  useEchartsChart(ref, option, total > 0);
 
   if (total === 0) return null;
 

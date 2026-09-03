@@ -132,7 +132,7 @@ def add_import_bytes(
 
 
 def unpack_obsidian_zip(
-    raw: bytes,
+    source: bytes | str,
     *,
     max_md_bytes: int,
     max_image_bytes: int,
@@ -141,7 +141,7 @@ def unpack_obsidian_zip(
 ) -> ImportItems:
     items = ImportItems()
     try:
-        zf = zipfile.ZipFile(io.BytesIO(raw))
+        zf = zipfile.ZipFile(io.BytesIO(source) if isinstance(source, (bytes, bytearray)) else source)
     except zipfile.BadZipFile as exc:
         raise ValueError("Не удалось открыть zip (повреждён или это не архив)") from exc
     total = 0

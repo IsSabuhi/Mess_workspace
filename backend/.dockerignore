@@ -1,0 +1,33 @@
+# Секреты: локальный backend/.env иначе уезжает в слой образа (COPY . .)
+.env
+.env.*
+!/.env.example
+
+# Локальный Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.sqlite3
+
+# Кэш инструментов
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+tests/
+
+# Рантайм и локальные выгрузки — не часть образа
+uploads/
+*.xlsx
+*.xls
+
+# Документация и служебное
+.git
+*.md
+.vscode/
+.idea/
+.DS_Store

@@ -276,10 +276,10 @@ export type ClosedByAssigneeRow = {
   closed: number;
 };
 
-/** Момент «закрытия»: архив или попадание в колонку «Выполнено» (updated_at). */
+/** Момент закрытия: архив или вход в колонку «Выполнено» (`completed_at`, не `updated_at`). */
 export function taskClosedAtIso(t: TaskOut): string | null {
   if (t.archived_at) return t.archived_at;
-  if (taskInDoneColumn(t)) return t.updated_at;
+  if (taskInDoneColumn(t)) return t.completed_at ?? null;
   return null;
 }
 

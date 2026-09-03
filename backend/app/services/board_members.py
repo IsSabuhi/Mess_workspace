@@ -15,6 +15,8 @@ from app.models.board import (
 )
 from app.schemas.board import BoardMemberOut
 
+_BOARD_ROLE_CACHE = "_board_member_role"
+
 
 async def _active_system_users(session: AsyncSession, system_id: uuid.UUID) -> list[User]:
     stmt = (
@@ -30,14 +32,21 @@ async def effective_board_member_role(
     session: AsyncSession, board: Board, user_id: uuid.UUID
 ) -> str | None:
     """Роль на доске: явная запись или viewer для сотрудника системы (системные доски)."""
+    cache: dict = session.info.setdefault(_BOARD_ROLE_CACHE, {})
+    key = (board.id, user_id)
+    if key in cache:
+        return cache[key]
+
     explicit = await session.scalar(
         select(BoardMember.role).where(
             BoardMember.board_id == board.id, BoardMember.user_id == user_id
         ).limit(1)
     )
     if explicit is not None:
-        return str(explicit)
+        cache[key] = str(explicit)
+        return cache[key]
     if board.scope != BOARD_SCOPE_SYSTEM or board.system_id is None:
+        cache[key] = None
         return None
     in_system = await session.scalar(
         select(UserSystem.user_id)
@@ -50,9 +59,63 @@ async def effective_board_member_role(
         )
         .limit(1)
     )
-    if in_system is not None:
-        return BOARD_MEMBER_ROLE_VIEWER
-    return None
+    role = BOARD_MEMBER_ROLE_VIEWER if in_system is not None else None
+    cache[key] = role
+    return role
+
+
+async def prefetch_board_member_roles(
+    session: AsyncSession, user_id: uuid.UUID, boards: list[Board]
+) -> None:
+    """Один запрос явных ролей + неявный viewer по системе — заполняет тот же кэш, что effective_board_member_role."""
+    if not boards:
+        return
+    cache: dict = session.info.setdefault(_BOARD_ROLE_CACHE, {})
+    missing = [b for b in boards if (b.id, user_id) not in cache]
+    if not missing:
+        return
+    ids = [b.id for b in missing]
+    explicit_rows = (
+        await session.execute(
+            select(BoardMember.board_id, BoardMember.role).where(
+                BoardMember.user_id == user_id,
+                BoardMember.board_id.in_(ids),
+            )
+        )
+    ).all()
+    explicit = {board_id: str(role) for board_id, role in explicit_rows}
+    need_implicit = [
+        b
+        for b in missing
+        if b.id not in explicit and b.scope == BOARD_SCOPE_SYSTEM and b.system_id is not None
+    ]
+    implicit_ok: set[uuid.UUID] = set()
+    if need_implicit:
+        system_ids = {b.system_id for b in need_implicit if b.system_id is not None}
+        rows = (
+            await session.execute(
+                select(UserSystem.system_id)
+                .join(User, User.id == UserSystem.user_id)
+                .where(
+                    UserSystem.user_id == user_id,
+                    UserSystem.system_id.in_(system_ids),
+                    User.is_active.is_(True),
+                    user_is_not_dismissed(),
+                )
+            )
+        ).scalars().all()
+        implicit_ok = set(rows)
+    for b in missing:
+        if b.id in explicit:
+            cache[(b.id, user_id)] = explicit[b.id]
+        elif (
+            b.scope == BOARD_SCOPE_SYSTEM
+            and b.system_id is not None
+            and b.system_id in implicit_ok
+        ):
+            cache[(b.id, user_id)] = BOARD_MEMBER_ROLE_VIEWER
+        else:
+            cache[(b.id, user_id)] = None
 
 
 async def build_board_member_list(session: AsyncSession, board: Board) -> list[BoardMemberOut]:

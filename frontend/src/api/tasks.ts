@@ -32,6 +32,7 @@ export type TaskOut = {
   priority: TaskPriority;
   due_at: string | null;
   started_at?: string | null;
+  completed_at?: string | null;
   estimate_hours: number | string | null;
   checklist: ChecklistItem[];
   position: number;

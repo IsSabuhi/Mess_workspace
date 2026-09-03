@@ -52,7 +52,7 @@
 |---|---|
 | Frontend | React 19, TypeScript, Vite, Tailwind CSS, TanStack Query, React Router, dnd-kit, ECharts, ExcelJS, TipTap |
 | Backend | Python 3.12, FastAPI, SQLAlchemy 2 (async), Alembic, Pydantic Settings |
-| БД | PostgreSQL (внешний, не в Compose) |
+| БД | PostgreSQL |
 | Очередь | Redis + arq (уведомления, ежедневный `pg_dump`) |
 | Файлы | MinIO (S3), запасной вариант — локальные `uploads/` |
 | Бэкапы БД | Docker-том `backup_data` → `/backups` (не MinIO) |
